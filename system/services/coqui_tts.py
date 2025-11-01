@@ -574,10 +574,11 @@ class CoquiTTS:
 
             logger.info(f"🎙️ Generating TTS with voice '{voice_name}'...")
 
-            # Générer avec voix clonée
+            # Générer avec voix clonée (utilise embeddings cachés si disponibles)
             result = self.synthesize_with_voice(
                 text=text,
                 reference_voice=str(reference_file),
+                voice_name=voice_name,  # Pour utiliser embeddings cachés
                 output_file=output_path
             )
 

@@ -1273,6 +1273,15 @@ class RobotFreeSWITCH:
             self.hangup_call(call_uuid)
             return
 
+        # Charger voix en cache pour performance TTS (CRITIQUE pour appels temps réel)
+        voice_name = scenario.get("voice", "julie")
+        if self.tts_service and hasattr(self.tts_service, 'load_voice'):
+            logger.info(f"[{call_uuid[:8]}] 🎙️ Loading voice '{voice_name}' in cache...")
+            if self.tts_service.load_voice(voice_name):
+                logger.info(f"[{call_uuid[:8]}] ✅ Voice '{voice_name}' loaded (embeddings cached)")
+            else:
+                logger.warning(f"[{call_uuid[:8]}] ⚠️ Voice '{voice_name}' not loaded (will use on-the-fly)")
+
         # Vérifier mode agent autonome (Phase 6+)
         is_agent_mode = self.scenario_manager.is_agent_mode(scenario) if self.scenario_manager else False
 
