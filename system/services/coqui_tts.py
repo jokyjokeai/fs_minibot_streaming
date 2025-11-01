@@ -335,7 +335,18 @@ class CoquiTTS:
 
             # Calculer embedding speaker (pour sauvegarde future)
             # Note: XTTS ne permet pas d'extraire directement l'embedding
-            # On sauvegarde juste la référence WAV pour l'instant
+            # On crée un fichier embeddings.pth comme marqueur de voix clonée
+            # Le vrai embedding est calculé à la volée depuis reference.wav
+            embeddings_path = voice_dir / "embeddings.pth"
+            import torch
+            marker_data = {
+                "voice_name": voice_name,
+                "reference_wav": str(reference_path.name),
+                "created_at": time.time(),
+                "note": "XTTS calculates embeddings on-the-fly from reference.wav"
+            }
+            torch.save(marker_data, embeddings_path)
+            logger.info(f"📦 Embeddings marker saved: {embeddings_path.name}")
 
             # Créer métadonnées
             import json
