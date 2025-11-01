@@ -192,9 +192,29 @@ class YouTubeVoiceExtractor:
                 use_auth_token=self.hf_token
             )
 
-            # Exécuter diarization
+            # Exécuter diarization avec progression
             logger.info(f"   Analyzing audio: {audio_path.name}")
-            diarization = pipeline(str(audio_path))
+
+            # Callback pour progression
+            from tqdm import tqdm
+
+            class ProgressHook:
+                def __init__(self):
+                    self.pbar = None
+
+                def __call__(self, step_name, step_artefact, file=None, total=None, completed=None):
+                    if completed == 0 and total is not None:
+                        if self.pbar is not None:
+                            self.pbar.close()
+                        self.pbar = tqdm(total=total, desc=f"   {step_name}", unit="chunk")
+                    elif self.pbar is not None and completed is not None:
+                        self.pbar.update(completed - self.pbar.n)
+                        if completed >= total:
+                            self.pbar.close()
+                            self.pbar = None
+
+            hook = ProgressHook()
+            diarization = pipeline(str(audio_path), hook=hook)
 
             logger.info("✅ Diarization completed")
             return diarization
@@ -295,20 +315,24 @@ class YouTubeVoiceExtractor:
         # Charger audio
         audio = AudioSegment.from_file(str(audio_path))
 
-        # Extraire tous les segments du locuteur
+        # Compter segments
+        segments_list = [(turn, spk) for turn, _, spk in diarization.itertracks(yield_label=True) if spk == speaker]
+
+        # Extraire tous les segments du locuteur avec progression
         speaker_audio = None
 
-        for turn, _, spk in diarization.itertracks(yield_label=True):
-            if spk == speaker:
-                start_ms = int(turn.start * 1000)
-                end_ms = int(turn.end * 1000)
+        from tqdm import tqdm
 
-                segment = audio[start_ms:end_ms]
+        for turn, spk in tqdm(segments_list, desc="   Extracting segments", unit="segment"):
+            start_ms = int(turn.start * 1000)
+            end_ms = int(turn.end * 1000)
 
-                if speaker_audio is None:
-                    speaker_audio = segment
-                else:
-                    speaker_audio += segment
+            segment = audio[start_ms:end_ms]
+
+            if speaker_audio is None:
+                speaker_audio = segment
+            else:
+                speaker_audio += segment
 
         if speaker_audio:
             logger.info(f"✅ Extracted {len(speaker_audio)/1000.0:.1f}s of audio")
@@ -410,7 +434,9 @@ class YouTubeVoiceExtractor:
 
         success_count = 0
 
-        for i, chunk in enumerate(chunks, 1):
+        from tqdm import tqdm
+
+        for i, chunk in tqdm(enumerate(chunks, 1), total=len(chunks), desc="   Saving", unit="file"):
             try:
                 # Convertir mono
                 if chunk.channels > 1:
@@ -429,9 +455,6 @@ class YouTubeVoiceExtractor:
                 )
 
                 success_count += 1
-
-                if i % 10 == 0:
-                    logger.info(f"   Progress: {i}/{len(chunks)} files")
 
             except Exception as e:
                 logger.error(f"   ⚠️  Failed to save chunk {i}: {e}")
