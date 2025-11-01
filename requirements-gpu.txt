@@ -1,0 +1,135 @@
+# MiniBotPanel v3 - Requirements GPU (CUDA 11.8)
+# Python 3.10+
+# Pour CPU-only, utilisez requirements-cpu.txt
+
+# ============================================
+# SYSTEM DEPENDENCIES (installer via apt/yum)
+# ============================================
+# IMPORTANT: Ces packages DOIVENT être installés avant pip install
+# Ubuntu/Debian: apt-get install -y ffmpeg postgresql-14 libpq-dev nvidia-cuda-toolkit
+# CentOS/RHEL:   yum install -y ffmpeg postgresql postgresql-devel cuda
+#
+# ffmpeg        - Requis pour yt-dlp, pydub, audio-separator (YouTube Extract Phase 7)
+# postgresql    - Base de données
+# libpq-dev     - Headers PostgreSQL pour psycopg2-binary
+# CUDA 11.8+    - NVIDIA CUDA Toolkit pour GPU
+
+# ============================================
+# WEB FRAMEWORK & API
+# ============================================
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+pydantic>=2.9.0
+pydantic-settings>=2.1.0
+
+# ============================================
+# DATABASE
+# ============================================
+sqlalchemy==2.0.25
+psycopg2-binary==2.9.9
+alembic==1.13.1
+
+# ============================================
+# FREESWITCH
+# ============================================
+# ESL Python (Event Socket Library)
+# IMPORTANT: Doit être compilé manuellement depuis sources FreeSWITCH (voir install_fs_minbot.md section 10.5)
+#python-esl==1.4.18; platform_system != "Darwin"
+
+# ============================================
+# AI SERVICES
+# ============================================
+
+# Vosk STT (Speech-to-Text)
+vosk==0.3.45
+soundfile==0.12.1
+scipy>=1.11.2
+
+# Ollama (NLP - Intent + Sentiment)
+ollama>=0.6.0
+requests==2.31.0
+
+# Coqui TTS (Text-to-Speech)
+TTS==0.22.0
+transformers==4.35.0
+
+# PyTorch - GPU (CUDA 11.8) - 1.3GB download
+--index-url https://download.pytorch.org/whl/cu118
+torch==2.1.2
+torchaudio==2.1.2
+torchvision==0.16.2
+--index-url https://pypi.org/simple
+
+# ============================================
+# AUDIO PROCESSING
+# ============================================
+numpy==1.24.3
+pydub==0.25.1
+webrtcvad==2.0.10
+librosa==0.10.1
+networkx==2.8.8
+
+# Audio cleaning & voice extraction
+noisereduce==3.0.2
+audio-separator==0.19.0
+
+# Speaker diarization (YouTube Extract)
+pyannote.audio==3.1.1
+
+# YouTube download
+yt-dlp>=2024.10.22
+
+# ============================================
+# UTILITIES
+# ============================================
+python-dotenv==1.0.0
+python-json-logger==2.0.7
+colorama==0.4.6
+click==8.1.7
+tabulate==0.9.0
+openpyxl==3.1.2
+phonenumbers==8.13.27
+
+# ============================================
+# MONITORING & LOGGING
+# ============================================
+prometheus-client==0.19.0
+
+# ============================================
+# TESTING (DEV)
+# ============================================
+pytest==7.4.4
+pytest-asyncio==0.23.3
+pytest-cov==4.1.0
+httpx>=0.27.0
+
+# ============================================
+# CODE QUALITY (DEV)
+# ============================================
+black==24.1.1
+flake8==7.0.0
+mypy==1.8.0
+isort==5.13.2
+
+# ============================================
+# NOTES D'INSTALLATION GPU
+# ============================================
+#
+# PRÉREQUIS GPU:
+# 1. NVIDIA GPU avec CUDA Compute Capability >= 3.5
+# 2. CUDA 11.8 installé (https://developer.nvidia.com/cuda-toolkit)
+# 3. cuDNN 8.x (https://developer.nvidia.com/cudnn)
+#
+# INSTALLATION:
+# 1. Créer environnement virtuel
+# 2. Installer PyTorch GPU: pip install torch==2.1.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cu118
+# 3. Installer TTS: pip install TTS==0.22.0
+# 4. Upgrade numpy: pip install --upgrade "numpy==1.24.3"
+# 5. Installer reste: pip install -r requirements-gpu.txt (exclure torch/TTS déjà installés)
+#
+# VÉRIFICATION GPU:
+#    python -c "import torch; print(f'GPU disponible: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')"
+#
+# CONFIGURATION .env:
+#    COQUI_USE_GPU=true

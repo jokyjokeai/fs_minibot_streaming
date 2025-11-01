@@ -3,21 +3,42 @@
 # Installation des dépendances MiniBotPanel v3 FINAL
 # Contourne les conflits numpy entre TTS et audio-separator
 #
+# Usage:
+#   ./install_dependencies.sh          # CPU-only (par défaut)
+#   ./install_dependencies.sh --gpu    # Avec support GPU CUDA 11.8
+#
 
 set -e
-
-echo "🔧 Installation MiniBotPanel v3 - Dépendances"
-echo "=============================================="
-echo ""
 
 # Couleurs
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+RED='\033[0;31m'
 NC='\033[0m'
 
-# 1. PyTorch CPU
-echo -e "${GREEN}1️⃣ Installation PyTorch (CPU-only)...${NC}"
-pip install torch==2.1.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cpu
+# Détection GPU
+GPU_MODE=false
+if [[ "$1" == "--gpu" ]]; then
+    GPU_MODE=true
+fi
+
+echo "🔧 Installation MiniBotPanel v3 - Dépendances"
+echo "=============================================="
+if $GPU_MODE; then
+    echo -e "${YELLOW}Mode: GPU (CUDA 11.8)${NC}"
+else
+    echo -e "${YELLOW}Mode: CPU-only${NC}"
+fi
+echo ""
+
+# 1. PyTorch
+if $GPU_MODE; then
+    echo -e "${GREEN}1️⃣ Installation PyTorch (GPU CUDA 11.8 - 1.3GB)...${NC}"
+    pip install torch==2.1.2 torchaudio==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu118
+else
+    echo -e "${GREEN}1️⃣ Installation PyTorch (CPU-only - 200MB)...${NC}"
+    pip install torch==2.1.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cpu
+fi
 
 # 2. TTS avec numpy 1.22.0
 echo -e "${GREEN}2️⃣ Installation TTS + numpy 1.22.0...${NC}"
@@ -56,7 +77,7 @@ pip install \
     webrtcvad==2.0.10 \
     librosa==0.10.1 \
     networkx==2.8.8 \
-    yt-dlp==2024.12.13 \
+    "yt-dlp>=2024.10.22" \
     python-dotenv==1.0.0 \
     python-json-logger==2.0.7 \
     colorama==0.4.6 \
@@ -71,3 +92,15 @@ echo -e "${GREEN}✅ Installation terminée !${NC}"
 echo ""
 echo "Versions installées:"
 pip list | grep -E "torch|TTS|numpy|audio-separator|pyannote"
+
+if $GPU_MODE; then
+    echo ""
+    echo -e "${YELLOW}🔍 Vérification GPU...${NC}"
+    python -c "import torch; print(f'GPU disponible: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')" || echo -e "${RED}❌ Erreur vérification GPU${NC}"
+fi
+
+echo ""
+echo -e "${GREEN}📝 Prochaines étapes:${NC}"
+echo "  1. Télécharger modèle Vosk: wget https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip"
+echo "  2. Configurer .env avec DATABASE_URL, HUGGINGFACE_TOKEN, etc."
+echo "  3. Lancer: ./start_system.sh"
