@@ -52,15 +52,16 @@ except ImportError:
     AUDIO_PROCESSING_AVAILABLE = False
     print("⚠️  Audio processing libraries not available (noisereduce, soundfile, pydub)")
 
-# Demucs (vocal extraction - state-of-the-art qualité)
+# pyrnnoise (noise reduction - ultra rapide)
 try:
-    import torch
-    from demucs.pretrained import get_model
-    from demucs.apply import apply_model
-    DEMUCS_AVAILABLE = True
+    import pyrnnoise
+    PYRNNOISE_AVAILABLE = True
 except ImportError:
-    DEMUCS_AVAILABLE = False
-    print("⚠️  Demucs not available (vocal extraction disabled)")
+    PYRNNOISE_AVAILABLE = False
+    print("⚠️  pyrnnoise not available (noise reduction will use noisereduce)")
+
+# Demucs (vocal extraction - DÉSACTIVÉ car consomme trop de RAM sur fichiers mono)
+DEMUCS_AVAILABLE = False
 
 # Progress bar
 try:
@@ -220,14 +221,40 @@ class VoiceCloner:
             # Étape 2: Charger audio
             audio_data, sample_rate = sf.read(str(temp_path))
 
-            # Étape 3: Réduction bruit (stationary mode - bon pour bruit constant)
+            # Étape 3: Réduction bruit (pyrnnoise si disponible, sinon noisereduce)
             logger.info(f"    → Noise reduction...")
-            reduced_noise = nr.reduce_noise(
-                y=audio_data,
-                sr=sample_rate,
-                stationary=True,  # Bon pour bruits constants (ventilation, etc.)
-                prop_decrease=0.8  # Agressivité réduction (0-1)
-            )
+
+            if PYRNNOISE_AVAILABLE:
+                # pyrnnoise: ultra rapide (500x real-time)
+                try:
+                    # pyrnnoise requiert int16
+                    if audio_data.dtype != 'int16':
+                        audio_int16 = (audio_data * 32767).astype('int16')
+                    else:
+                        audio_int16 = audio_data
+
+                    # Appliquer pyrnnoise
+                    reduced_noise = pyrnnoise.denoise(audio_int16, sample_rate)
+
+                    # Reconvertir en float32
+                    reduced_noise = reduced_noise.astype('float32') / 32767.0
+
+                except Exception as e:
+                    logger.warning(f"    ⚠️  pyrnnoise failed: {e}, fallback to noisereduce")
+                    reduced_noise = nr.reduce_noise(
+                        y=audio_data,
+                        sr=sample_rate,
+                        stationary=True,
+                        prop_decrease=0.8
+                    )
+            else:
+                # Fallback noisereduce
+                reduced_noise = nr.reduce_noise(
+                    y=audio_data,
+                    sr=sample_rate,
+                    stationary=True,  # Bon pour bruits constants (ventilation, etc.)
+                    prop_decrease=0.8  # Agressivité réduction (0-1)
+                )
 
             # Sauvegarder temporairement pour pydub
             temp_reduced = output_path.parent / f"temp_{output_path.name}"

@@ -75,8 +75,9 @@ librosa>=0.11.0  # Requis par coqui-tts 0.27.2
 networkx==2.8.8
 
 # Audio cleaning & voice extraction
-noisereduce==3.0.2
-demucs>=4.0.0  # Vocal separation (remplace Spleeter - PyTorch natif)
+noisereduce==3.0.2  # Fallback noise reduction
+pyrnnoise>=0.3.8  # Ultra-fast noise reduction (primary)
+demucs>=4.0.0  # Vocal separation (optionnel - désactivé par défaut car RAM intensive)
 
 # Speaker diarization (YouTube Extract)
 # IMPORTANT: pyannote.audio 3.1.1 requiert numpy>=2.0 (incompatible avec coqui-tts)

@@ -32,7 +32,8 @@ from typing import Dict, List, Any, Optional
 try:
     from system.objections_database import get_objections_for_thematique
 except ImportError:
-    print("⚠️  Warning: objections_database not found, using embedded objections")
+    import warnings
+    warnings.warn("objections_database not found, using embedded objections", UserWarning)
     def get_objections_for_thematique(key):
         return {}
 
@@ -449,19 +450,24 @@ class ScenarioBuilder:
         print_info("  • Nom du téléprospecteur (personnalité)")
         print_info("  • Nom de la société\n")
 
-        # 1. Choix voix clonée
+        # 1. Choix voix clonée (vérifier embeddings.pth)
         print(f"{Colors.CYAN}Voix clonées disponibles:{Colors.END}")
         voices_dir = Path("voices")
         available_voices = []
 
         if voices_dir.exists():
-            available_voices = [d.name for d in voices_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
+            # Vérifier présence de embeddings.pth (voix réellement clonée)
+            for d in voices_dir.iterdir():
+                if d.is_dir() and not d.name.startswith('.'):
+                    embeddings_file = d / "embeddings.pth"
+                    if embeddings_file.exists():
+                        available_voices.append(d.name)
 
         if available_voices:
             print_info(f"Détectées: {', '.join(available_voices)}")
-            self.voice_name = ask_text("Nom de la voix à utiliser", default=available_voices[0] if available_voices else "julie")
+            self.voice_name = ask_text("Nom de la voix à utiliser", default=available_voices[0])
         else:
-            print_warning("Aucune voix détectée dans voices/")
+            print_warning("Aucune voix clonée détectée (pas de embeddings.pth)")
             print_info("💡 Utilisez youtube_extract.py puis clone_voice.py pour créer des voix")
             self.voice_name = ask_text("Nom de la voix à utiliser", default="julie")
 

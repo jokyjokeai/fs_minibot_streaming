@@ -26,8 +26,12 @@ import logging
 import os
 import subprocess
 import tempfile
+import warnings
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
+
+# Supprimer warning pyannote.audio (torchaudio backend déprécié)
+warnings.filterwarnings("ignore", message="torchaudio._backend.set_audio_backend has been deprecated")
 
 # Audio processing
 try:
