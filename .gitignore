@@ -1,0 +1,174 @@
+# MiniBotPanel v3 - Git Ignore
+
+# ============================================
+# ENVIRONMENT
+# ============================================
+.env
+.env.local
+.env.*.local
+
+# Python virtual environment
+venv/
+env/
+ENV/
+.venv/
+
+# ============================================
+# PYTHON
+# ============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ============================================
+# LOGS
+# ============================================
+logs/
+*.log
+*.log.*
+
+# ============================================
+# DATABASE
+# ============================================
+*.db
+*.sqlite
+*.sqlite3
+
+# ============================================
+# RECORDINGS & AUDIO
+# ============================================
+recordings/
+transcriptions/
+exports/
+audio/raw/
+audio/normalized/
+
+# Garder les dossiers mais ignorer le contenu
+!recordings/.gitkeep
+!transcriptions/.gitkeep
+!exports/.gitkeep
+
+# ============================================
+# AI MODELS
+# ============================================
+models/
+voices/
+!voices/.gitkeep
+
+# Cache Coqui
+models/coqui_cache/
+
+# ============================================
+# IDE
+# ============================================
+# VSCode
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# ============================================
+# OS
+# ============================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+.directory
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ============================================
+# TESTING
+# ============================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# ============================================
+# TEMPORARY FILES
+# ============================================
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# ============================================
+# DOCUMENTATION BUILD
+# ============================================
+docs/_build/
+site/
+
+# ============================================
+# SECRETS & CREDENTIALS
+# ============================================
+secrets/
+credentials/
+*.key
+*.pem
+*.crt
+
+# Bloctel API
+bloctel_cache/
+
+# ============================================
+# EXPORTS
+# ============================================
+*.csv
+*.xlsx
+!documentation/examples/*.csv
+!documentation/examples/*.xlsx
+
+# ============================================
+# FREESWITCH
+# ============================================
+# Configuration avec mots de passe
+freeswitch_configs/sip_profiles/provider.xml
+
+# ============================================
+# MONITORING
+# ============================================
+prometheus_data/
+
+# ============================================
+# BACKUP
+# ============================================
+backup/
+*.backup
+*.bak

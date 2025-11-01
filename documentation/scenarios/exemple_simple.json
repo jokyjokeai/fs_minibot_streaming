@@ -1,0 +1,127 @@
+{
+  "name": "Qualification Simple",
+  "description": "Scénario binaire : LEAD si 3 OUI, sinon NOT_INTERESTED",
+
+  "qualification_rules": {
+    "lead": {
+      "required_steps": [
+        "question_decideur",
+        "question_budget",
+        "question_timing"
+      ],
+      "required_intents": {
+        "question_decideur": "affirm",
+        "question_budget": "affirm",
+        "question_timing": "affirm"
+      }
+    }
+  },
+
+  "steps": {
+    "intro": {
+      "message_text": "Bonjour {{first_name}}, je suis Julie de TechCorp. J'appelle concernant {{company}}. Avez-vous 2 minutes ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "affirm": "question_decideur",
+        "deny": "retry_intro",
+        "callback": "planifier_rappel"
+      }
+    },
+
+    "retry_intro": {
+      "message_text": "Je comprends. C'est vraiment rapide, juste 3 questions. Puis-je continuer ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "intent_mapping": {
+        "affirm": "question_decideur",
+        "deny": "fin_not_interested"
+      }
+    },
+
+    "question_decideur": {
+      "message_text": "Êtes-vous le décisionnaire pour ce type de solutions ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "qualifying_question": true,
+      "intent_mapping": {
+        "affirm": "question_budget",
+        "deny": "fin_not_interested"
+      }
+    },
+
+    "question_budget": {
+      "message_text": "Avez-vous un budget pour ce type de projet ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "qualifying_question": true,
+      "intent_mapping": {
+        "affirm": "question_timing",
+        "deny": "fin_not_interested"
+      }
+    },
+
+    "question_timing": {
+      "message_text": "Souhaitez-vous démarrer dans les 3 prochains mois ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "qualifying_question": true,
+      "intent_mapping": {
+        "affirm": "fin_lead",
+        "deny": "fin_not_interested"
+      }
+    },
+
+    "fin_lead": {
+      "message_text": "Parfait ! Un commercial va vous rappeler très rapidement pour organiser une démonstration. Merci {{first_name}} et à très bientôt !",
+      "audio_type": "tts",
+      "voice": "julie",
+      "result": "lead",
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+
+    "fin_not_interested": {
+      "message_text": "Je comprends. Merci pour votre temps. Bonne journée !",
+      "audio_type": "tts",
+      "voice": "julie",
+      "result": "not_interested",
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+
+    "planifier_rappel": {
+      "message_text": "Pas de problème. Quel serait le meilleur moment pour vous rappeler ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "result": "callback",
+      "intent_mapping": {
+        "*": "confirmation_rappel"
+      }
+    },
+
+    "confirmation_rappel": {
+      "message_text": "C'est noté ! Nous vous rappellerons. Merci et à bientôt !",
+      "audio_type": "tts",
+      "voice": "julie",
+      "result": "callback",
+      "intent_mapping": {
+        "*": "end"
+      }
+    }
+  }
+}

@@ -1,0 +1,33 @@
+<gateway name="gateway1">
+  <!-- REMPLACER avec les infos de votre provider SIP -->
+
+  <!-- Serveur SIP du provider -->
+  <param name="proxy" value="sip.votreprovider.com"/>
+  <param name="realm" value="sip.votreprovider.com"/>
+
+  <!-- Authentification -->
+  <param name="username" value="VOTRE_USERNAME"/>
+  <param name="password" value="VOTRE_PASSWORD"/>
+
+  <!-- Registration -->
+  <param name="register" value="true"/>
+  <param name="retry-seconds" value="30"/>
+  <param name="expire-seconds" value="3600"/>
+
+  <!-- Caller ID -->
+  <param name="caller-id-in-from" value="true"/>
+  <param name="extension-in-contact" value="true"/>
+
+  <!-- Context pour appels entrants (si besoin) -->
+  <param name="context" value="public"/>
+
+  <!-- Codec preferences -->
+  <param name="codec-prefs" value="PCMU,PCMA"/>
+
+  <!-- Variables -->
+  <variables>
+    <!-- Votre numéro de téléphone -->
+    <variable name="outbound_caller_id_number" value="+33123456789"/>
+    <variable name="outbound_caller_id_name" value="MiniBotPanel"/>
+  </variables>
+</gateway>

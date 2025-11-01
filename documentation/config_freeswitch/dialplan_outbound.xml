@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dialplan MiniBotPanel - Appels sortants uniquement -->
+<include>
+  <context name="default">
+
+    <!-- Extension pour appels MiniBotPanel -->
+    <extension name="minibot_outbound">
+      <condition field="destination_number" expression="^(\+?\d+)$">
+
+        <!-- Enregistrer l'appel si configuré -->
+        <action application="set" data="RECORD_STEREO=true"/>
+        <action application="set" data="media_bug_answer_req=true"/>
+        <action application="record_session" data="/var/lib/freeswitch/recordings/${strftime(%Y%m%d)}/${uuid}.wav"/>
+
+        <!-- Bridge vers gateway -->
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="bridge" data="sofia/gateway/gateway1/$1"/>
+      </condition>
+    </extension>
+
+  </context>
+</include>

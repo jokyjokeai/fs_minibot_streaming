@@ -1,0 +1,286 @@
+{
+  "name": "Qualification Leads B2B",
+  "description": "Scénario de qualification de leads avec scoring intelligent",
+
+  "qualification_rules": {
+    "lead": {
+      "required_steps": ["question_proprietaire", "question_budget"],
+      "required_intents": {
+        "question_proprietaire": "affirm",
+        "question_budget": "affirm"
+      },
+      "min_score": 3
+    },
+    "hot_lead": {
+      "min_score": 5
+    },
+    "not_interested": {
+      "trigger_intents": {
+        "max_deny": 3
+      }
+    }
+  },
+
+  "steps": {
+    "intro": {
+      "message_text": "Bonjour {{first_name}}, je suis Julie de TechCorp. J'appelle concernant votre entreprise {{company}}. Avez-vous 2 minutes pour échanger sur vos besoins en solutions digitales ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "affirm": "question_proprietaire",
+        "deny": "retry_intro",
+        "question": "clarification_intro",
+        "callback": "planifier_rappel"
+      }
+    },
+
+    "retry_intro": {
+      "message_text": "Je comprends que vous soyez occupé. C'est vraiment très rapide, juste 3 questions. Puis-je continuer ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "intent_mapping": {
+        "affirm": "question_proprietaire",
+        "deny": "fin_not_interested",
+        "callback": "planifier_rappel"
+      }
+    },
+
+    "clarification_intro": {
+      "message_text": "Nous proposons des solutions pour automatiser vos processus commerciaux et gagner du temps. Cela pourrait vous intéresser ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "intent_mapping": {
+        "affirm": "question_proprietaire",
+        "deny": "fin_not_interested",
+        "question": "question_proprietaire"
+      }
+    },
+
+    "question_proprietaire": {
+      "message_text": "Êtes-vous le dirigeant ou le décisionnaire pour ce type de solutions dans votre entreprise ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "qualifying_question": true,
+      "qualification_weight": 3,
+      "qualification_type": "decision_maker",
+      "intent_mapping": {
+        "affirm": "question_budget",
+        "deny": "demande_contact_decideur"
+      }
+    },
+
+    "demande_contact_decideur": {
+      "message_text": "D'accord. Pourriez-vous me donner le contact de la personne qui prend ces décisions ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "affirm": "fin_redirect",
+        "deny": "question_budget",
+        "*": "fin_not_qualified"
+      }
+    },
+
+    "question_budget": {
+      "message_text": "Avez-vous déjà un budget alloué pour améliorer vos outils digitaux cette année ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "qualifying_question": true,
+      "qualification_weight": 3,
+      "qualification_type": "budget",
+      "intent_mapping": {
+        "affirm": "question_timing",
+        "deny": "question_probleme"
+      }
+    },
+
+    "question_probleme": {
+      "message_text": "Rencontrez-vous actuellement des difficultés avec vos processus commerciaux ou votre gestion client ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 12,
+      "qualifying_question": true,
+      "qualification_weight": 2,
+      "qualification_type": "pain_point",
+      "intent_mapping": {
+        "affirm": "question_timing",
+        "deny": "fin_not_interested",
+        "question": "clarification_probleme"
+      }
+    },
+
+    "clarification_probleme": {
+      "message_text": "Par exemple, perdez-vous du temps sur des tâches répétitives, ou avez-vous des difficultés à suivre vos prospects ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "intent_mapping": {
+        "affirm": "question_timing",
+        "deny": "fin_not_interested",
+        "*": "question_timing"
+      }
+    },
+
+    "question_timing": {
+      "message_text": "Si la solution vous convient, seriez-vous prêt à démarrer dans les 3 prochains mois ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "qualifying_question": true,
+      "qualification_weight": 2,
+      "qualification_type": "timing",
+      "intent_mapping": {
+        "affirm": "question_taille_entreprise",
+        "deny": "question_taille_entreprise"
+      }
+    },
+
+    "question_taille_entreprise": {
+      "message_text": "Combien de personnes travaillent dans votre entreprise ? Plus de 10 personnes ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "qualifying_question": true,
+      "qualification_weight": 1,
+      "qualification_type": "company_size",
+      "intent_mapping": {
+        "affirm": "evaluer_qualification",
+        "deny": "evaluer_qualification",
+        "*": "evaluer_qualification"
+      }
+    },
+
+    "evaluer_qualification": {
+      "message_text": "Merci pour ces informations précieuses.",
+      "audio_type": "tts",
+      "voice": "julie",
+      "evaluate_qualification": true,
+      "intent_mapping": {
+        "lead_hot": "fin_hot_lead",
+        "lead_warm": "fin_warm_lead",
+        "lead_cold": "fin_cold_lead",
+        "not_qualified": "fin_not_qualified"
+      }
+    },
+
+    "fin_hot_lead": {
+      "message_text": "Excellent ! Je vois que notre solution pourrait vraiment vous aider. Un de nos experts va vous rappeler aujourd'hui même pour vous présenter une démonstration personnalisée. À quelle heure êtes-vous généralement disponible ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "result": "lead",
+      "lead_score": 10,
+      "lead_type": "hot",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "*": "confirmation_finale"
+      }
+    },
+
+    "fin_warm_lead": {
+      "message_text": "Très bien ! Je pense que notre solution pourrait vous intéresser. Un commercial va vous recontacter dans les prochains jours pour discuter de vos besoins spécifiques. Quel est le meilleur moment pour vous joindre ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "result": "lead",
+      "lead_score": 6,
+      "lead_type": "warm",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "*": "confirmation_finale"
+      }
+    },
+
+    "fin_cold_lead": {
+      "message_text": "Je vous remercie pour votre temps. Je vais transmettre vos coordonnées à notre équipe qui vous recontactera dans quelques semaines avec plus d'informations. Bonne journée !",
+      "audio_type": "tts",
+      "voice": "julie",
+      "result": "lead",
+      "lead_score": 3,
+      "lead_type": "cold",
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+
+    "fin_not_interested": {
+      "message_text": "Je comprends parfaitement. Merci d'avoir pris le temps de me répondre. Je vous souhaite une excellente journée !",
+      "audio_type": "tts",
+      "voice": "julie",
+      "result": "not_interested",
+      "lead_score": 0,
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+
+    "fin_not_qualified": {
+      "message_text": "Merci pour ces informations. Nous gardons vos coordonnées et vous recontacterons si nous avons une solution adaptée. Bonne journée !",
+      "audio_type": "tts",
+      "voice": "julie",
+      "result": "not_qualified",
+      "lead_score": 1,
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+
+    "fin_redirect": {
+      "message_text": "Parfait, nous prendrons contact avec la bonne personne. Merci beaucoup et bonne journée !",
+      "audio_type": "tts",
+      "voice": "julie",
+      "result": "callback",
+      "lead_score": 2,
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+
+    "planifier_rappel": {
+      "message_text": "Pas de problème. Quel serait le meilleur moment pour vous rappeler ? Plutôt le matin ou l'après-midi ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "result": "callback",
+      "lead_score": 4,
+      "intent_mapping": {
+        "*": "confirmation_rappel"
+      }
+    },
+
+    "confirmation_rappel": {
+      "message_text": "Parfait, nous vous rappellerons comme convenu. Merci et à bientôt !",
+      "audio_type": "tts",
+      "voice": "julie",
+      "result": "callback",
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+
+    "confirmation_finale": {
+      "message_text": "C'est noté ! Merci beaucoup {{first_name}}, et à très bientôt !",
+      "audio_type": "tts",
+      "voice": "julie",
+      "intent_mapping": {
+        "*": "end"
+      }
+    }
+  }
+}

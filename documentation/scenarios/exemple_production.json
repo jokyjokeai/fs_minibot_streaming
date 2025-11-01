@@ -1,0 +1,229 @@
+{
+  "name": "Production V1",
+  "description": "Scénario de production principal pour prospection commerciale",
+  "steps": {
+    "intro": {
+      "message_text": "Bonjour {{first_name}}, je suis Julie de l'entreprise TechCorp. Avez-vous quelques minutes pour échanger ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "affirm": "question1",
+        "deny": "retry_intro",
+        "question": "clarification_intro"
+      }
+    },
+
+    "retry_intro": {
+      "message_text": "Je comprends que vous soyez occupé. Cela ne prendra que 2 minutes. Puis-je continuer ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "intent_mapping": {
+        "affirm": "question1",
+        "deny": "fin_not_interested",
+        "callback": "fin_callback"
+      }
+    },
+
+    "clarification_intro": {
+      "message_text": "Je vous appelle pour vous présenter notre solution qui aide les entreprises à automatiser leurs processus. Avez-vous un moment ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "affirm": "question1",
+        "deny": "fin_not_interested",
+        "question": "fin_callback"
+      }
+    },
+
+    "question1": {
+      "message_text": "Êtes-vous le décideur ou le gérant de {{company}} ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "intent_mapping": {
+        "affirm": "question2",
+        "deny": "question1_redirect",
+        "question": "clarification_question1"
+      }
+    },
+
+    "question1_redirect": {
+      "message_text": "D'accord. Pourriez-vous me transférer au décideur ou me donner son contact ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "affirm": "fin_redirect",
+        "deny": "fin_not_interested",
+        "*": "fin_not_interested"
+      }
+    },
+
+    "clarification_question1": {
+      "message_text": "Je cherche à savoir si vous êtes la personne qui prend les décisions stratégiques dans l'entreprise.",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "intent_mapping": {
+        "affirm": "question2",
+        "deny": "question1_redirect",
+        "*": "fin_not_interested"
+      }
+    },
+
+    "question2": {
+      "message_text": "Actuellement, utilisez-vous des outils d'automatisation dans votre entreprise ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "intent_mapping": {
+        "affirm": "question3_oui_outils",
+        "deny": "question3_non_outils",
+        "question": "clarification_question2"
+      }
+    },
+
+    "clarification_question2": {
+      "message_text": "Je parle d'outils pour automatiser vos tâches répétitives, comme la gestion de contacts ou les relances clients.",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "intent_mapping": {
+        "affirm": "question3_oui_outils",
+        "deny": "question3_non_outils",
+        "*": "question3"
+      }
+    },
+
+    "question3_oui_outils": {
+      "message_text": "Très bien. Êtes-vous satisfait de vos outils actuels ou seriez-vous ouvert à découvrir une solution plus performante ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "affirm": "proposition_demo",
+        "deny": "fin_not_interested",
+        "question": "clarification_question3"
+      }
+    },
+
+    "question3_non_outils": {
+      "message_text": "Je comprends. Pensez-vous que l'automatisation pourrait vous faire gagner du temps et de l'argent ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "affirm": "proposition_demo",
+        "deny": "fin_not_interested",
+        "question": "clarification_question3"
+      }
+    },
+
+    "question3": {
+      "message_text": "Seriez-vous intéressé par une solution qui automatise vos processus et vous fait gagner du temps ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "intent_mapping": {
+        "affirm": "proposition_demo",
+        "deny": "fin_not_interested",
+        "question": "clarification_question3"
+      }
+    },
+
+    "clarification_question3": {
+      "message_text": "Notre solution permet d'automatiser les tâches répétitives, de gagner du temps, et d'améliorer votre productivité. Cela vous intéresserait-il ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "affirm": "proposition_demo",
+        "deny": "fin_not_interested",
+        "callback": "fin_callback"
+      }
+    },
+
+    "proposition_demo": {
+      "message_text": "Excellent ! Je vous propose une démonstration personnalisée de 15 minutes. Seriez-vous disponible cette semaine ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "affirm": "fin_lead",
+        "deny": "proposition_callback",
+        "callback": "proposition_callback"
+      }
+    },
+
+    "proposition_callback": {
+      "message_text": "Pas de problème. Quel serait le meilleur moment pour vous rappeler ?",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "*": "fin_callback"
+      }
+    },
+
+    "fin_lead": {
+      "message_text": "Parfait ! Un de nos commerciaux va vous contacter pour fixer un rendez-vous. Merci {{first_name}} et excellente journée !",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 5,
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+
+    "fin_callback": {
+      "message_text": "Très bien, je note. Nous vous rappellerons. Merci et bonne journée !",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 5,
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+
+    "fin_redirect": {
+      "message_text": "Merci pour ces informations. Nous prendrons contact avec la bonne personne. Bonne journée !",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 5,
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+
+    "fin_not_interested": {
+      "message_text": "Je comprends. Merci pour votre temps et bonne journée !",
+      "audio_type": "tts",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 5,
+      "intent_mapping": {
+        "*": "end"
+      }
+    }
+  }
+}

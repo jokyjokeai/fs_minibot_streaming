@@ -1,0 +1,141 @@
+# MiniBotPanel v3 - Requirements
+# Python 3.10+
+
+# ============================================
+# WEB FRAMEWORK & API
+# ============================================
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+pydantic>=2.9.0
+pydantic-settings>=2.1.0
+
+# ============================================
+# DATABASE
+# ============================================
+sqlalchemy==2.0.25
+psycopg2-binary==2.9.9
+alembic==1.13.1
+
+# ============================================
+# FREESWITCH
+# ============================================
+# ESL Python (Event Socket Library)
+# IMPORTANT: Doit être compilé manuellement depuis sources FreeSWITCH (voir install_fs_minbot.md section 10.5)
+# Le flag -classic de swig est déprécié, donc on ne peut pas l'installer via pip
+#python-esl==1.4.18; platform_system != "Darwin"
+
+# ============================================
+# AI SERVICES
+# ============================================
+
+# Vosk STT (Speech-to-Text)
+vosk==0.3.45
+soundfile==0.12.1
+scipy>=1.11.0
+
+# Ollama (NLP - Intent + Sentiment)
+ollama>=0.6.0
+requests==2.31.0
+
+# Coqui TTS (Text-to-Speech)
+# IMPORTANT: Versions fixées pour compatibilité (voir install_fs_minbot.md section 13)
+TTS==0.22.0
+transformers==4.33.0
+
+# PyTorch - CHOISIR UNE OPTION :
+# Option 1 : CPU only (VPS, serveurs sans GPU)
+# pip install torch==2.1.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cpu
+
+# Option 2 : GPU CUDA (machines avec GPU NVIDIA)
+# pip install torch==2.1.2+cu118 torchaudio==2.1.2+cu118 --index-url https://download.pytorch.org/whl/cu118
+
+# Option 3 : Installation automatique (détecte GPU si disponible)
+torch==2.1.2
+torchaudio==2.1.2
+
+# ============================================
+# AUDIO PROCESSING
+# ============================================
+pydub==0.25.1
+webrtcvad==2.0.10
+librosa>=0.10.0
+numpy==1.22.0  # Version fixée pour compatibilité Coqui TTS
+networkx==2.8.8  # Pour gruut (dépendance Coqui TTS)
+
+# Audio cleaning & voice extraction
+noisereduce==3.0.2  # Noise removal (spectral gating)
+audio-separator==0.19.0  # Vocal separation (Demucs models)
+
+# Speaker diarization (YouTube Extract)
+pyannote.audio==3.1.1  # Speaker diarization (requires HuggingFace token)
+
+# YouTube download
+yt-dlp==2024.12.13  # YouTube audio extraction
+
+# ============================================
+# UTILITIES
+# ============================================
+python-dotenv==1.0.0
+python-json-logger==2.0.7
+colorama==0.4.6
+click==8.1.7
+tabulate==0.9.0
+openpyxl==3.1.2  # Pour import Excel
+phonenumbers==8.13.27  # Validation numéros
+
+# ============================================
+# MONITORING & LOGGING
+# ============================================
+prometheus-client==0.19.0
+python-json-logger==2.0.7
+
+# ============================================
+# TESTING (DEV)
+# ============================================
+pytest==7.4.4
+pytest-asyncio==0.23.3
+pytest-cov==4.1.0
+httpx>=0.27.0  # Pour tester FastAPI + compatible ollama
+
+# ============================================
+# CODE QUALITY (DEV)
+# ============================================
+black==24.1.1
+flake8==7.0.0
+mypy==1.8.0
+isort==5.13.2
+
+# ============================================
+# NOTES D'INSTALLATION
+# ============================================
+#
+# 1. Créer environnement virtuel:
+#    python3 -m venv venv
+#    source venv/bin/activate  (Linux/macOS)
+#    venv\Scripts\activate     (Windows)
+#
+# 2. Installer dépendances:
+#    pip install -r requirements.txt
+#
+# 3. Modèle Vosk (français):
+#    wget https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip
+#    unzip vosk-model-small-fr-0.22.zip -d models/
+#
+# 4. Ollama (installer séparément):
+#    https://ollama.ai/download
+#    ollama pull mistral:7b
+#
+# 4b. HuggingFace Token (pour pyannote.audio):
+#    1. Créer compte sur https://huggingface.co
+#    2. Générer token: https://huggingface.co/settings/tokens
+#    3. Ajouter dans .env: HUGGINGFACE_TOKEN=hf_...
+#    4. Accepter conditions: https://huggingface.co/pyannote/speaker-diarization-3.1
+#
+# 5. FreeSWITCH ESL:
+#    - Linux: apt install freeswitch-python-esl
+#    - macOS: compiler depuis sources
+#    - Ou utiliser python-esl via pip (si disponible)
+#
+# 6. GPU pour Coqui TTS (optionnel):
+#    pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
