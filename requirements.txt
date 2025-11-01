@@ -2,6 +2,17 @@
 # Python 3.10+
 
 # ============================================
+# SYSTEM DEPENDENCIES (installer via apt/yum)
+# ============================================
+# IMPORTANT: Ces packages DOIVENT être installés avant pip install
+# Ubuntu/Debian: apt-get install -y ffmpeg postgresql-14 libpq-dev
+# CentOS/RHEL:   yum install -y ffmpeg postgresql postgresql-devel
+#
+# ffmpeg        - Requis pour yt-dlp, pydub, audio-separator (YouTube Extract Phase 7)
+# postgresql    - Base de données
+# libpq-dev     - Headers PostgreSQL pour psycopg2-binary
+
+# ============================================
 # WEB FRAMEWORK & API
 # ============================================
 fastapi==0.109.0
