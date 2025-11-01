@@ -731,9 +731,18 @@ class VoiceCloner:
             logger.info(f"   {len(objections_list)} objections")
 
             for i, objection_entry in enumerate(objections_list, 1):
+                # Extraire la réponse (ObjectionEntry ou str)
+                if hasattr(objection_entry, 'response'):
+                    response_text = objection_entry.response
+                elif isinstance(objection_entry, str):
+                    response_text = objection_entry
+                else:
+                    logger.warning(f"   ⚠️  Skipping invalid entry type: {type(objection_entry)}")
+                    continue
+
                 # Créer nom de fichier safe à partir des premiers mots de la réponse
                 # Format: theme_number_debut_reponse.wav
-                response_preview = objection_entry.response[:30]
+                response_preview = response_text[:30]
                 safe_name = self._sanitize_filename(response_preview)
                 filename = f"{theme_name}_{i:03d}_{safe_name}.wav"
                 output_file = output_dir / filename
@@ -744,13 +753,14 @@ class VoiceCloner:
                     success_count += 1
                     continue
 
-                # Générer TTS
+                # Générer TTS avec synthesize_with_voice
                 try:
-                    success = self.tts.generate_speech(
-                        text=objection_entry.response,
-                        output_path=str(output_file),
-                        voice_name=voice_name
+                    result_path = self.tts.synthesize_with_voice(
+                        text=response_text,
+                        voice_name=voice_name,
+                        output_file=str(output_file)
                     )
+                    success = result_path is not None
 
                     if success:
                         success_count += 1
