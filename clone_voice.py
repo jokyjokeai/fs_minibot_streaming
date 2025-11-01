@@ -54,7 +54,7 @@ except ImportError:
 
 # pyrnnoise (noise reduction - ultra rapide)
 try:
-    import pyrnnoise
+    from pyrnnoise import RNNoise
     PYRNNOISE_AVAILABLE = True
 except ImportError:
     PYRNNOISE_AVAILABLE = False
@@ -227,14 +227,57 @@ class VoiceCloner:
             if PYRNNOISE_AVAILABLE:
                 # pyrnnoise: ultra rapide (500x real-time)
                 try:
-                    # pyrnnoise requiert int16
-                    if audio_data.dtype != 'int16':
-                        audio_int16 = (audio_data * 32767).astype('int16')
-                    else:
-                        audio_int16 = audio_data
+                    import numpy as np
 
-                    # Appliquer pyrnnoise
-                    reduced_noise = pyrnnoise.denoise(audio_int16, sample_rate)
+                    # pyrnnoise fonctionne à 48kHz - resample si nécessaire
+                    if sample_rate != 48000:
+                        from scipy import signal
+                        audio_48k = signal.resample_poly(audio_data, 48000, sample_rate)
+                    else:
+                        audio_48k = audio_data
+
+                    # pyrnnoise requiert int16
+                    if audio_48k.dtype != 'int16':
+                        audio_int16 = (audio_48k * 32767).astype('int16')
+                    else:
+                        audio_int16 = audio_48k
+
+                    # Convertir mono en array 1D si nécessaire
+                    if len(audio_int16.shape) > 1:
+                        audio_int16 = audio_int16.flatten()
+
+                    # Créer instance RNNoise
+                    denoiser = RNNoise(sample_rate=48000)
+
+                    # Traiter l'audio par chunks (pyrnnoise traite par frames de 480 samples)
+                    denoised_chunks = []
+                    chunk_size = 480  # Frame size pour 48kHz
+
+                    for i in range(0, len(audio_int16), chunk_size):
+                        chunk = audio_int16[i:i + chunk_size]
+
+                        # Pad le dernier chunk si nécessaire
+                        if len(chunk) < chunk_size:
+                            chunk = np.pad(chunk, (0, chunk_size - len(chunk)), mode='constant')
+
+                        # Traiter le chunk
+                        try:
+                            speech_prob, denoised_chunk = denoiser.denoise_frame(chunk)
+                            denoised_chunks.append(denoised_chunk)
+                        except Exception as e:
+                            # Si erreur sur un chunk, utiliser l'original
+                            denoised_chunks.append(chunk)
+
+                    # Combiner tous les chunks
+                    reduced_noise_48k = np.concatenate(denoised_chunks)
+
+                    # Resample back au sample rate original si nécessaire
+                    if sample_rate != 48000:
+                        reduced_noise = signal.resample_poly(reduced_noise_48k, sample_rate, 48000)
+                        # Tronquer à la longueur originale
+                        reduced_noise = reduced_noise[:len(audio_data)]
+                    else:
+                        reduced_noise = reduced_noise_48k[:len(audio_data)]
 
                     # Reconvertir en float32
                     reduced_noise = reduced_noise.astype('float32') / 32767.0
@@ -559,13 +602,39 @@ class VoiceCloner:
                 logger.error("❌ Coqui TTS not available")
                 return False
 
-        # Cloner voix (utilise le premier fichier comme référence principale)
+        # Cloner voix (utilise le premier fichier valide comme référence principale)
         # Note: Coqui XTTS v2 peut utiliser plusieurs fichiers pour améliorer qualité
         logger.info(f"\n🎤 Cloning voice '{voice_name}'...")
 
-        # Pour l'instant, on utilise le premier fichier
-        # TODO: Améliorer pour utiliser tous les fichiers (fine-tuning)
-        reference_audio = str(cleaned_files[0])
+        # Trouver le premier fichier valide (pas vide, taille > 10KB)
+        reference_audio = None
+        MIN_FILE_SIZE = 10 * 1024  # 10KB minimum
+
+        for cleaned_file in cleaned_files:
+            try:
+                file_size = cleaned_file.stat().st_size
+                if file_size >= MIN_FILE_SIZE:
+                    # Vérifier que le fichier peut être décodé
+                    import soundfile as sf
+                    try:
+                        data, sr = sf.read(str(cleaned_file))
+                        # Vérifier qu'il y a des données audio valides
+                        if len(data) > 0 and sr > 0:
+                            reference_audio = str(cleaned_file)
+                            logger.info(f"    ✅ Selected reference: {cleaned_file.name} ({file_size/1024:.1f}KB)")
+                            break
+                    except Exception as e:
+                        logger.warning(f"    ⚠️  Skipping corrupt file {cleaned_file.name}: {e}")
+                        continue
+                else:
+                    logger.warning(f"    ⚠️  Skipping small file {cleaned_file.name} ({file_size} bytes < {MIN_FILE_SIZE} bytes)")
+            except Exception as e:
+                logger.warning(f"    ⚠️  Error checking file {cleaned_file.name}: {e}")
+                continue
+
+        if not reference_audio:
+            logger.error(f"❌ No valid reference audio file found (all files are corrupt or too small)")
+            return False
 
         success = self.tts.clone_voice(reference_audio, voice_name)
 
