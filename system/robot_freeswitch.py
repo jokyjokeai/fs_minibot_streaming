@@ -235,12 +235,12 @@ class RobotFreeSWITCH:
     def _load_scenarios(self):
         """Charge les scénarios depuis scenarios.py"""
         try:
-            from system.scenarios import scenarios
-            self.scenarios = scenarios
-            logger.info(f"✅ Loaded {len(scenarios)} scenarios")
+            from system.scenarios import ScenarioManager
+            self.scenario_manager = ScenarioManager()
+            logger.info(f"✅ ScenarioManager loaded successfully")
         except Exception as e:
             logger.error(f"❌ Failed to load scenarios: {e}")
-            self.scenarios = {}
+            self.scenario_manager = None
 
     def connect(self):
         """Établit la connexion ESL avec FreeSWITCH"""

@@ -43,8 +43,9 @@ requests==2.31.0
 TTS==0.22.0
 transformers==4.35.0
 
-# PyTorch - CPU only par défaut (VPS sans GPU)
-# IMPORTANT: Installer AVANT le reste pour éviter téléchargement version CUDA
+# PyTorch - Par défaut CPU (VPS sans GPU)
+# IMPORTANT: Pour GPU, commentez les 2 lignes --index-url ci-dessous
+# GPU: pip install torch==2.1.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cu118
 --index-url https://download.pytorch.org/whl/cpu
 torch==2.1.2
 torchaudio==2.1.2
