@@ -151,10 +151,10 @@ pip install --upgrade pip
 cd /opt/fs_minibot_streaming
 source venv/bin/activate
 
-# Installer dépendances fixes d'abord
-pip install numpy==1.22.0 networkx==2.8.8 transformers==4.33.0
+# Utiliser le script d'installation automatique (RECOMMANDÉ)
+./install_dependencies.sh
 
-# Installer le reste depuis requirements.txt (sans PyTorch)
+# OU installer manuellement
 pip install -r requirements.txt
 ```
 
@@ -197,14 +197,15 @@ python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print('
 
 ### 5.5 Vérifier installation complète
 ```bash
-pip list | grep -E "fastapi|vosk|TTS|psycopg2|ollama|torch|numpy|transformers"
+pip list | grep -E "fastapi|vosk|coqui-tts|psycopg2|ollama|torch|numpy|transformers|spleeter"
 ```
 
 Vous devriez voir:
 - `torch` 2.1.2 (ou 2.1.2+cu118 si GPU)
-- `numpy` 1.22.0
-- `transformers` 4.33.0
-- `TTS` 0.22.0
+- `numpy` >= 1.24.3
+- `transformers` 4.35.0
+- `coqui-tts` 0.27.2
+- `spleeter` 2.4.0
 - `pydantic` >= 2.9.0
 - `ollama` >= 0.6.0
 
