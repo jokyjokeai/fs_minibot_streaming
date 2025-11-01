@@ -192,6 +192,14 @@ class VoiceCloner:
                     import torchaudio
                     wav, sr = torchaudio.load(str(input_path))
 
+                    # Demucs requiert stereo (2 channels) - convertir mono → stereo si nécessaire
+                    if wav.shape[0] == 1:
+                        # Mono → Stereo (dupliquer le canal)
+                        wav = wav.repeat(2, 1)
+                    elif wav.shape[0] > 2:
+                        # Plus de 2 canaux → prendre les 2 premiers
+                        wav = wav[:2, :]
+
                     # Appliquer séparation
                     with torch.no_grad():
                         sources = apply_model(model, wav[None], device='cpu', shifts=1, split=True, overlap=0.25)[0]
