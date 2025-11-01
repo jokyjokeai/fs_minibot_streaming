@@ -39,9 +39,10 @@ ollama>=0.6.0
 requests==2.31.0
 
 # Coqui TTS (Text-to-Speech)
-# IMPORTANT: Version 0.24.3+ accepte numpy>=1.23 (compatible audio-separator)
-# Version 0.22.0 force numpy==1.22.0 sur Python 3.10 (incompatible)
-TTS==0.24.3
+# IMPORTANT: TTS 0.22.0 a un conflit numpy avec audio-separator sur Python 3.10
+# Workaround: Installer TTS en premier avec --no-deps puis le reste
+# Voir INSTALL.md pour instructions détaillées
+TTS==0.22.0
 transformers>=4.35.0
 
 # PyTorch - CHOISIR UNE OPTION :
@@ -61,7 +62,7 @@ torchaudio>=2.1.0
 pydub==0.25.1
 webrtcvad==2.0.10
 librosa>=0.10.0
-numpy>=1.23.0,<2.0.0  # Compatible avec audio-separator et TTS
+# numpy version managed by pip resolver (TTS needs 1.22, audio-separator needs 1.23+)
 networkx>=2.8.0  # Pour gruut (dépendance Coqui TTS)
 
 # Audio cleaning & voice extraction
