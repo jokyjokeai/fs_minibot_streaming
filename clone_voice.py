@@ -208,8 +208,12 @@ class VoiceCloner:
             # Normalisation
             audio = normalize(audio)
 
-            # Sauvegarder
-            audio.export(str(output_path), format='wav')
+            # Sauvegarder avec codec PCM explicite
+            audio.export(
+                str(output_path),
+                format='wav',
+                codec='pcm_s16le'
+            )
 
             # Cleanup temp
             if temp_reduced.exists():
@@ -250,8 +254,13 @@ class VoiceCloner:
             if audio.frame_rate != 22050:
                 audio = audio.set_frame_rate(22050)
 
-            # Exporter WAV
-            audio.export(str(output_path), format='wav')
+            # Exporter WAV avec codec PCM explicite (compatible torchaudio)
+            audio.export(
+                str(output_path),
+                format='wav',
+                codec='pcm_s16le',  # PCM 16-bit little-endian
+                parameters=["-ar", "22050", "-ac", "1"]
+            )
 
             logger.info(f"    ✅ Converted to 22050Hz mono WAV: {output_path.name}")
             return True
