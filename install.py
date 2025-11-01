@@ -494,8 +494,10 @@ def section_5_python_dependencies(has_gpu: bool):
     """Section 5: Python et dépendances"""
     print_section("SECTION 5: Python et Dépendances")
 
-    print_step("Installation Python 3.10...")
-    run_command("apt install -y python3 python3-pip python3-venv python3-dev")
+    print_step("Installation Python 3.11...")
+    run_command("apt install -y python3.11 python3.11-pip python3.11-venv python3.11-dev")
+    # Create symlink for python3 → python3.11
+    run_command("update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1")
 
     returncode, stdout, _ = run_command(
         "python3 --version",
@@ -773,10 +775,10 @@ WantedBy=multi-user.target
     # Installation manuelle (contournement bug Makefile Python 2 vs 3)
     print_step("Installation module Python (système global)...")
     run_command(
-        "cp /usr/src/freeswitch/libs/esl/python/_ESL.so /usr/local/lib/python3.10/dist-packages/"
+        "cp /usr/src/freeswitch/libs/esl/python/_ESL.so /usr/local/lib/python3.11/dist-packages/"
     )
     run_command(
-        "cp /usr/src/freeswitch/libs/esl/python/ESL.py /usr/local/lib/python3.10/dist-packages/"
+        "cp /usr/src/freeswitch/libs/esl/python/ESL.py /usr/local/lib/python3.11/dist-packages/"
     )
 
     # Copier aussi dans le venv (requis pour l'API)

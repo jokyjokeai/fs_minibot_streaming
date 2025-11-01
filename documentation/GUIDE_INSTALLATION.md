@@ -53,7 +53,7 @@ Installation complète du système de robot d'appels conversationnels avec FreeS
 
 ```bash
 # Ubuntu/Debian
-- Python 3.10+ (3.11 recommandé)
+- Python 3.11+ (3.11 recommandé)
 - PostgreSQL 14+
 - FreeSWITCH 1.10+
 - Git
@@ -63,7 +63,7 @@ Installation complète du système de robot d'appels conversationnels avec FreeS
 
 # macOS
 - Homebrew
-- Python 3.10+ (via brew)
+- Python 3.11+ (via brew)
 - PostgreSQL 14+ (via brew)
 - FreeSWITCH (via brew ou compilation)
 - Ollama (via official installer)
@@ -216,7 +216,7 @@ sudo systemctl start freeswitch
 
 ## 4. INSTALLATION PYTHON & DÉPENDANCES
 
-### 1. Installer Python 3.10+ ou 3.11
+### 1. Installer Python 3.11+ ou 3.11
 
 **Ubuntu/Debian :**
 
@@ -1101,7 +1101,7 @@ COQUI_USE_GPU=false
 
 # Réinstaller TTS
 pip uninstall TTS
-pip install TTS==0.22.0
+pip install coqui-tts==0.27.2
 
 # Vider le cache
 rm -rf models/coqui_cache/*

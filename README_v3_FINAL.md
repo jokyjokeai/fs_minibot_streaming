@@ -4,7 +4,7 @@
 
 Système professionnel d'automatisation d'appels avec **Agent Autonome** (rail-based navigation, objection matching <50ms, freestyle AI fallback, scoring cumulatif 70%, background audio), voix clonées ultra-réalistes, et intelligence artificielle conversationnelle avancée.
 
-[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![FreeSWITCH](https://img.shields.io/badge/FreeSWITCH-1.10+-green.svg)](https://freeswitch.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-336791.svg)](https://www.postgresql.org/)
 [![Ollama](https://img.shields.io/badge/Ollama-Mistral_7B-orange.svg)](https://ollama.com/)
@@ -333,7 +333,7 @@ nlp_service.prewarm()  # Au démarrage campagne
 ## 🛠️ Stack Technique
 
 ### Core
-- **Python 3.10+** - Backend
+- **Python 3.11+** - Backend (3.11 ou 3.12 recommandé)
 - **FreeSWITCH 1.10.11** - Téléphonie VoIP (SIP/ESL)
 - **PostgreSQL 14+** - Base de données
 - **SQLAlchemy 2.0** - ORM
@@ -341,10 +341,10 @@ nlp_service.prewarm()  # Au démarrage campagne
 ### Intelligence Artificielle
 - **Vosk 0.3.45** - STT offline français
 - **Ollama** - NLP (Mistral 7B / Llama 3.2)
-- **Coqui XTTS v2** - TTS voix clonées
+- **Coqui TTS 0.27.2** - TTS voix clonées (fork Idiap, XTTS-v2)
 - **pyannote.audio 3.1** - Speaker diarization
 - **noisereduce 3.0** - Nettoyage audio
-- **audio-separator 0.19** - Extraction vocal (Demucs)
+- **Spleeter 2.4** - Extraction vocale (10-20× plus rapide)
 
 ### Utilities
 - **yt-dlp 2024.12** - YouTube download
@@ -365,7 +365,7 @@ nlp_service.prewarm()  # Au démarrage campagne
 ```bash
 # Système
 Ubuntu 20.04+ / Debian 11+
-Python 3.10+
+Python 3.11+ (3.11 ou 3.12 recommandé)
 PostgreSQL 14+
 FreeSWITCH 1.10.11+
 

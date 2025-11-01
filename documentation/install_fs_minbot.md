@@ -126,7 +126,7 @@ nvcc --version
 
 ---
 
-## 5. Installer Python 3.10 et dépendances
+## 5. Installer Python 3.11 et dépendances
 
 ### 5.1 Installer Python
 ```bash
@@ -424,7 +424,7 @@ ls -la _ESL.so
 source /opt/fs_minibot_streaming/venv/bin/activate
 
 # Copier le module dans le venv
-cp _ESL.so ESL.py /opt/fs_minibot_streaming/venv/lib/python3.10/site-packages/
+cp _ESL.so ESL.py /opt/fs_minibot_streaming/venv/lib/python3.11/site-packages/
 ```
 
 ### Vérifier installation python-esl

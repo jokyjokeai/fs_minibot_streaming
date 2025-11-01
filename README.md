@@ -4,7 +4,7 @@
 
 Système professionnel d'automatisation d'appels téléphoniques avec intelligence artificielle (STT, NLP, TTS), mode Freestyle AI, détection de répondeur, gestion de scénarios conversationnels, et matching intelligent d'objections.
 
-[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![FreeSWITCH](https://img.shields.io/badge/FreeSWITCH-1.10+-green.svg)](https://freeswitch.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-336791.svg)](https://www.postgresql.org/)
 [![License](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
@@ -218,7 +218,7 @@ Détection rapide et fuzzy matching :
 ### Prérequis
 
 - **OS** : Linux (Ubuntu 20.04+) ou macOS
-- **Python** : 3.10+
+- **Python** : 3.11+ (3.11 ou 3.12 recommandé)
 - **PostgreSQL** : 14+
 - **FreeSWITCH** : 1.10+
 - **Ollama** : Latest

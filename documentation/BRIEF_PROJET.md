@@ -665,7 +665,7 @@ CREATE TABLE call_events (
 ## 🔧 Stack Technique
 
 ### Backend
-- **Python 3.10+** : Langage principal (3.11 recommandé)
+- **Python 3.11+** : Langage principal (3.11 recommandé)
 - **FastAPI 0.109** : Framework API REST asynchrone
 - **SQLAlchemy 2.0** : ORM base de données
 - **PostgreSQL 14+** : Base de données relationnelle
