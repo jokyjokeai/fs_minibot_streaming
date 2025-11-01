@@ -119,18 +119,37 @@ class VoiceCloner:
     def _find_audio_files(self, directory: Path) -> List[Path]:
         """
         Trouve tous les fichiers audio dans un dossier
+        Ignore les fichiers de séparation vocale (Vocals/Instrumental)
 
         Args:
             directory: Dossier à scanner
 
         Returns:
-            Liste de chemins vers fichiers audio
+            Liste de chemins vers fichiers audio (originaux seulement)
         """
         audio_extensions = ['.wav', '.mp3', '.flac', '.ogg', '.m4a', '.aac']
         audio_files = []
 
+        # Patterns à ignorer (fichiers générés par audio-separator, spleeter, demucs)
+        ignore_patterns = [
+            '(Vocals)',
+            '(Instrumental)',
+            '(vocals)',
+            '(instrumental)',
+            '_vocals.',
+            '_instrumental.',
+            'demucs_',
+            'spleeter_output',
+            'htdemucs',
+            'model_mel_band_roformer'
+        ]
+
         for ext in audio_extensions:
-            audio_files.extend(directory.glob(f'*{ext}'))
+            for file_path in directory.glob(f'*{ext}'):
+                # Ignorer si le nom contient un des patterns
+                if any(pattern in file_path.name for pattern in ignore_patterns):
+                    continue
+                audio_files.append(file_path)
 
         return sorted(audio_files)
 
@@ -436,10 +455,11 @@ class VoiceCloner:
     def process_voice_folder(self, voice_name: str, force: bool = False, sequential: bool = False, num_workers: Optional[int] = None) -> bool:
         """
         Traite un dossier de voix complet:
-        1. Scan fichiers audio
-        2. Nettoyage + conversion (parallèle ou séquentiel)
-        3. Détection mode clonage
-        4. Clonage voix
+        1. Nettoyage fichiers inutiles (vocals/instrumental générés)
+        2. Scan fichiers audio originaux
+        3. Nettoyage + conversion (parallèle ou séquentiel)
+        4. Détection mode clonage
+        5. Clonage voix
 
         Args:
             voice_name: Nom de la voix
@@ -458,6 +478,9 @@ class VoiceCloner:
         logger.info(f"\n{'='*60}")
         logger.info(f"🎤 Processing voice: {voice_name}")
         logger.info(f"{'='*60}")
+
+        # Nettoyer les fichiers inutiles AVANT traitement (vocals/instrumental générés)
+        self._cleanup_generated_files(voice_dir)
 
         # Trouver fichiers audio
         raw_audio_files = self._find_audio_files(voice_dir)
@@ -535,6 +558,56 @@ class VoiceCloner:
         logger.info(f"📄 Metadata saved: {metadata_path}")
 
         return True
+
+    def _cleanup_generated_files(self, voice_dir: Path):
+        """
+        Nettoie les fichiers générés par audio-separator/spleeter/demucs
+        Garde seulement les originaux (youtube_XXX.wav) et le dossier cleaned/
+
+        Args:
+            voice_dir: Dossier de la voix
+        """
+        logger.info(f"\n🧹 Cleaning up generated files...")
+
+        # Patterns de fichiers à supprimer
+        cleanup_patterns = [
+            '*_(Vocals)*.wav',
+            '*_(Instrumental)*.wav',
+            '*_(vocals)*.wav',
+            '*_(instrumental)*.wav',
+            '*_vocals.wav',
+            '*_instrumental.wav',
+            'demucs_*.wav',
+            '*model_mel_band_roformer*.wav'
+        ]
+
+        deleted_count = 0
+        for pattern in cleanup_patterns:
+            for file_path in voice_dir.glob(pattern):
+                try:
+                    file_path.unlink()
+                    deleted_count += 1
+                    logger.debug(f"    Deleted: {file_path.name}")
+                except Exception as e:
+                    logger.warning(f"    Failed to delete {file_path.name}: {e}")
+
+        # Supprimer dossiers temporaires
+        temp_dirs = ['spleeter_output', 'separated']
+        for temp_dir_name in temp_dirs:
+            temp_dir = voice_dir / temp_dir_name
+            if temp_dir.exists():
+                try:
+                    import shutil
+                    shutil.rmtree(temp_dir)
+                    deleted_count += 1
+                    logger.debug(f"    Deleted directory: {temp_dir_name}/")
+                except Exception as e:
+                    logger.warning(f"    Failed to delete {temp_dir_name}/: {e}")
+
+        if deleted_count > 0:
+            logger.info(f"    ✅ Cleaned {deleted_count} generated files/folders")
+        else:
+            logger.info(f"    ✅ No cleanup needed")
 
     def generate_tts_for_objections(self, voice_name: str, theme: Optional[str] = None) -> bool:
         """
