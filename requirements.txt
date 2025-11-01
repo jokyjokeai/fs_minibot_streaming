@@ -74,8 +74,7 @@ networkx==2.8.8
 
 # Audio cleaning & voice extraction (versions compatibles numpy 1.24.3)
 noisereduce==3.0.2
-audio-separator==0.19.0
-onnxruntime>=1.16.0  # Requis par audio-separator
+spleeter==2.4.0  # Séparation vocals/musique (10-20× plus rapide qu'audio-separator)
 
 # Speaker diarization (YouTube Extract)
 pyannote.audio==3.1.1

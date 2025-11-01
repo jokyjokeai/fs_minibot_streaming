@@ -52,13 +52,13 @@ except ImportError:
     AUDIO_PROCESSING_AVAILABLE = False
     print("⚠️  Audio processing libraries not available (noisereduce, soundfile, pydub)")
 
-# Audio separator (vocal extraction)
+# Spleeter (vocal extraction - 10-20× plus rapide qu'audio-separator)
 try:
-    from audio_separator.separator import Separator
-    AUDIO_SEPARATOR_AVAILABLE = True
+    from spleeter.separator import Separator
+    SPLEETER_AVAILABLE = True
 except ImportError:
-    AUDIO_SEPARATOR_AVAILABLE = False
-    print("⚠️  audio-separator not available (vocal extraction disabled)")
+    SPLEETER_AVAILABLE = False
+    print("⚠️  Spleeter not available (vocal extraction disabled)")
 
 # Progress bar
 try:
@@ -157,23 +157,29 @@ class VoiceCloner:
         try:
             logger.info(f"  🧹 Cleaning: {input_path.name}...")
 
-            # Étape 1: Extraction voix si musique détectée (audio-separator)
+            # Étape 1: Extraction voix avec Spleeter (10-20× plus rapide que Roformer)
             temp_path = input_path
-            if AUDIO_SEPARATOR_AVAILABLE:
+            if SPLEETER_AVAILABLE:
                 try:
-                    logger.info(f"    → Extracting vocals (audio-separator)...")
-                    separator = Separator(output_dir=str(input_path.parent))
-                    separator.load_model()
-                    output_files = separator.separate(str(input_path))
+                    logger.info(f"    → Extracting vocals (Spleeter)...")
 
-                    # Chercher le fichier "vocals"
-                    vocals_file = None
-                    for f in output_files:
-                        if 'vocals' in f.lower():
-                            vocals_file = Path(f)
-                            break
+                    # Créer dossier temporaire pour Spleeter
+                    temp_output_dir = input_path.parent / "spleeter_output"
+                    temp_output_dir.mkdir(exist_ok=True)
 
-                    if vocals_file and vocals_file.exists():
+                    # Spleeter avec modèle 2stems (vocals + accompaniment)
+                    separator = Separator('spleeter:2stems')
+                    separator.separate_to_file(
+                        str(input_path),
+                        str(temp_output_dir)
+                    )
+
+                    # Chercher le fichier vocals
+                    # Spleeter crée: spleeter_output/{filename}/vocals.wav
+                    vocals_dir = temp_output_dir / input_path.stem
+                    vocals_file = vocals_dir / "vocals.wav"
+
+                    if vocals_file.exists():
                         temp_path = vocals_file
                         logger.info(f"    ✅ Vocals extracted")
                     else:
@@ -228,11 +234,16 @@ class VoiceCloner:
                 codec='pcm_s16le'
             )
 
-            # Cleanup temp
+            # Cleanup temp files
             if temp_reduced.exists():
                 temp_reduced.unlink()
-            if temp_path != input_path and temp_path.exists():
-                temp_path.unlink()  # Supprimer fichier vocals temporaire
+
+            # Cleanup Spleeter output directory
+            if SPLEETER_AVAILABLE:
+                temp_output_dir = input_path.parent / "spleeter_output"
+                if temp_output_dir.exists():
+                    import shutil
+                    shutil.rmtree(temp_output_dir)
 
             logger.info(f"    ✅ Cleaned: {output_path.name}")
             return True

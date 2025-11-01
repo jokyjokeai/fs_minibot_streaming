@@ -44,13 +44,13 @@ fi
 echo -e "${GREEN}2️⃣ Installation TTS + numpy 1.22.0...${NC}"
 pip install TTS==0.22.0
 
-# 3. Upgrade numpy pour audio-separator
+# 3. Upgrade numpy pour Spleeter
 echo -e "${GREEN}3️⃣ Upgrade numpy à 1.24.3...${NC}"
 pip install --upgrade "numpy==1.24.3"
 
-# 4. Audio packages (besoin numpy>=1.23)
+# 4. Audio packages
 echo -e "${GREEN}4️⃣ Installation audio packages...${NC}"
-pip install audio-separator==0.19.0 noisereduce==3.0.2 "onnxruntime>=1.16.0"
+pip install spleeter==2.4.0 noisereduce==3.0.2
 
 # 5. Pyannote (diarization)
 echo -e "${GREEN}5️⃣ Installation pyannote.audio...${NC}"
@@ -91,7 +91,7 @@ echo ""
 echo -e "${GREEN}✅ Installation terminée !${NC}"
 echo ""
 echo "Versions installées:"
-pip list | grep -E "torch|TTS|numpy|audio-separator|pyannote"
+pip list | grep -E "torch|TTS|numpy|spleeter|pyannote"
 
 if $GPU_MODE; then
     echo ""
