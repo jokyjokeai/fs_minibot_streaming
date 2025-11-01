@@ -8,6 +8,7 @@ Fonctionnalités:
 - Détection automatique des dossiers de voix dans voices/
 - Nettoyage audio (noisereduce + audio-separator pour extraction voix)
 - Conversion format optimal pour Coqui XTTS (22050Hz mono WAV)
+- Traitement parallèle multi-core (4-8× plus rapide que séquentiel)
 - Détection automatique mode clonage (quick/standard/fine-tuning)
 - Clone voix avec Coqui XTTS
 - Génération automatique TTS pour objections/FAQ
@@ -25,6 +26,8 @@ Utilisation:
     python clone_voice.py --voice marie --theme finance
     python clone_voice.py --voice julie --skip-tts
     python clone_voice.py --voice marie --force
+    python clone_voice.py --voice julie --workers 4  # Utilise 4 workers parallèles
+    python clone_voice.py --voice marie --sequential  # Mode séquentiel (debug)
 """
 
 import argparse
@@ -34,6 +37,8 @@ import time
 from pathlib import Path
 from typing import List, Tuple, Optional
 import json
+import multiprocessing as mp
+from functools import partial
 
 # Audio processing
 try:
@@ -54,6 +59,14 @@ try:
 except ImportError:
     AUDIO_SEPARATOR_AVAILABLE = False
     print("⚠️  audio-separator not available (vocal extraction disabled)")
+
+# Progress bar
+try:
+    from tqdm import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
+    print("⚠️  tqdm not available (no progress bars)")
 
 from system.config import config
 from system.services.coqui_tts import CoquiTTS
@@ -307,17 +320,120 @@ class VoiceCloner:
         else:
             return "fine_tuning", "🌟 Fine-tuning mode (>120s) - Meilleure qualité"
 
-    def process_voice_folder(self, voice_name: str, force: bool = False) -> bool:
+    def _process_single_file_worker(self, args: Tuple[Path, Path]) -> Optional[Path]:
+        """
+        Worker function pour traitement parallèle d'un fichier audio
+
+        Args:
+            args: Tuple (raw_file, cleaned_dir)
+
+        Returns:
+            Path du fichier optimal si succès, None sinon
+        """
+        raw_file, cleaned_dir = args
+
+        try:
+            # Chemins de sortie
+            cleaned_file = cleaned_dir / f"{raw_file.stem}_cleaned.wav"
+            optimal_file = cleaned_dir / f"{raw_file.stem}_optimal.wav"
+
+            # Nettoyer
+            if not self.clean_audio_file(raw_file, cleaned_file):
+                return None
+
+            # Convertir au format optimal
+            if not self.convert_to_optimal_format(cleaned_file, optimal_file):
+                return None
+
+            return optimal_file
+
+        except Exception as e:
+            logger.error(f"    ❌ Error processing {raw_file.name}: {e}")
+            return None
+
+    def process_audio_batch_parallel(
+        self,
+        raw_audio_files: List[Path],
+        cleaned_dir: Path,
+        num_workers: Optional[int] = None,
+        sequential: bool = False
+    ) -> List[Path]:
+        """
+        Traite plusieurs fichiers audio en parallèle ou séquentiel
+
+        Args:
+            raw_audio_files: Liste de fichiers à traiter
+            cleaned_dir: Dossier de sortie
+            num_workers: Nombre de workers (None = auto-détect CPU cores)
+            sequential: Si True, traite en séquentiel (pour debug)
+
+        Returns:
+            Liste des fichiers nettoyés avec succès
+        """
+        # Auto-détection nombre de cores
+        if num_workers is None:
+            num_workers = max(1, mp.cpu_count() - 1)  # Garde 1 core libre
+
+        # Mode séquentiel (backward compatibility / debug)
+        if sequential:
+            logger.info(f"🔄 Processing {len(raw_audio_files)} files sequentially...")
+            cleaned_files = []
+
+            iterator = enumerate(raw_audio_files, 1)
+            if TQDM_AVAILABLE:
+                iterator = tqdm(iterator, total=len(raw_audio_files), desc="Processing files", unit="file")
+
+            for i, raw_file in iterator:
+                if not TQDM_AVAILABLE:
+                    logger.info(f"\n[{i}/{len(raw_audio_files)}] {raw_file.name}")
+
+                result = self._process_single_file_worker((raw_file, cleaned_dir))
+                if result:
+                    cleaned_files.append(result)
+
+            return cleaned_files
+
+        # Mode parallèle (optimisé)
+        logger.info(f"🚀 Processing {len(raw_audio_files)} files with {num_workers} parallel workers...")
+
+        # Préparer arguments pour workers
+        args_list = [(raw_file, cleaned_dir) for raw_file in raw_audio_files]
+
+        # Traitement parallèle avec progress bar
+        cleaned_files = []
+
+        with mp.Pool(processes=num_workers) as pool:
+            if TQDM_AVAILABLE:
+                # Avec barre de progression
+                results = list(tqdm(
+                    pool.imap(self._process_single_file_worker, args_list),
+                    total=len(args_list),
+                    desc="Processing files",
+                    unit="file"
+                ))
+            else:
+                # Sans barre de progression
+                results = pool.map(self._process_single_file_worker, args_list)
+
+        # Filtrer résultats valides
+        cleaned_files = [f for f in results if f is not None]
+
+        logger.info(f"✅ {len(cleaned_files)}/{len(raw_audio_files)} files processed successfully")
+        return cleaned_files
+
+    def process_voice_folder(self, voice_name: str, force: bool = False, sequential: bool = False, num_workers: Optional[int] = None) -> bool:
         """
         Traite un dossier de voix complet:
         1. Scan fichiers audio
-        2. Nettoyage + conversion
+        2. Nettoyage + conversion (parallèle ou séquentiel)
         3. Détection mode clonage
         4. Clonage voix
 
         Args:
             voice_name: Nom de la voix
             force: Forcer écrasement si existe
+            sequential: Si True, traite fichiers en séquentiel (debug)
+            num_workers: Nombre de workers parallèles (None = auto)
 
         Returns:
             True si succès
@@ -343,34 +459,18 @@ class VoiceCloner:
         cleaned_dir = voice_dir / "cleaned"
         cleaned_dir.mkdir(exist_ok=True)
 
-        # Nettoyer et convertir chaque fichier
+        # Nettoyer et convertir avec traitement parallèle
         logger.info(f"\n🧹 Cleaning and converting audio files...")
-        cleaned_files = []
-
-        for i, raw_file in enumerate(raw_audio_files, 1):
-            logger.info(f"\n[{i}/{len(raw_audio_files)}] {raw_file.name}")
-
-            # Chemin cleaned
-            cleaned_file = cleaned_dir / f"{raw_file.stem}_cleaned.wav"
-
-            # Nettoyer
-            if not self.clean_audio_file(raw_file, cleaned_file):
-                logger.warning(f"⚠️  Skipping {raw_file.name}")
-                continue
-
-            # Convertir au format optimal
-            optimal_file = cleaned_dir / f"{raw_file.stem}_optimal.wav"
-            if not self.convert_to_optimal_format(cleaned_file, optimal_file):
-                logger.warning(f"⚠️  Skipping {raw_file.name}")
-                continue
-
-            cleaned_files.append(optimal_file)
+        cleaned_files = self.process_audio_batch_parallel(
+            raw_audio_files=raw_audio_files,
+            cleaned_dir=cleaned_dir,
+            num_workers=num_workers,
+            sequential=sequential
+        )
 
         if not cleaned_files:
             logger.error(f"❌ No files successfully processed")
             return False
-
-        logger.info(f"\n✅ {len(cleaned_files)} files processed successfully")
 
         # Calculer durée totale
         total_duration = self.calculate_total_duration(cleaned_files)
@@ -670,6 +770,17 @@ def main():
         action="store_true",
         help="Force overwrite existing voice"
     )
+    parser.add_argument(
+        "--sequential",
+        action="store_true",
+        help="Process files sequentially (slower, for debugging)"
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of parallel workers (default: auto-detect CPU cores - 1)"
+    )
 
     args = parser.parse_args()
 
@@ -697,7 +808,12 @@ def main():
             return
 
     # Traiter voix
-    success = cloner.process_voice_folder(voice_name, force=args.force)
+    success = cloner.process_voice_folder(
+        voice_name,
+        force=args.force,
+        sequential=args.sequential,
+        num_workers=args.workers
+    )
 
     if not success:
         logger.error("\n❌ Voice cloning failed")
