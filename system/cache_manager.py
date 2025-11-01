@@ -55,11 +55,13 @@ class CacheManager:
 
     _instance = None
     _lock = threading.Lock()
+    _initialized = False
 
     def __init__(self):
         """Initialise le cache manager (appelé une seule fois via get_instance)"""
-        if CacheManager._instance is not None:
-            raise RuntimeError("Use CacheManager.get_instance() instead")
+        # Protection double: évite réinitialisation si déjà fait
+        if CacheManager._initialized:
+            return
 
         # Configuration
         self.config = {
@@ -105,6 +107,8 @@ class CacheManager:
         self._objections_lock = threading.Lock()
         self._models_lock = threading.Lock()
 
+        # Marquer comme initialisé
+        CacheManager._initialized = True
         logger.info("✅ CacheManager initialized (Singleton)")
 
     @classmethod
