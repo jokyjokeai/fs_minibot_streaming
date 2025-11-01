@@ -1,15 +1,12 @@
 {
   "name": "Exemple Voix Clonée",
   "description": "Démo du système de voix clonée persistante avec audio_type: tts_cloned",
+  "voice": "julie",
 
   "steps": {
     "intro": {
       "message_text": "Bonjour {{first_name}}, je suis Julie de TechCorp. Cette voix utilise un clonage vocal persistant.",
       "audio_type": "tts_cloned",
-      "voice": "julie",
-      "voice_config": {
-        "reference_wav": "voices/julie/reference.wav"
-      },
       "barge_in": true,
       "timeout": 15,
       "intent_mapping": {
@@ -21,7 +18,6 @@
     "question1": {
       "message_text": "Souhaitez-vous en savoir plus sur nos solutions d'automatisation ?",
       "audio_type": "tts_cloned",
-      "voice": "julie",
       "barge_in": true,
       "timeout": 10,
       "intent_mapping": {
@@ -33,7 +29,6 @@
     "fin_lead": {
       "message_text": "Excellent ! Je vous envoie les informations par email. Merci {{first_name}} !",
       "audio_type": "tts_cloned",
-      "voice": "julie",
       "result": "lead",
       "intent_mapping": {
         "*": "end"
@@ -43,7 +38,6 @@
     "fin_not_interested": {
       "message_text": "Je comprends. Merci pour votre temps et bonne journée !",
       "audio_type": "tts_cloned",
-      "voice": "julie",
       "result": "not_interested",
       "intent_mapping": {
         "*": "end"

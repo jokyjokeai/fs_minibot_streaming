@@ -1274,13 +1274,27 @@ class RobotFreeSWITCH:
             return
 
         # Charger voix en cache pour performance TTS (CRITIQUE pour appels temps réel)
-        voice_name = scenario.get("voice", "julie")
+        # Chercher voix au niveau global ou dans le premier step
+        voice_name = scenario.get("voice")
+        if not voice_name and "steps" in scenario:
+            # Trouver la première voix définie dans un step
+            for step_name, step_config in scenario.get("steps", {}).items():
+                if "voice" in step_config:
+                    voice_name = step_config["voice"]
+                    break
+
+        voice_name = voice_name or "julie"  # Fallback par défaut
+
         if self.tts_service and hasattr(self.tts_service, 'load_voice'):
             logger.info(f"[{call_uuid[:8]}] 🎙️ Loading voice '{voice_name}' in cache...")
             if self.tts_service.load_voice(voice_name):
                 logger.info(f"[{call_uuid[:8]}] ✅ Voice '{voice_name}' loaded (embeddings cached)")
             else:
                 logger.warning(f"[{call_uuid[:8]}] ⚠️ Voice '{voice_name}' not loaded (will use on-the-fly)")
+
+        # Stocker voix du scénario dans session pour accès rapide
+        if call_uuid in self.streaming_sessions:
+            self.streaming_sessions[call_uuid]["scenario_voice"] = voice_name
 
         # Vérifier mode agent autonome (Phase 6+)
         is_agent_mode = self.scenario_manager.is_agent_mode(scenario) if self.scenario_manager else False
@@ -1446,7 +1460,11 @@ class RobotFreeSWITCH:
         elif audio_type == "tts_cloned":
             # TTS avec voix clonée
             if self.tts_service and message_text:
-                voice_name = step_config.get("voice", "julie")
+                # Utiliser voix du step, sinon voix du scénario, sinon julie par défaut
+                voice_name = step_config.get("voice")
+                if not voice_name and call_uuid in self.streaming_sessions:
+                    voice_name = self.streaming_sessions[call_uuid].get("scenario_voice", "julie")
+                voice_name = voice_name or "julie"
                 audio_file = self.tts_service.generate(message_text, voice_name)
 
         # Jouer audio
@@ -1494,8 +1512,11 @@ class RobotFreeSWITCH:
             )
 
             if ai_response and self.tts_service:
-                # Générer audio
-                voice_name = step_config.get("voice", "julie")
+                # Générer audio - utiliser voix du step, sinon voix du scénario
+                voice_name = step_config.get("voice")
+                if not voice_name and call_uuid in self.streaming_sessions:
+                    voice_name = self.streaming_sessions[call_uuid].get("scenario_voice", "julie")
+                voice_name = voice_name or "julie"
                 audio_file = self.tts_service.generate(ai_response, voice_name)
 
                 if audio_file:
