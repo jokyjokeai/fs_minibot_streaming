@@ -48,6 +48,7 @@ from system.models import Base, Call, Contact, Campaign
 from system.database import SessionLocal, engine
 from system.config import config
 from system.logger import get_logger
+from system.cache_manager import get_cache  # Phase 8
 
 logger = get_logger(__name__)
 

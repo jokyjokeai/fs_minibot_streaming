@@ -97,6 +97,7 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 
 from system.config import config
+from system.cache_manager import get_cache  # Phase 8
 
 logger = logging.getLogger(__name__)
 
@@ -108,15 +109,17 @@ class ScenarioManager:
         logger.info("Initializing ScenarioManager...")
 
         self.scenarios_dir = config.BASE_DIR / "documentation" / "scenarios"
-        self.loaded_scenarios: Dict[str, Dict] = {}
 
-        # TODO: Précharger scénarios si config.PRELOAD_SCENARIOS
+        # Phase 8: Utiliser CacheManager global au lieu de cache local
+        self.cache = get_cache()
 
-        logger.info("✅ ScenarioManager initialized")
+        logger.info("✅ ScenarioManager initialized (using CacheManager)")
 
     def load_scenario(self, scenario_name: str) -> Optional[Dict[str, Any]]:
         """
         Charge un scénario depuis JSON.
+
+        Phase 8: Utilise CacheManager pour cache intelligent avec TTL + LRU.
 
         Args:
             scenario_name: Nom du scénario (sans .json)
@@ -124,10 +127,11 @@ class ScenarioManager:
         Returns:
             Dict avec définition scénario ou None si erreur
         """
-        # Check cache
-        if scenario_name in self.loaded_scenarios:
-            logger.debug(f"Scenario '{scenario_name}' loaded from cache")
-            return self.loaded_scenarios[scenario_name]
+        # Phase 8: Check CacheManager global
+        cached_scenario = self.cache.get_scenario(scenario_name)
+        if cached_scenario:
+            logger.debug(f"Scenario '{scenario_name}' loaded from CacheManager (hit)")
+            return cached_scenario
 
         # Charger depuis fichier
         scenario_path = self.scenarios_dir / f"{scenario_name}.json"
@@ -145,8 +149,8 @@ class ScenarioManager:
                 logger.error(f"Invalid scenario structure: {scenario_name}")
                 return None
 
-            # Mettre en cache
-            self.loaded_scenarios[scenario_name] = scenario
+            # Phase 8: Mettre en cache via CacheManager
+            self.cache.set_scenario(scenario_name, scenario)
 
             logger.info(f"✅ Scenario '{scenario_name}' loaded successfully")
             return scenario

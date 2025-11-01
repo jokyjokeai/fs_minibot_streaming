@@ -43,6 +43,9 @@ except ImportError:
     OBJECTIONS_DB_AVAILABLE = False
     ObjectionEntry = None
 
+# Phase 8: CacheManager pour cache objections par thématique
+from system.cache_manager import get_cache
+
 logger = logging.getLogger(__name__)
 
 
@@ -102,6 +105,8 @@ class ObjectionMatcher:
         """
         Charge les objections pour une thématique spécifique (GENERAL + thématique).
 
+        Phase 8: Utilise CacheManager pour cache intelligent avec TTL + LRU.
+
         Cette méthode facilite l'initialisation du matcher avec les objections
         de la database filtrées par thématique. Elle charge automatiquement:
         - Les objections GENERAL (toujours incluses)
@@ -126,6 +131,14 @@ class ObjectionMatcher:
             logger.error("❌ objections_database.py not available, cannot load objections")
             return None
 
+        # Phase 8: Check CacheManager global
+        cache = get_cache()
+        cached_objections = cache.get_objections(theme)
+
+        if cached_objections:
+            logger.debug(f"Objections '{theme}' loaded from CacheManager (hit)")
+            return ObjectionMatcher(cached_objections)
+
         try:
             # Charger objections pour la thématique (inclut GENERAL automatiquement)
             objections_list = get_objections_by_theme(theme)
@@ -135,6 +148,9 @@ class ObjectionMatcher:
                 return None
 
             logger.info(f"📚 Loaded {len(objections_list)} objections for theme '{theme}'")
+
+            # Phase 8: Mettre en cache via CacheManager
+            cache.set_objections(theme, objections_list)
 
             # Créer et retourner le matcher
             return ObjectionMatcher(objections_list)

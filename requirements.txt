@@ -32,7 +32,7 @@ alembic==1.13.1
 # Vosk STT (Speech-to-Text)
 vosk==0.3.45
 soundfile==0.12.1
-scipy>=1.11.0
+scipy>=1.11.2  # TTS needs >=1.11.2
 
 # Ollama (NLP - Intent + Sentiment)
 ollama>=0.6.0
