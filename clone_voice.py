@@ -755,9 +755,18 @@ class VoiceCloner:
 
                 # Générer TTS avec synthesize_with_voice
                 try:
+                    # Trouver le fichier reference.wav de la voix
+                    voice_dir = self.voices_dir / voice_name
+                    reference_wav = voice_dir / "reference.wav"
+
+                    if not reference_wav.exists():
+                        logger.error(f"   ❌ Reference file not found: {reference_wav}")
+                        failed_count += 1
+                        continue
+
                     result_path = self.tts.synthesize_with_voice(
                         text=response_text,
-                        voice_name=voice_name,
+                        reference_voice=str(reference_wav),
                         output_file=str(output_file)
                     )
                     success = result_path is not None
