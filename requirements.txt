@@ -39,20 +39,20 @@ ollama>=0.6.0
 requests==2.31.0
 
 # Coqui TTS (Text-to-Speech)
-# IMPORTANT: Versions fixées pour compatibilité (voir install_fs_minbot.md section 13)
-TTS==0.22.0
-transformers==4.33.0
+# IMPORTANT: Version mise à jour pour compatibilité numpy
+TTS>=0.22.0
+transformers>=4.35.0
 
 # PyTorch - CHOISIR UNE OPTION :
 # Option 1 : CPU only (VPS, serveurs sans GPU)
-# pip install torch==2.1.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cpu
+# pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
 
 # Option 2 : GPU CUDA (machines avec GPU NVIDIA)
-# pip install torch==2.1.2+cu118 torchaudio==2.1.2+cu118 --index-url https://download.pytorch.org/whl/cu118
+# pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
 
 # Option 3 : Installation automatique (détecte GPU si disponible)
-torch==2.1.2
-torchaudio==2.1.2
+torch>=2.1.0
+torchaudio>=2.1.0
 
 # ============================================
 # AUDIO PROCESSING
@@ -60,12 +60,12 @@ torchaudio==2.1.2
 pydub==0.25.1
 webrtcvad==2.0.10
 librosa>=0.10.0
-numpy==1.22.0  # Version fixée pour compatibilité Coqui TTS
-networkx==2.8.8  # Pour gruut (dépendance Coqui TTS)
+numpy>=1.23.0,<2.0.0  # Compatible avec audio-separator et TTS
+networkx>=2.8.0  # Pour gruut (dépendance Coqui TTS)
 
 # Audio cleaning & voice extraction
-noisereduce==3.0.2  # Noise removal (spectral gating)
-audio-separator==0.19.0  # Vocal separation (Demucs models)
+noisereduce>=3.0.0  # Noise removal (spectral gating)
+audio-separator>=0.19.0  # Vocal separation (Demucs models)
 
 # Speaker diarization (YouTube Extract)
 pyannote.audio==3.1.1  # Speaker diarization (requires HuggingFace token)
