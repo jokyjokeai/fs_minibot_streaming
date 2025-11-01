@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Installation des dépendances MiniBotPanel v3 FINAL
-# Contourne les conflits numpy entre TTS et audio-separator
+# Python 3.11+ REQUIS
 #
 # Usage:
 #   ./install_dependencies.sh          # CPU-only (par défaut)
@@ -24,11 +24,28 @@ fi
 
 echo "🔧 Installation MiniBotPanel v3 - Dépendances"
 echo "=============================================="
+echo -e "${YELLOW}Python 3.11+ REQUIS${NC}"
 if $GPU_MODE; then
     echo -e "${YELLOW}Mode: GPU (CUDA 11.8)${NC}"
 else
     echo -e "${YELLOW}Mode: CPU-only${NC}"
 fi
+echo ""
+
+# Vérification Python 3.11+
+PYTHON_VERSION=$(python3 --version 2>&1 | grep -oP '\d+\.\d+' | head -1)
+PYTHON_MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
+PYTHON_MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
+
+if [[ "$PYTHON_MAJOR" -lt 3 ]] || { [[ "$PYTHON_MAJOR" -eq 3 ]] && [[ "$PYTHON_MINOR" -lt 11 ]]; }; then
+    echo -e "${RED}❌ Python 3.11+ requis, version détectée: $PYTHON_VERSION${NC}"
+    echo -e "${YELLOW}Installer Python 3.11:${NC}"
+    echo "  Ubuntu: sudo apt install python3.11 python3.11-venv"
+    echo "  CentOS: sudo yum install python311"
+    exit 1
+fi
+
+echo -e "${GREEN}✅ Python $PYTHON_VERSION détecté${NC}"
 echo ""
 
 # 1. PyTorch
@@ -40,13 +57,13 @@ else
     pip install torch==2.1.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cpu
 fi
 
-# 2. TTS avec numpy 1.22.0
-echo -e "${GREEN}2️⃣ Installation TTS + numpy 1.22.0...${NC}"
-pip install TTS==0.22.0
+# 2. Coqui TTS (fork maintenu, Python 3.11+ compatible)
+echo -e "${GREEN}2️⃣ Installation coqui-tts 0.27.2...${NC}"
+pip install coqui-tts==0.27.2
 
-# 3. Upgrade numpy pour Spleeter
-echo -e "${GREEN}3️⃣ Upgrade numpy à 1.24.3...${NC}"
-pip install --upgrade "numpy==1.24.3"
+# 3. NumPy (version flexible avec coqui-tts)
+echo -e "${GREEN}3️⃣ Installation numpy>=1.24.3...${NC}"
+pip install "numpy>=1.24.3,<2.0"
 
 # 4. Audio packages
 echo -e "${GREEN}4️⃣ Installation audio packages...${NC}"
@@ -91,7 +108,7 @@ echo ""
 echo -e "${GREEN}✅ Installation terminée !${NC}"
 echo ""
 echo "Versions installées:"
-pip list | grep -E "torch|TTS|numpy|spleeter|pyannote"
+pip list | grep -E "torch|coqui-tts|numpy|spleeter|pyannote"
 
 if $GPU_MODE; then
     echo ""

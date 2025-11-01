@@ -1,5 +1,5 @@
 # MiniBotPanel v3 - Requirements GPU (CUDA 11.8)
-# Python 3.10+
+# Python 3.11+ (recommandé: 3.11 ou 3.12)
 # Pour CPU-only, utilisez requirements-cpu.txt
 
 # ============================================
@@ -50,8 +50,9 @@ scipy>=1.11.2
 ollama>=0.6.0
 requests==2.31.0
 
-# Coqui TTS (Text-to-Speech)
-TTS==0.22.0
+# Coqui TTS (Text-to-Speech) - Fork maintenu avec Python 3.11+ support
+# IMPORTANT: coqui-tts (fork Idiap) remplace TTS (abandonné)
+coqui-tts==0.27.2
 transformers==4.35.0
 
 # PyTorch - GPU (CUDA 11.8) - 1.3GB download
@@ -64,7 +65,8 @@ torchvision==0.16.2
 # ============================================
 # AUDIO PROCESSING
 # ============================================
-numpy==1.24.3
+# IMPORTANT: coqui-tts 0.27.2 compatible avec numpy flexible
+numpy>=1.24.3,<2.0
 pydub==0.25.1
 webrtcvad==2.0.10
 librosa==0.10.1
@@ -121,12 +123,10 @@ isort==5.13.2
 # 2. CUDA 11.8 installé (https://developer.nvidia.com/cuda-toolkit)
 # 3. cuDNN 8.x (https://developer.nvidia.com/cudnn)
 #
-# INSTALLATION:
-# 1. Créer environnement virtuel
-# 2. Installer PyTorch GPU: pip install torch==2.1.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cu118
-# 3. Installer TTS: pip install TTS==0.22.0
-# 4. Upgrade numpy: pip install --upgrade "numpy==1.24.3"
-# 5. Installer reste: pip install -r requirements-gpu.txt (exclure torch/TTS déjà installés)
+# INSTALLATION (Python 3.11+ requis):
+# 1. Créer environnement virtuel: python3.11 -m venv venv
+# 2. Utiliser install_dependencies.sh --gpu (RECOMMANDÉ)
+# 3. OU manuellement: pip install -r requirements-gpu.txt
 #
 # VÉRIFICATION GPU:
 #    python -c "import torch; print(f'GPU disponible: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')"

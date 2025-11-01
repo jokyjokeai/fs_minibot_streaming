@@ -1,5 +1,5 @@
 # MiniBotPanel v3 - Requirements
-# Python 3.10+
+# Python 3.11+ (recommandé: 3.11 ou 3.12)
 
 # ============================================
 # SYSTEM DEPENDENCIES (installer via apt/yum)
@@ -49,14 +49,14 @@ scipy>=1.11.2  # TTS needs >=1.11.2
 ollama>=0.6.0
 requests==2.31.0
 
-# Coqui TTS (Text-to-Speech)
-# IMPORTANT: Versions fixes pour éviter conflits numpy
-TTS==0.22.0
+# Coqui TTS (Text-to-Speech) - Fork maintenu avec Python 3.11+ support
+# IMPORTANT: coqui-tts (fork Idiap) remplace TTS (abandonné)
+coqui-tts==0.27.2
 transformers==4.35.0
 
 # PyTorch - Par défaut CPU (VPS sans GPU)
-# IMPORTANT: Pour GPU, commentez les 2 lignes --index-url ci-dessous
-# GPU: pip install torch==2.1.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cu118
+# Compatible Python 3.11+
+# IMPORTANT: Pour GPU, utilisez requirements-gpu.txt
 --index-url https://download.pytorch.org/whl/cpu
 torch==2.1.2
 torchaudio==2.1.2
@@ -65,8 +65,8 @@ torchaudio==2.1.2
 # ============================================
 # AUDIO PROCESSING
 # ============================================
-# IMPORTANT: Ordre d'installation critique (numpy d'abord)
-numpy==1.24.3
+# IMPORTANT: coqui-tts 0.27.2 compatible avec numpy flexible
+numpy>=1.24.3,<2.0
 pydub==0.25.1
 webrtcvad==2.0.10
 librosa==0.10.1
@@ -121,8 +121,8 @@ isort==5.13.2
 # NOTES D'INSTALLATION
 # ============================================
 #
-# 1. Créer environnement virtuel:
-#    python3 -m venv venv
+# 1. Créer environnement virtuel (Python 3.11+ requis):
+#    python3.11 -m venv venv
 #    source venv/bin/activate  (Linux/macOS)
 #    venv\Scripts\activate     (Windows)
 #
