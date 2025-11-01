@@ -80,7 +80,9 @@ audio-separator==0.19.0
 pyannote.audio==3.1.1
 
 # YouTube download
-yt-dlp==2024.12.13  # YouTube audio extraction
+# IMPORTANT: Toujours garder à jour (pip install --upgrade yt-dlp)
+# YouTube change régulièrement son API, nécessite version récente
+yt-dlp>=2024.10.22  # YouTube audio extraction (pas de version fixe)
 
 # ============================================
 # UTILITIES
