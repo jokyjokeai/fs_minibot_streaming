@@ -48,6 +48,15 @@ async def lifespan(app: FastAPI):
         init_database()
         logger.info("✅ Database initialized")
 
+    # Phase 8: Initialiser Cache Manager (singleton)
+    logger.info("💾 Initializing Cache Manager...")
+    try:
+        from system.cache_manager import get_cache
+        cache = get_cache()
+        logger.info("✅ Cache Manager initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not initialize Cache Manager: {e}")
+
     # Précharger modèles IA si configuré
     if config.PRELOAD_MODELS:
         logger.info("🧠 Preloading AI models...")
@@ -57,10 +66,19 @@ async def lifespan(app: FastAPI):
             from system.services.coqui_tts import CoquiTTS
 
             # Initialiser services pour préchargement
-            VoskSTT()
-            OllamaNLP()
+            vosk_stt = VoskSTT()
+
+            # Phase 8: Prewarm Ollama (keep_alive 30min)
+            logger.info("🔥 Prewarming Ollama model...")
+            nlp = OllamaNLP()
+            if nlp.prewarm():
+                logger.info("✅ Ollama prewarmed (latency optimized)")
+            else:
+                logger.warning("⚠️ Ollama prewarm failed (will use on-demand)")
+
             if config.COQUI_USE_GPU:
-                CoquiTTS()
+                tts = CoquiTTS()
+                logger.info("✅ Coqui TTS loaded (GPU mode)")
 
             logger.info("✅ AI models preloaded")
         except Exception as e:
