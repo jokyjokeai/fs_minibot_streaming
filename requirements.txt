@@ -73,10 +73,9 @@ webrtcvad==2.0.10
 librosa==0.10.1
 networkx==2.8.8
 
-# Audio cleaning & voice extraction (versions compatibles numpy 1.24.3)
+# Audio cleaning & voice extraction
 noisereduce==3.0.2
-# spleeter==2.4.0  # DÉSACTIVÉ: dépendances obsolètes (tensorflow 2.9, httpx<0.20)
-# Alternative: utiliser noisereduce seul (qualité acceptable sans extraction vocale)
+demucs>=4.0.0  # Vocal separation (remplace Spleeter - PyTorch natif)
 
 # Speaker diarization (YouTube Extract)
 pyannote.audio==3.1.1

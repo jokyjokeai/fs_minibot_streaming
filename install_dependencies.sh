@@ -72,8 +72,8 @@ pip install --force-reinstall "numpy>=1.24.3,<2.0"
 
 # 5. Audio packages
 echo -e "${GREEN}5️⃣ Installation audio packages...${NC}"
-pip install noisereduce==3.0.2 pydub==0.25.1
-# spleeter removed: obsolete dependencies (tensorflow 2.9, httpx<0.20)
+pip install noisereduce==3.0.2 pydub==0.25.1 "demucs>=4.0.0"
+# Demucs remplace Spleeter (PyTorch natif, meilleure qualité)
 
 # 6. Pyannote (diarization)
 echo -e "${GREEN}6️⃣ Installation pyannote.audio...${NC}"

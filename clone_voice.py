@@ -6,7 +6,7 @@ Utilitaire pour cloner des voix depuis des échantillons audio.
 
 Fonctionnalités:
 - Détection automatique des dossiers de voix dans voices/
-- Nettoyage audio (noisereduce + audio-separator pour extraction voix)
+- Nettoyage audio (noisereduce + Demucs pour extraction voix)
 - Conversion format optimal pour Coqui XTTS (22050Hz mono WAV)
 - Traitement parallèle multi-core (4-8× plus rapide que séquentiel)
 - Détection automatique mode clonage (quick/standard/fine-tuning)
@@ -52,13 +52,15 @@ except ImportError:
     AUDIO_PROCESSING_AVAILABLE = False
     print("⚠️  Audio processing libraries not available (noisereduce, soundfile, pydub)")
 
-# Spleeter (vocal extraction - 10-20× plus rapide qu'audio-separator)
+# Demucs (vocal extraction - state-of-the-art qualité)
 try:
-    from spleeter.separator import Separator
-    SPLEETER_AVAILABLE = True
+    import torch
+    from demucs.pretrained import get_model
+    from demucs.apply import apply_model
+    DEMUCS_AVAILABLE = True
 except ImportError:
-    SPLEETER_AVAILABLE = False
-    print("⚠️  Spleeter not available (vocal extraction disabled)")
+    DEMUCS_AVAILABLE = False
+    print("⚠️  Demucs not available (vocal extraction disabled)")
 
 # Progress bar
 try:
@@ -135,7 +137,7 @@ class VoiceCloner:
     def clean_audio_file(self, input_path: Path, output_path: Path) -> bool:
         """
         Nettoie un fichier audio:
-        1. Extraction voix (séparation musique avec Spleeter)
+        1. Extraction voix (séparation musique avec Demucs)
         2. Réduction bruit de fond (noisereduce)
         3. Trim silence (début/fin)
         4. Normalisation volume
@@ -157,33 +159,33 @@ class VoiceCloner:
         try:
             logger.info(f"  🧹 Cleaning: {input_path.name}...")
 
-            # Étape 1: Extraction voix avec Spleeter (10-20× plus rapide que Roformer)
+            # Étape 1: Extraction voix avec Demucs (state-of-the-art qualité)
             temp_path = input_path
-            if SPLEETER_AVAILABLE:
+            if DEMUCS_AVAILABLE:
                 try:
-                    logger.info(f"    → Extracting vocals (Spleeter)...")
+                    logger.info(f"    → Extracting vocals (Demucs)...")
 
-                    # Créer dossier temporaire pour Spleeter
-                    temp_output_dir = input_path.parent / "spleeter_output"
-                    temp_output_dir.mkdir(exist_ok=True)
+                    # Charger modèle Demucs (htdemucs ou htdemucs_ft)
+                    model = get_model('htdemucs')
+                    model.eval()
 
-                    # Spleeter avec modèle 2stems (vocals + accompaniment)
-                    separator = Separator('spleeter:2stems')
-                    separator.separate_to_file(
-                        str(input_path),
-                        str(temp_output_dir)
-                    )
+                    # Charger audio
+                    import torchaudio
+                    wav, sr = torchaudio.load(str(input_path))
 
-                    # Chercher le fichier vocals
-                    # Spleeter crée: spleeter_output/{filename}/vocals.wav
-                    vocals_dir = temp_output_dir / input_path.stem
-                    vocals_file = vocals_dir / "vocals.wav"
+                    # Appliquer séparation
+                    with torch.no_grad():
+                        sources = apply_model(model, wav[None], device='cpu', shifts=1, split=True, overlap=0.25)[0]
 
-                    if vocals_file.exists():
-                        temp_path = vocals_file
-                        logger.info(f"    ✅ Vocals extracted")
-                    else:
-                        logger.info(f"    ℹ️  No vocals file, using original")
+                    # Sources: [drums, bass, other, vocals]
+                    vocals = sources[3]  # Index 3 = vocals
+
+                    # Sauvegarder vocals
+                    temp_vocals = input_path.parent / f"demucs_{input_path.name}"
+                    torchaudio.save(str(temp_vocals), vocals.cpu(), sr)
+
+                    temp_path = temp_vocals
+                    logger.info(f"    ✅ Vocals extracted")
 
                 except Exception as e:
                     logger.warning(f"    ⚠️  Vocal extraction failed: {e}, using original")
@@ -238,12 +240,11 @@ class VoiceCloner:
             if temp_reduced.exists():
                 temp_reduced.unlink()
 
-            # Cleanup Spleeter output directory
-            if SPLEETER_AVAILABLE:
-                temp_output_dir = input_path.parent / "spleeter_output"
-                if temp_output_dir.exists():
-                    import shutil
-                    shutil.rmtree(temp_output_dir)
+            # Cleanup Demucs temp file
+            if DEMUCS_AVAILABLE:
+                temp_vocals = input_path.parent / f"demucs_{input_path.name}"
+                if temp_vocals.exists() and temp_vocals != input_path:
+                    temp_vocals.unlink()
 
             logger.info(f"    ✅ Cleaned: {output_path.name}")
             return True

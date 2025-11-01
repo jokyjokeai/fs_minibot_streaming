@@ -197,7 +197,7 @@ python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print('
 
 ### 5.5 Vérifier installation complète
 ```bash
-pip list | grep -E "fastapi|vosk|coqui-tts|psycopg2|ollama|torch|numpy|transformers|spleeter"
+pip list | grep -E "fastapi|vosk|coqui-tts|psycopg2|ollama|torch|numpy|transformers|demucs"
 ```
 
 Vous devriez voir:
@@ -205,7 +205,7 @@ Vous devriez voir:
 - `numpy` >= 1.24.3
 - `transformers` 4.35.0
 - `coqui-tts` 0.27.2
-- `spleeter` 2.4.0
+- `demucs` >= 4.0.0
 - `pydantic` >= 2.9.0
 - `ollama` >= 0.6.0
 

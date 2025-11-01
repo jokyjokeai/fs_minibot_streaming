@@ -50,7 +50,7 @@ def audit_phase_1() -> List[Tuple[str, bool, str]]:
         check_import_in_file("requirements.txt", "pyannote.audio") and
         check_import_in_file("requirements.txt", "yt-dlp") and
         check_import_in_file("requirements.txt", "noisereduce") and
-        check_import_in_file("requirements.txt", "spleeter"),
+        check_import_in_file("requirements.txt", "demucs"),
         "Phase 1: Dependencies"
     ))
 
