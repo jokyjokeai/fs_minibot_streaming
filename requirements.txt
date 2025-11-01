@@ -39,38 +39,33 @@ ollama>=0.6.0
 requests==2.31.0
 
 # Coqui TTS (Text-to-Speech)
-# IMPORTANT: TTS 0.22.0 a un conflit numpy avec audio-separator sur Python 3.10
-# Workaround: Installer TTS en premier avec --no-deps puis le reste
-# Voir INSTALL.md pour instructions détaillées
+# IMPORTANT: Versions fixes pour éviter conflits numpy
 TTS==0.22.0
-transformers>=4.35.0
+transformers==4.35.0
 
-# PyTorch - CHOISIR UNE OPTION :
-# Option 1 : CPU only (VPS, serveurs sans GPU)
-# pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-
-# Option 2 : GPU CUDA (machines avec GPU NVIDIA)
-# pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
-
-# Option 3 : Installation automatique (détecte GPU si disponible)
-torch>=2.1.0
-torchaudio>=2.1.0
+# PyTorch - CPU only par défaut (VPS sans GPU)
+# IMPORTANT: Installer AVANT le reste pour éviter téléchargement version CUDA
+--index-url https://download.pytorch.org/whl/cpu
+torch==2.1.2
+torchaudio==2.1.2
+--index-url https://pypi.org/simple
 
 # ============================================
 # AUDIO PROCESSING
 # ============================================
+# IMPORTANT: Ordre d'installation critique (numpy d'abord)
+numpy==1.24.3
 pydub==0.25.1
 webrtcvad==2.0.10
-librosa>=0.10.0
-# numpy version managed by pip resolver (TTS needs 1.22, audio-separator needs 1.23+)
-networkx>=2.8.0  # Pour gruut (dépendance Coqui TTS)
+librosa==0.10.1
+networkx==2.8.8
 
-# Audio cleaning & voice extraction
-noisereduce>=3.0.0  # Noise removal (spectral gating)
-audio-separator>=0.19.0  # Vocal separation (Demucs models)
+# Audio cleaning & voice extraction (versions compatibles numpy 1.24.3)
+noisereduce==3.0.2
+audio-separator==0.19.0
 
 # Speaker diarization (YouTube Extract)
-pyannote.audio==3.1.1  # Speaker diarization (requires HuggingFace token)
+pyannote.audio==3.1.1
 
 # YouTube download
 yt-dlp==2024.12.13  # YouTube audio extraction
