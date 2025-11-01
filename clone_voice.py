@@ -52,15 +52,8 @@ except ImportError:
     AUDIO_PROCESSING_AVAILABLE = False
     print("⚠️  Audio processing libraries not available (noisereduce, soundfile, pydub)")
 
-# pyrnnoise (noise reduction - ultra rapide)
-try:
-    from pyrnnoise import RNNoise
-    PYRNNOISE_AVAILABLE = True
-except ImportError:
-    PYRNNOISE_AVAILABLE = False
-    print("⚠️  pyrnnoise not available (noise reduction will use noisereduce)")
-
-# Demucs (vocal extraction - DÉSACTIVÉ car consomme trop de RAM sur fichiers mono)
+# Demucs et pyrnnoise désactivés (non nécessaires, noisereduce suffit)
+PYRNNOISE_AVAILABLE = False
 DEMUCS_AVAILABLE = False
 
 # Progress bar
@@ -221,83 +214,14 @@ class VoiceCloner:
             # Étape 2: Charger audio
             audio_data, sample_rate = sf.read(str(temp_path))
 
-            # Étape 3: Réduction bruit (pyrnnoise si disponible, sinon noisereduce)
+            # Étape 3: Réduction bruit avec noisereduce
             logger.info(f"    → Noise reduction...")
-
-            if PYRNNOISE_AVAILABLE:
-                # pyrnnoise: ultra rapide (500x real-time)
-                try:
-                    import numpy as np
-
-                    # pyrnnoise fonctionne à 48kHz - resample si nécessaire
-                    if sample_rate != 48000:
-                        from scipy import signal
-                        audio_48k = signal.resample_poly(audio_data, 48000, sample_rate)
-                    else:
-                        audio_48k = audio_data
-
-                    # pyrnnoise requiert int16
-                    if audio_48k.dtype != 'int16':
-                        audio_int16 = (audio_48k * 32767).astype('int16')
-                    else:
-                        audio_int16 = audio_48k
-
-                    # Convertir mono en array 1D si nécessaire
-                    if len(audio_int16.shape) > 1:
-                        audio_int16 = audio_int16.flatten()
-
-                    # Créer instance RNNoise
-                    denoiser = RNNoise(sample_rate=48000)
-
-                    # Traiter l'audio par chunks (pyrnnoise traite par frames de 480 samples)
-                    denoised_chunks = []
-                    chunk_size = 480  # Frame size pour 48kHz
-
-                    for i in range(0, len(audio_int16), chunk_size):
-                        chunk = audio_int16[i:i + chunk_size]
-
-                        # Pad le dernier chunk si nécessaire
-                        if len(chunk) < chunk_size:
-                            chunk = np.pad(chunk, (0, chunk_size - len(chunk)), mode='constant')
-
-                        # Traiter le chunk
-                        try:
-                            speech_prob, denoised_chunk = denoiser.denoise_frame(chunk)
-                            denoised_chunks.append(denoised_chunk)
-                        except Exception as e:
-                            # Si erreur sur un chunk, utiliser l'original
-                            denoised_chunks.append(chunk)
-
-                    # Combiner tous les chunks
-                    reduced_noise_48k = np.concatenate(denoised_chunks)
-
-                    # Resample back au sample rate original si nécessaire
-                    if sample_rate != 48000:
-                        reduced_noise = signal.resample_poly(reduced_noise_48k, sample_rate, 48000)
-                        # Tronquer à la longueur originale
-                        reduced_noise = reduced_noise[:len(audio_data)]
-                    else:
-                        reduced_noise = reduced_noise_48k[:len(audio_data)]
-
-                    # Reconvertir en float32
-                    reduced_noise = reduced_noise.astype('float32') / 32767.0
-
-                except Exception as e:
-                    logger.warning(f"    ⚠️  pyrnnoise failed: {e}, fallback to noisereduce")
-                    reduced_noise = nr.reduce_noise(
-                        y=audio_data,
-                        sr=sample_rate,
-                        stationary=True,
-                        prop_decrease=0.8
-                    )
-            else:
-                # Fallback noisereduce
-                reduced_noise = nr.reduce_noise(
-                    y=audio_data,
-                    sr=sample_rate,
-                    stationary=True,  # Bon pour bruits constants (ventilation, etc.)
-                    prop_decrease=0.8  # Agressivité réduction (0-1)
-                )
+            reduced_noise = nr.reduce_noise(
+                y=audio_data,
+                sr=sample_rate,
+                stationary=True,  # Bon pour bruits constants (ventilation, etc.)
+                prop_decrease=0.8  # Agressivité réduction (0-1)
+            )
 
             # Sauvegarder temporairement pour pydub
             temp_reduced = output_path.parent / f"temp_{output_path.name}"
@@ -761,27 +685,21 @@ class VoiceCloner:
 
         if theme:
             # Thématique spécifique
-            theme_upper = theme.upper()
-            objection_dict_name = f"OBJECTIONS_{theme_upper}"
-
-            if hasattr(objections_database, objection_dict_name):
-                all_objections[theme] = getattr(objections_database, objection_dict_name)
-                logger.info(f"📋 Theme: {theme}")
-            else:
-                logger.error(f"❌ Theme '{theme}' not found in objections_database")
-                return False
+            objections_list = objections_database.get_objections_by_theme(theme)
+            all_objections[theme] = objections_list
+            logger.info(f"📋 Theme: {theme}")
         else:
             # Toutes les thématiques
-            # Collecter tous les dicts OBJECTIONS_*
-            for attr_name in dir(objections_database):
-                if attr_name.startswith("OBJECTIONS_"):
-                    theme_name = attr_name.replace("OBJECTIONS_", "").lower()
-                    all_objections[theme_name] = getattr(objections_database, attr_name)
+            themes = objections_database.get_all_themes()
+            for theme_name in themes:
+                objections_list = objections_database.get_objections_by_theme(theme_name)
+                if objections_list:
+                    all_objections[theme_name] = objections_list
 
             logger.info(f"📋 Themes: {', '.join(all_objections.keys())}")
 
         # Compter total
-        total_count = sum(len(obj_dict) for obj_dict in all_objections.values())
+        total_count = sum(len(obj_list) for obj_list in all_objections.values())
         logger.info(f"📊 Total objections: {total_count}")
 
         if total_count == 0:
@@ -808,14 +726,15 @@ class VoiceCloner:
         success_count = 0
         failed_count = 0
 
-        for theme_name, objections_dict in all_objections.items():
+        for theme_name, objections_list in all_objections.items():
             logger.info(f"\n📂 Processing theme: {theme_name.upper()}")
-            logger.info(f"   {len(objections_dict)} objections")
+            logger.info(f"   {len(objections_list)} objections")
 
-            for i, (objection, response) in enumerate(objections_dict.items(), 1):
-                # Créer nom de fichier safe
-                # Format: theme_objection_number.wav
-                safe_name = self._sanitize_filename(objection)
+            for i, objection_entry in enumerate(objections_list, 1):
+                # Créer nom de fichier safe à partir des premiers mots de la réponse
+                # Format: theme_number_debut_reponse.wav
+                response_preview = objection_entry.response[:30]
+                safe_name = self._sanitize_filename(response_preview)
                 filename = f"{theme_name}_{i:03d}_{safe_name}.wav"
                 output_file = output_dir / filename
 
@@ -828,7 +747,7 @@ class VoiceCloner:
                 # Générer TTS
                 try:
                     success = self.tts.generate_speech(
-                        text=response,
+                        text=objection_entry.response,
                         output_path=str(output_file),
                         voice_name=voice_name
                     )

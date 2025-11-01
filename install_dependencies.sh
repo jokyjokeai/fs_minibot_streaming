@@ -72,8 +72,7 @@ pip install --force-reinstall "numpy>=1.24.3,<2.0"
 
 # 5. Audio packages
 echo -e "${GREEN}5️⃣ Installation audio packages...${NC}"
-pip install noisereduce==3.0.2 "pyrnnoise>=0.3.8" pydub==0.25.1 "demucs>=4.0.0"
-# pyrnnoise: ultra-rapide (primary), noisereduce: fallback, demucs: optionnel
+pip install noisereduce==3.0.2 pydub==0.25.1
 
 # 6. Pyannote (diarization) - Version 3.0.1 compatible numpy<2.0
 echo -e "${GREEN}6️⃣ Installation pyannote.audio...${NC}"
