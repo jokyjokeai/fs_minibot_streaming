@@ -50,7 +50,7 @@ pip install --upgrade "numpy==1.24.3"
 
 # 4. Audio packages (besoin numpy>=1.23)
 echo -e "${GREEN}4️⃣ Installation audio packages...${NC}"
-pip install audio-separator==0.19.0 noisereduce==3.0.2
+pip install audio-separator==0.19.0 noisereduce==3.0.2 "onnxruntime>=1.16.0"
 
 # 5. Pyannote (diarization)
 echo -e "${GREEN}5️⃣ Installation pyannote.audio...${NC}"
