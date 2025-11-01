@@ -39,8 +39,9 @@ ollama>=0.6.0
 requests==2.31.0
 
 # Coqui TTS (Text-to-Speech)
-# IMPORTANT: Version mise à jour pour compatibilité numpy
-TTS>=0.22.0
+# IMPORTANT: Version 0.24.3+ accepte numpy>=1.23 (compatible audio-separator)
+# Version 0.22.0 force numpy==1.22.0 sur Python 3.10 (incompatible)
+TTS==0.24.3
 transformers>=4.35.0
 
 # PyTorch - CHOISIR UNE OPTION :
