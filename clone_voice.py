@@ -764,9 +764,11 @@ class VoiceCloner:
                         failed_count += 1
                         continue
 
+                    # Utiliser voice_name pour profiter des embeddings cachés
                     result_path = self.tts.synthesize_with_voice(
                         text=response_text,
                         reference_voice=str(reference_wav),
+                        voice_name=voice_name,  # Utiliser embeddings cachés si disponibles
                         output_file=str(output_file)
                     )
                     success = result_path is not None
