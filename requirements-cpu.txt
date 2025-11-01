@@ -67,10 +67,10 @@ numpy>=1.24.3,<2.0
 # IMPORTANT: coqui-tts (fork Idiap) remplace TTS (abandonné)
 # Installer APRÈS torch et numpy pour éviter upgrades non désirés
 coqui-tts==0.27.2
-transformers==4.35.0
+transformers>=4.52.1,<4.56  # Compatible coqui-tts 0.27.2
 pydub==0.25.1
 webrtcvad==2.0.10
-librosa==0.10.1
+librosa>=0.11.0  # Requis par coqui-tts 0.27.2
 networkx==2.8.8
 
 # Audio cleaning & voice extraction
@@ -78,7 +78,9 @@ noisereduce==3.0.2
 demucs>=4.0.0  # Vocal separation (remplace Spleeter - PyTorch natif)
 
 # Speaker diarization (YouTube Extract)
-pyannote.audio==3.1.1
+# IMPORTANT: pyannote.audio 3.1.1 requiert numpy>=2.0 (incompatible avec coqui-tts)
+# Downgrade à 3.0.1 pour compatibilité numpy<2.0
+pyannote.audio==3.0.1
 
 # YouTube download
 # IMPORTANT: Toujours garder à jour (pip install --upgrade yt-dlp)

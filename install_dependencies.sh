@@ -75,9 +75,9 @@ echo -e "${GREEN}5️⃣ Installation audio packages...${NC}"
 pip install noisereduce==3.0.2 pydub==0.25.1 "demucs>=4.0.0"
 # Demucs remplace Spleeter (PyTorch natif, meilleure qualité)
 
-# 6. Pyannote (diarization)
+# 6. Pyannote (diarization) - Version 3.0.1 compatible numpy<2.0
 echo -e "${GREEN}6️⃣ Installation pyannote.audio...${NC}"
-pip install pyannote.audio==3.1.1
+pip install pyannote.audio==3.0.1
 
 # 7. Autres dépendances (sans conflits)
 echo -e "${GREEN}7️⃣ Installation autres dépendances...${NC}"
@@ -95,9 +95,9 @@ pip install \
     scipy>=1.11.2 \
     ollama>=0.6.0 \
     requests==2.31.0 \
-    transformers==4.35.0 \
+    "transformers>=4.52.1,<4.56" \
     webrtcvad==2.0.10 \
-    librosa==0.10.1 \
+    "librosa>=0.11.0" \
     networkx==2.8.8 \
     "yt-dlp>=2024.10.22" \
     python-dotenv==1.0.0 \
