@@ -50,12 +50,8 @@ scipy>=1.11.2
 ollama>=0.6.0
 requests==2.31.0
 
-# Coqui TTS (Text-to-Speech) - Fork maintenu avec Python 3.11+ support
-# IMPORTANT: coqui-tts (fork Idiap) remplace TTS (abandonné)
-coqui-tts==0.27.2
-transformers==4.35.0
-
 # PyTorch - GPU (CUDA 11.8) - 1.3GB download
+# IMPORTANT: Installer AVANT coqui-tts pour éviter upgrade vers torch 2.8+
 --index-url https://download.pytorch.org/whl/cu118
 torch==2.1.2
 torchaudio==2.1.2
@@ -65,8 +61,14 @@ torchvision==0.16.2
 # ============================================
 # AUDIO PROCESSING
 # ============================================
-# IMPORTANT: coqui-tts 0.27.2 compatible avec numpy flexible
+# IMPORTANT: Installer numpy AVANT coqui-tts pour éviter upgrade vers numpy 2.x
 numpy>=1.24.3,<2.0
+
+# Coqui TTS (Text-to-Speech) - Fork maintenu avec Python 3.11+ support
+# IMPORTANT: coqui-tts (fork Idiap) remplace TTS (abandonné)
+# Installer APRÈS torch et numpy pour éviter upgrades non désirés
+coqui-tts==0.27.2
+transformers==4.35.0
 pydub==0.25.1
 webrtcvad==2.0.10
 librosa==0.10.1
@@ -74,7 +76,7 @@ networkx==2.8.8
 
 # Audio cleaning & voice extraction
 noisereduce==3.0.2
-spleeter==2.4.0  # Séparation vocals/musique (10-20× plus rapide qu'audio-separator)
+# spleeter==2.4.0  # DÉSACTIVÉ: dépendances obsolètes (tensorflow 2.9, httpx<0.20)
 
 # Speaker diarization (YouTube Extract)
 pyannote.audio==3.1.1

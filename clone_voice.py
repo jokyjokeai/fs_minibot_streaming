@@ -135,7 +135,7 @@ class VoiceCloner:
     def clean_audio_file(self, input_path: Path, output_path: Path) -> bool:
         """
         Nettoie un fichier audio:
-        1. Extraction voix (séparation musique avec audio-separator)
+        1. Extraction voix (séparation musique avec Spleeter)
         2. Réduction bruit de fond (noisereduce)
         3. Trim silence (début/fin)
         4. Normalisation volume

@@ -48,33 +48,39 @@ fi
 echo -e "${GREEN}✅ Python $PYTHON_VERSION détecté${NC}"
 echo ""
 
-# 1. PyTorch
+# 1. NumPy (IMPORTANT: installer AVANT torch et coqui-tts)
+echo -e "${GREEN}1️⃣ Installation numpy<2.0 (compatible coqui-tts)...${NC}"
+pip install "numpy>=1.24.3,<2.0"
+
+# 2. PyTorch (IMPORTANT: installer AVANT coqui-tts pour éviter upgrade vers 2.8+)
 if $GPU_MODE; then
-    echo -e "${GREEN}1️⃣ Installation PyTorch (GPU CUDA 11.8 - 1.3GB)...${NC}"
+    echo -e "${GREEN}2️⃣ Installation PyTorch (GPU CUDA 11.8 - 1.3GB)...${NC}"
     pip install torch==2.1.2 torchaudio==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu118
 else
-    echo -e "${GREEN}1️⃣ Installation PyTorch (CPU-only - 200MB)...${NC}"
+    echo -e "${GREEN}2️⃣ Installation PyTorch (CPU-only - 200MB)...${NC}"
     pip install torch==2.1.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cpu
 fi
 
-# 2. Coqui TTS (fork maintenu, Python 3.11+ compatible)
-echo -e "${GREEN}2️⃣ Installation coqui-tts 0.27.2...${NC}"
-pip install coqui-tts==0.27.2
+# 3. Coqui TTS (installer APRÈS numpy et torch pour éviter upgrades non désirés)
+echo -e "${GREEN}3️⃣ Installation coqui-tts 0.27.2...${NC}"
+pip install --no-deps coqui-tts==0.27.2
+pip install coqui-tts-trainer==0.3.1 coqpit-config==0.2.1
 
-# 3. NumPy (version flexible avec coqui-tts)
-echo -e "${GREEN}3️⃣ Installation numpy>=1.24.3...${NC}"
-pip install "numpy>=1.24.3,<2.0"
+# 4. Forcer downgrade numpy si coqui-tts l'a upgradé
+echo -e "${GREEN}4️⃣ Vérification numpy<2.0...${NC}"
+pip install --force-reinstall "numpy>=1.24.3,<2.0"
 
-# 4. Audio packages
-echo -e "${GREEN}4️⃣ Installation audio packages...${NC}"
-pip install spleeter==2.4.0 noisereduce==3.0.2
+# 5. Audio packages
+echo -e "${GREEN}5️⃣ Installation audio packages...${NC}"
+pip install noisereduce==3.0.2 pydub==0.25.1
+# spleeter removed: obsolete dependencies (tensorflow 2.9, httpx<0.20)
 
-# 5. Pyannote (diarization)
-echo -e "${GREEN}5️⃣ Installation pyannote.audio...${NC}"
+# 6. Pyannote (diarization)
+echo -e "${GREEN}6️⃣ Installation pyannote.audio...${NC}"
 pip install pyannote.audio==3.1.1
 
-# 6. Autres dépendances (sans conflits)
-echo -e "${GREEN}6️⃣ Installation autres dépendances...${NC}"
+# 7. Autres dépendances (sans conflits)
+echo -e "${GREEN}7️⃣ Installation autres dépendances...${NC}"
 pip install \
     fastapi==0.109.0 \
     uvicorn[standard]==0.27.0 \
@@ -90,7 +96,6 @@ pip install \
     ollama>=0.6.0 \
     requests==2.31.0 \
     transformers==4.35.0 \
-    pydub==0.25.1 \
     webrtcvad==2.0.10 \
     librosa==0.10.1 \
     networkx==2.8.8 \
