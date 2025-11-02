@@ -748,25 +748,36 @@ class YouTubeVoiceExtractor:
                 logger.warning(f"   ⚠️  UVR failed: {e}, continuing...")
                 cleaned_file = normalized_file
 
-            # 5. Noise reduction
+            # 5. Noise reduction (with safety check)
             logger.info("🔇 Reducing background noise...")
             import soundfile as sf
             import numpy as np
 
-            # Load audio as numpy array
-            data, rate = sf.read(str(cleaned_file))
+            try:
+                # Load audio as numpy array
+                data, rate = sf.read(str(cleaned_file))
 
-            # Apply noise reduction
-            reduced_noise = nr.reduce_noise(
-                y=data,
-                sr=rate,
-                stationary=True,
-                prop_decrease=0.8  # Reduce 80% of noise
-            )
+                # Safety check: skip if audio shape is abnormal
+                if data.ndim > 2 or (data.ndim == 2 and data.shape[1] > 2):
+                    logger.warning(f"   ⚠️  Abnormal audio shape {data.shape}, skipping noise reduction")
+                    preprocessed_file = cleaned_file
+                else:
+                    # Apply noise reduction with chunk processing for safety
+                    reduced_noise = nr.reduce_noise(
+                        y=data,
+                        sr=rate,
+                        stationary=True,
+                        prop_decrease=0.8,  # Reduce 80% of noise
+                        chunk_size=60000    # Process in smaller chunks to avoid memory issues
+                    )
 
-            # Save final preprocessed file
-            preprocessed_file = output_dir / "preprocessed.wav"
-            sf.write(str(preprocessed_file), reduced_noise, rate)
+                    # Save final preprocessed file
+                    preprocessed_file = output_dir / "preprocessed.wav"
+                    sf.write(str(preprocessed_file), reduced_noise, rate)
+
+            except (MemoryError, np.core._exceptions._ArrayMemoryError) as e:
+                logger.warning(f"   ⚠️  Noise reduction failed (memory issue), using UVR output directly")
+                preprocessed_file = cleaned_file
 
             logger.info(f"✅ Preprocessing complete: {preprocessed_file.name}")
             logger.info(f"   - Mono 16kHz")
