@@ -76,6 +76,37 @@ except ImportError:
 
 DIARIZATION_AVAILABLE = RESEMBLYZER_AVAILABLE or SIMPLE_DIARIZATION_AVAILABLE
 
+# Quality scoring imports
+try:
+    import librosa
+    import noisereduce as nr
+    from scipy.io import wavfile
+    import json
+    import time
+    import requests
+    QUALITY_SCORING_AVAILABLE = True
+except ImportError as e:
+    QUALITY_SCORING_AVAILABLE = False
+    print(f"❌ Quality scoring libraries not available: {e}")
+    print("   Install: pip install librosa noisereduce scipy")
+
+# UVR (Ultimate Vocal Remover)
+try:
+    from audio_separator.separator import Separator
+    UVR_AVAILABLE = True
+except ImportError:
+    UVR_AVAILABLE = False
+    print("❌ UVR (audio-separator) not available")
+    print("   Install: pip install audio-separator")
+
+# Vosk STT
+try:
+    from system.services.vosk_stt import VoskSTT
+    VOSK_AVAILABLE = True
+except ImportError:
+    VOSK_AVAILABLE = False
+    print("❌ Vosk STT not available")
+
 from system.config import config
 
 logging.basicConfig(
@@ -655,11 +686,17 @@ class YouTubeVoiceExtractor:
                 from audio_separator.separator import Separator
                 logger.info("🎵 UVR: Extracting vocals...")
 
+                # Create models directory
+                models_dir = Path("models/uvr")
+                models_dir.mkdir(parents=True, exist_ok=True)
+
                 separator = Separator(
                     log_level=logging.WARNING,
-                    model_file_dir="models/uvr"
+                    model_file_dir=str(models_dir)
                 )
-                separator.load_model("UVR-MDX-NET-Inst_HQ_3.onnx")
+
+                # Use correct model name (without double .onnx extension)
+                separator.load_model("UVR-MDX-NET-Inst_HQ_3")
 
                 output_files = separator.separate(str(normalized_file))
 
@@ -1013,6 +1050,313 @@ class YouTubeVoiceExtractor:
         """
         return self.diarizer.get_speaker_durations(segments)
 
+    def score_chunk_quality(self, audio_chunk: np.ndarray, sr: int) -> float:
+        """
+        Score la qualité d'un chunk audio (inspiré de ElevenLabs approach)
+
+        Critères:
+        - SNR (Signal-to-Noise Ratio)
+        - RMS (volume/énergie)
+        - Zero Crossing Rate (clarté)
+        - Spectral centroid (richesse tonale)
+
+        Args:
+            audio_chunk: Audio numpy array
+            sr: Sample rate
+
+        Returns:
+            Score 0-100 (plus haut = meilleure qualité)
+        """
+        try:
+            import librosa
+
+            # 1. SNR (Signal-to-Noise Ratio) - plus haut = mieux
+            # Estimer le bruit comme les 10% plus faibles
+            noise_floor = np.percentile(np.abs(audio_chunk), 10)
+            signal_power = np.mean(audio_chunk ** 2)
+            noise_power = noise_floor ** 2
+            snr = 10 * np.log10(signal_power / (noise_power + 1e-10))
+            snr_score = np.clip(snr / 30, 0, 1)  # Normaliser 0-30dB → 0-1
+
+            # 2. RMS (Root Mean Square) - volume optimal
+            rms = np.sqrt(np.mean(audio_chunk ** 2))
+            # Optimal RMS autour de 0.1-0.3
+            rms_score = 1 - abs(0.2 - rms) / 0.2
+            rms_score = np.clip(rms_score, 0, 1)
+
+            # 3. Zero Crossing Rate - clarté (pas trop de distorsion)
+            zcr = np.mean(librosa.zero_crossings(audio_chunk))
+            # Optimal autour de 0.05-0.15
+            zcr_score = 1 - abs(0.1 - zcr) / 0.1
+            zcr_score = np.clip(zcr_score, 0, 1)
+
+            # 4. Spectral Centroid - richesse tonale
+            spectral_centroid = librosa.feature.spectral_centroid(
+                y=audio_chunk, sr=sr
+            )[0]
+            sc_mean = np.mean(spectral_centroid)
+            # Optimal autour de 2000-4000 Hz pour parole
+            sc_score = 1 - abs(3000 - sc_mean) / 3000
+            sc_score = np.clip(sc_score, 0, 1)
+
+            # Score pondéré
+            total_score = (
+                snr_score * 0.4 +      # SNR le plus important
+                rms_score * 0.3 +      # Volume
+                zcr_score * 0.15 +     # Clarté
+                sc_score * 0.15        # Richesse
+            )
+
+            return total_score * 100  # Score sur 100
+
+        except Exception as e:
+            logger.warning(f"⚠️  Quality scoring failed: {e}")
+            return 50.0  # Score moyen par défaut
+
+    def select_best_chunks(self, audio_file: Path, segments: List[SpeakerSegment],
+                          speaker: str, target_count: int = 30) -> List[Tuple[Path, float]]:
+        """
+        Sélectionne les meilleurs chunks audio pour cloning
+
+        Pipeline:
+        1. Découper segments du speaker en chunks 6-10s
+        2. Scorer chaque chunk (SNR, RMS, ZCR, spectral)
+        3. Garder top N chunks
+
+        Args:
+            audio_file: Fichier audio source
+            segments: Tous les segments
+            speaker: Speaker à extraire
+            target_count: Nombre de chunks à garder (default: 30)
+
+        Returns:
+            Liste de (chunk_path, quality_score)
+        """
+        logger.info(f"\n🎯 Selecting best audio chunks for {speaker}...")
+        logger.info(f"   Target: {target_count} chunks of 6-10s")
+
+        try:
+            from pydub import AudioSegment
+            import soundfile as sf
+            import tempfile
+
+            # Charger audio
+            audio = AudioSegment.from_file(str(audio_file))
+
+            # Filtrer segments du speaker
+            speaker_segments = [s for s in segments if s.speaker == speaker]
+            logger.info(f"   Found {len(speaker_segments)} segments for {speaker}")
+
+            # Découper en chunks 6-10s
+            chunks_data = []
+            chunk_dir = Path(tempfile.mkdtemp())
+
+            for idx, seg in enumerate(speaker_segments):
+                # Extraire segment
+                start_ms = int(seg.start * 1000)
+                end_ms = int(seg.end * 1000)
+                segment_audio = audio[start_ms:end_ms]
+
+                # Si segment > 10s, découper en chunks
+                if len(segment_audio) > 10000:  # 10s
+                    # Découper en chunks de 8s (optimal)
+                    chunk_size_ms = 8000
+                    for i in range(0, len(segment_audio), chunk_size_ms):
+                        chunk = segment_audio[i:i + chunk_size_ms]
+
+                        # Garder seulement si >= 6s
+                        if len(chunk) >= 6000:
+                            chunks_data.append(chunk)
+
+                # Si segment entre 6-10s, garder tel quel
+                elif len(segment_audio) >= 6000:
+                    chunks_data.append(segment_audio)
+
+            logger.info(f"   Created {len(chunks_data)} chunks (6-10s each)")
+
+            # Scorer chaque chunk
+            logger.info(f"   Scoring quality...")
+            scored_chunks = []
+
+            for idx, chunk in enumerate(chunks_data):
+                # Export temporaire pour scoring
+                chunk_path = chunk_dir / f"chunk_{idx:03d}.wav"
+                chunk.export(str(chunk_path), format="wav")
+
+                # Charger comme numpy
+                data, sr = sf.read(str(chunk_path))
+
+                # Scorer
+                score = self.score_chunk_quality(data, sr)
+                scored_chunks.append((chunk_path, score))
+
+            # Trier par score (meilleurs d'abord)
+            scored_chunks.sort(key=lambda x: x[1], reverse=True)
+
+            # Garder top N
+            best_chunks = scored_chunks[:target_count]
+
+            logger.info(f"✅ Selected {len(best_chunks)} best chunks")
+            logger.info(f"   Quality range: {best_chunks[-1][1]:.1f} - {best_chunks[0][1]:.1f}")
+
+            return best_chunks
+
+        except Exception as e:
+            logger.error(f"❌ Chunk selection failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    def filter_chunks_with_vosk(self, chunks: List[Tuple[Path, float]],
+                                target_count: int = 10) -> List[Tuple[Path, float, str]]:
+        """
+        Filtre final avec Vosk STT pour garder meilleurs chunks
+
+        Critères Vosk:
+        - Transcription non vide
+        - Longueur texte raisonnable (pas tronqué)
+        - Pas de répétitions
+        - Clarté (confidence si disponible)
+
+        Args:
+            chunks: Liste de (path, quality_score)
+            target_count: Nombre final à garder (default: 10)
+
+        Returns:
+            Liste de (path, quality_score, transcription)
+        """
+        logger.info(f"\n🎤 Vosk filtering for final {target_count} chunks...")
+
+        try:
+            from system.services.vosk_stt import VoskSTT
+
+            # Initialiser Vosk
+            vosk = VoskSTT()
+            if not vosk.is_available:
+                logger.warning("⚠️  Vosk not available, returning all chunks")
+                return [(p, s, "") for p, s in chunks[:target_count]]
+
+            # Transcrire et filtrer
+            validated_chunks = []
+
+            for chunk_path, quality_score in chunks:
+                try:
+                    # Transcrire
+                    result = vosk.transcribe_file(chunk_path)
+
+                    if not result or not isinstance(result, dict):
+                        continue
+
+                    text = result.get('text', '').strip()
+
+                    # Filtres:
+                    # 1. Texte non vide
+                    if not text or len(text) < 10:
+                        continue
+
+                    # 2. Longueur raisonnable (pas tronqué)
+                    # 6-10s devrait donner ~15-50 mots en français
+                    word_count = len(text.split())
+                    if word_count < 5 or word_count > 100:
+                        continue
+
+                    # 3. Pas de répétitions excessives
+                    words = text.lower().split()
+                    unique_words = set(words)
+                    if len(unique_words) / len(words) < 0.4:  # 40% mots uniques minimum
+                        continue
+
+                    # Chunk validé
+                    validated_chunks.append((chunk_path, quality_score, text))
+
+                    # Stop si on a assez
+                    if len(validated_chunks) >= target_count:
+                        break
+
+                except Exception as e:
+                    logger.warning(f"   ⚠️  Failed to process {chunk_path.name}: {e}")
+                    continue
+
+            logger.info(f"✅ Vosk validation complete: {len(validated_chunks)}/{len(chunks)} chunks kept")
+
+            if validated_chunks:
+                logger.info(f"   Sample transcriptions:")
+                for i, (_, score, text) in enumerate(validated_chunks[:3]):
+                    logger.info(f"      [{i+1}] (score={score:.1f}): {text[:60]}...")
+
+            return validated_chunks
+
+        except Exception as e:
+            logger.error(f"❌ Vosk filtering failed: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fallback: retourner sans filtrage
+            return [(p, s, "") for p, s in chunks[:target_count]]
+
+    def concatenate_final_reference(self, chunks: List[Tuple[Path, float, str]],
+                                    output_path: Path) -> Optional[Path]:
+        """
+        Concatène les chunks finaux en reference.wav pour cloning
+
+        Args:
+            chunks: Liste de (path, score, transcription)
+            output_path: Chemin de sortie
+
+        Returns:
+            Path du fichier concaténé ou None
+        """
+        logger.info(f"\n🔗 Concatenating {len(chunks)} chunks into reference.wav...")
+
+        try:
+            from pydub import AudioSegment
+
+            if not chunks:
+                logger.error("❌ No chunks to concatenate")
+                return None
+
+            # Concaténer
+            final_audio = None
+
+            for idx, (chunk_path, score, text) in enumerate(chunks):
+                chunk = AudioSegment.from_file(str(chunk_path))
+
+                if final_audio is None:
+                    final_audio = chunk
+                else:
+                    # Ajouter petit silence entre chunks (200ms)
+                    silence = AudioSegment.silent(duration=200)
+                    final_audio = final_audio + silence + chunk
+
+            # Exporter
+            final_audio.export(str(output_path), format="wav")
+
+            duration = len(final_audio) / 1000
+            logger.info(f"✅ Reference audio created: {output_path.name}")
+            logger.info(f"   Duration: {duration:.1f}s ({duration/60:.1f}min)")
+            logger.info(f"   Chunks: {len(chunks)}")
+
+            # Sauvegarder métadonnées (transcriptions)
+            metadata_path = output_path.with_suffix('.txt')
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                f.write(f"Voice Reference Metadata\n")
+                f.write(f"========================\n\n")
+                f.write(f"Total duration: {duration:.1f}s\n")
+                f.write(f"Chunks: {len(chunks)}\n\n")
+                f.write(f"Transcriptions:\n")
+                for idx, (path, score, text) in enumerate(chunks, 1):
+                    f.write(f"\n[{idx}] Quality={score:.1f}\n")
+                    f.write(f"{text}\n")
+
+            logger.info(f"   Metadata saved: {metadata_path.name}")
+
+            return output_path
+
+        except Exception as e:
+            logger.error(f"❌ Concatenation failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
     def preview_speaker(self, audio_path: Path, segments: List[SpeakerSegment],
                        speaker: str, duration_seconds: float = 5.0):
         """
@@ -1353,32 +1697,60 @@ class YouTubeVoiceExtractor:
             logger.info(f"\n✅ Selected speaker: {selected_speaker}")
             logger.info(f"   Duration: {speaker_durations[selected_speaker]:.1f}s")
 
-            # 5. Extraire audio du locuteur
-            speaker_audio = self.extract_speaker_audio(audio_file, segments, selected_speaker)
-            if len(speaker_audio) == 0:
-                return False
-
-            # 6. Sauvegarder en un seul fichier
-            # Note: Le découpage sera fait par clone_voice.py
+            # 5. Quality Scoring Pipeline
             voice_dir = self.voices_dir / voice_name
             voice_dir.mkdir(parents=True, exist_ok=True)
 
-            output_path = voice_dir / "youtube_001.wav"
-            speaker_audio.export(str(output_path), format="wav")
+            # 5a. Sélectionner top 30 chunks (6-10s) avec quality scoring
+            logger.info(f"\n📊 Quality scoring - selecting top 30 chunks...")
+            top_30_chunks = self.select_best_chunks(
+                audio_file, segments, selected_speaker, target_count=30
+            )
 
-            logger.info(f"\n💾 Saving extracted audio...")
-            logger.info(f"   Format: {self.TARGET_SAMPLE_RATE}Hz mono WAV")
-            logger.info(f"   Duration: {len(speaker_audio)/1000:.1f}s")
-            logger.info(f"   File: {output_path.name}")
+            if not top_30_chunks:
+                logger.error("❌ No quality chunks found")
+                return False
+
+            logger.info(f"✅ Selected {len(top_30_chunks)} chunks")
+            avg_score = sum(score for _, score in top_30_chunks) / len(top_30_chunks)
+            logger.info(f"   Average quality score: {avg_score:.1f}/100")
+
+            # 5b. Filtrage Vosk pour top 10 final
+            logger.info(f"\n🎤 Vosk filtering - selecting top 10 validated chunks...")
+            top_10_validated = self.filter_chunks_with_vosk(
+                top_30_chunks, target_count=10
+            )
+
+            if not top_10_validated:
+                logger.error("❌ No validated chunks after Vosk filtering")
+                return False
+
+            logger.info(f"✅ Validated {len(top_10_validated)} chunks")
+
+            # 5c. Concaténation finale
+            logger.info(f"\n🔗 Concatenating final reference.wav...")
+            output_path = voice_dir / "reference.wav"
+
+            final_result = self.concatenate_final_reference(
+                top_10_validated, output_path
+            )
+
+            if not final_result:
+                logger.error("❌ Concatenation failed")
+                return False
 
             logger.info(f"\n{'='*60}")
-            logger.info(f"✅ YouTube extraction completed!")
+            logger.info(f"✅ YouTube Voice Extraction Complete!")
+            logger.info(f"{'='*60}")
             logger.info(f"   Speaker: {selected_speaker}")
-            logger.info(f"   Duration: {len(speaker_audio)/1000:.1f}s")
-            logger.info(f"   File: {output_path}")
+            logger.info(f"   Quality chunks: {len(top_10_validated)}")
+            logger.info(f"   Total duration: {final_result['duration']:.1f}s")
+            logger.info(f"   Average quality: {final_result['avg_quality']:.1f}/100")
+            logger.info(f"   Reference file: {output_path}")
+            logger.info(f"   Metadata: {output_path.with_suffix('.txt')}")
             logger.info(f"{'='*60}")
             logger.info(f"\n💡 Next step:")
-            logger.info(f"   python3 clone_voice.py --voice {voice_name} --use-uvr")
+            logger.info(f"   python3 clone_voice.py --voice {voice_name}")
 
             return True
 
