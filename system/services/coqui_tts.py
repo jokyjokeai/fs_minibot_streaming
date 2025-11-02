@@ -385,58 +385,35 @@ class CoquiTTS:
             voice_dir.mkdir(parents=True, exist_ok=True)
 
             # Extraire et sauvegarder les VRAIS embeddings speaker de TOUS les fichiers
-            # CRITIQUE pour performance (évite recalcul à chaque génération TTS)
+            # Utilise l'API XTTS native qui supporte les listes de fichiers
             embeddings_path = voice_dir / "embeddings.pth"
 
             try:
                 logger.info(f"🔬 Extracting speaker embeddings from {len(audio_files)} file(s)...")
 
-                # Accéder au modèle XTTS interne pour extraire les embeddings
-                # XTTS structure: tts_model.synthesizer.tts_model.speaker_manager.encoder
-                if hasattr(self.tts_model, 'synthesizer') and hasattr(self.tts_model.synthesizer, 'tts_model'):
-                    tts_internal = self.tts_model.synthesizer.tts_model
+                # Utiliser l'API native d'XTTS pour calculer les embeddings
+                # XTTS supporte nativement les listes et fait la moyenne automatiquement
+                speaker_wav_list = [str(f) for f in audio_files]
 
-                    # Charger et encoder tous les fichiers audio
-                    if hasattr(tts_internal, 'speaker_manager') and hasattr(tts_internal.speaker_manager, 'encoder'):
-                        import torchaudio
+                # Extraire les embeddings via la méthode get_conditioning_latents
+                # qui gère automatiquement la moyenne de plusieurs fichiers
+                gpt_cond_latent, speaker_embedding = self.tts_model.synthesizer.tts_model.get_conditioning_latents(
+                    audio_path=speaker_wav_list,
+                    gpt_cond_len=self.tts_config.get("gpt_cond_len", 30),
+                    gpt_cond_chunk_len=self.tts_config.get("gpt_cond_chunk_len", 4),
+                    max_ref_length=self.tts_config.get("max_ref_len", 60),
+                    sound_norm_refs=self.tts_config.get("sound_norm_refs", False)
+                )
 
-                        embeddings_list = []
+                if len(audio_files) > 1:
+                    logger.info(f"📊 Averaged embeddings from {len(audio_files)} files")
 
-                        for audio_file in audio_files:
-                            # Charger audio
-                            waveform, sample_rate = torchaudio.load(str(audio_file))
+                # Sauvegarder embeddings
+                torch.save(speaker_embedding.cpu(), embeddings_path)
+                logger.info(f"💾 Speaker embeddings saved: {embeddings_path.name} ({speaker_embedding.shape})")
 
-                            # Resample si nécessaire (XTTS attend 22050Hz)
-                            if sample_rate != 22050:
-                                resampler = torchaudio.transforms.Resample(sample_rate, 22050)
-                                waveform = resampler(waveform)
-
-                            # Encoder pour obtenir embeddings
-                            with torch.no_grad():
-                                emb = tts_internal.speaker_manager.encoder.forward(
-                                    waveform.to(self.tts_config["device"]),
-                                    l2_norm=True
-                                )
-                                embeddings_list.append(emb)
-
-                        # Moyenner tous les embeddings (comme XTTS le fait en interne)
-                        if len(embeddings_list) > 1:
-                            embeddings = torch.stack(embeddings_list).mean(dim=0)
-                            logger.info(f"📊 Averaged {len(embeddings_list)} embeddings")
-                        else:
-                            embeddings = embeddings_list[0]
-
-                        # Sauvegarder embeddings
-                        torch.save(embeddings.cpu(), embeddings_path)
-                        logger.info(f"💾 Speaker embeddings saved: {embeddings_path.name} ({embeddings.shape})")
-
-                        # Mettre en cache immédiatement
-                        self.cached_embeddings[voice_name] = embeddings
-
-                    else:
-                        raise AttributeError("Speaker encoder not found in XTTS model")
-                else:
-                    raise AttributeError("XTTS internal structure not accessible")
+                # Mettre en cache immédiatement
+                self.cached_embeddings[voice_name] = speaker_embedding
 
             except Exception as e:
                 logger.error(f"❌ Failed to extract embeddings: {e}", exc_info=True)
