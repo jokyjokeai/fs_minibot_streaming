@@ -461,9 +461,13 @@ class ChatterboxTTSService:
                 logger.info(f"⚡ Zero-shot mode: Using single file")
                 source_file = audio_files[0]
 
-                # Copier fichier de référence
+                # Copier fichier de référence (seulement si différent)
                 reference_path = voice_folder / "reference.wav"
-                shutil.copy2(source_file, reference_path)
+                if Path(source_file).resolve() != reference_path.resolve():
+                    shutil.copy2(source_file, reference_path)
+                    logger.info(f"   Copied reference.wav from {Path(source_file).name}")
+                else:
+                    logger.info(f"   Using existing reference.wav")
 
                 audio_prompt_path = str(reference_path)
 
