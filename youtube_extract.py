@@ -1848,17 +1848,15 @@ class YouTubeVoiceExtractor:
             avg_score = sum(score for _, score in top_30_chunks) / len(top_30_chunks)
             logger.info(f"   Average quality score: {avg_score:.1f}/100")
 
-            # 5b. Filtrage Vosk pour top 10 final
-            logger.info(f"\n🎤 Vosk filtering - selecting top 10 validated chunks...")
-            top_10_validated = self.filter_chunks_with_vosk(
-                top_30_chunks, target_count=10
-            )
+            # 5b. Skip Vosk filtering (too strict, quality scoring is enough)
+            # Note: Vosk validation disabled - it rejects too many good chunks
+            # Quality scoring (SNR, RMS, spectral) is sufficient for voice cloning
+            logger.info(f"\n✅ Skipping Vosk validation (using top {min(10, len(top_30_chunks))} quality-scored chunks)")
 
-            if not top_10_validated:
-                logger.error("❌ No validated chunks after Vosk filtering")
-                return False
+            # Take top 10 from quality scoring directly
+            top_10_validated = [(path, score, "") for path, score in top_30_chunks[:10]]
 
-            logger.info(f"✅ Validated {len(top_10_validated)} chunks")
+            logger.info(f"✅ Selected {len(top_10_validated)} chunks for final reference")
 
             # 5c. Concaténation finale
             logger.info(f"\n🔗 Concatenating final reference.wav...")
