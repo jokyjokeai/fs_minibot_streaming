@@ -423,22 +423,21 @@ class ChatterboxVoiceCloner:
             temp_output = output_dir / "uvr_temp"
             temp_output.mkdir(exist_ok=True)
 
-            # Initialiser UVR Separator
+            # Initialiser UVR Separator avec modèle vocal
+            # Version 0.12.0: Le modèle se spécifie dans le constructeur
             separator = Separator(
-                log_level=logging.WARNING,  # Réduire verbosité
+                log_level=logging.WARNING,
                 output_dir=str(temp_output),
-                output_format="wav"
+                output_format="wav",
+                model_file_dir="/tmp/audio-separator-models/"  # Cache pour modèles
             )
 
-            # Charger modèle vocal (version 0.12.0 API)
-            # Utiliser modèle MDX-Net pour vocals
+            # Charger modèle MDX-Net pour extraction vocale
             # Le modèle sera téléchargé automatiquement au premier usage
+            separator.load_model("UVR-MDX-NET-Voc_FT.onnx")
 
-            # Séparer vocals avec modèle MDX-Net
-            output_files = separator.separate(
-                str(audio_path),
-                model_filename="UVR-MDX-NET-Voc_FT.onnx"  # Modèle vocal MDX
-            )
+            # Séparer vocals
+            output_files = separator.separate(str(audio_path))
 
             # UVR génère 2 fichiers: vocals et instrumental
             # On garde juste les vocals
