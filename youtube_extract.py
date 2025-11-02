@@ -1328,11 +1328,17 @@ class YouTubeVoiceExtractor:
                     silence = AudioSegment.silent(duration=200)
                     final_audio = final_audio + silence + chunk
 
+            # Upsampler à 44.1kHz (optimal pour Chatterbox TTS)
+            logger.info(f"🔄 Upsampling to 44.1kHz (Chatterbox optimal)...")
+            final_audio = final_audio.set_frame_rate(44100)
+            final_audio = final_audio.set_channels(1)  # Ensure mono
+
             # Exporter
             final_audio.export(str(output_path), format="wav")
 
             duration = len(final_audio) / 1000
             logger.info(f"✅ Reference audio created: {output_path.name}")
+            logger.info(f"   Format: 44.1kHz mono WAV (Chatterbox optimal)")
             logger.info(f"   Duration: {duration:.1f}s ({duration/60:.1f}min)")
             logger.info(f"   Chunks: {len(chunks)}")
 
@@ -1350,7 +1356,15 @@ class YouTubeVoiceExtractor:
 
             logger.info(f"   Metadata saved: {metadata_path.name}")
 
-            return output_path
+            # Calculer qualité moyenne
+            avg_quality = sum(score for _, score, _ in chunks) / len(chunks)
+
+            return {
+                "path": output_path,
+                "duration": duration,
+                "avg_quality": avg_quality,
+                "chunks_count": len(chunks)
+            }
 
         except Exception as e:
             logger.error(f"❌ Concatenation failed: {e}")
