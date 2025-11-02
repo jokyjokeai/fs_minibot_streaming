@@ -715,9 +715,8 @@ class YouTubeVoiceExtractor:
                         model_file_dir=str(models_dir)
                     )
 
-                # Use faster model: UVR_MDXNET_KARA_2 is faster than Inst_HQ_3
-                # Alternative: "UVR-MDX-NET-Inst_Main" (balanced) or "UVR-MDX-NET-Inst_HQ_3" (best quality, slowest)
-                separator.load_model("UVR_MDXNET_KARA_2")
+                # Use fastest model for speed: Inst_1 (fastest) > Inst_Main (balanced) > KARA_2 > HQ_3 (slowest)
+                separator.load_model("UVR-MDX-NET-Inst_1")
 
                 output_files = separator.separate(str(normalized_file))
 
