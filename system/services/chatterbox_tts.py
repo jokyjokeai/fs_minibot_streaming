@@ -72,18 +72,18 @@ class ChatterboxTTSService:
         # Configuration
         self.tts_config = {
             "device": "cuda" if torch.cuda.is_available() else "cpu",
-            "language": "fr",  # Langue par défaut
+            "language": "fr",  # Langue par défaut (en=English, fr=French)
             "sample_rate": 24000,  # Chatterbox génère en 24kHz
             "output_format": "wav",
 
-            # Paramètres de qualité optimaux
-            "exaggeration": 0.5,      # Emotion control (0.25-2.0, défaut 0.5)
-            "cfg_weight": 0.5,        # CFG scale pour pacing (0.3-0.7, défaut 0.5)
-            "temperature": 0.9,       # Randomness (défaut 0.9)
-            "top_p": 0.95,           # Nucleus sampling (défaut 0.95)
+            # Paramètres optimisés pour voix naturelle française
+            "exaggeration": 0.4,      # Emotion control - Moins expressif = plus naturel
+            "cfg_weight": 0.55,       # CFG scale pour pacing - Légèrement plus lent
+            "temperature": 0.85,      # Randomness - Plus stable
+            "top_p": 0.93,           # Nucleus sampling - Plus conservateur
             "min_p": 0.1,            # Min probability (défaut 0.1)
-            "repetition_penalty": 1.3,  # Anti-répétition (défaut 1.3)
-            "n_timesteps": 32,       # Diffusion steps (plus = meilleure qualité)
+            "repetition_penalty": 1.4,  # Anti-répétition - Plus strict
+            "n_timesteps": 40,       # Diffusion steps - Meilleure qualité
             "max_new_tokens": 4096,  # Max ~163 secondes
         }
 
@@ -311,16 +311,20 @@ class ChatterboxTTSService:
 
             # Paramètres optimisés pour voix naturelle (appels téléphoniques)
             # Si pas d'override, utiliser paramètres optimisés
-            exag = exaggeration if exaggeration is not None else 0.35  # Voix naturelle
-            cfg = cfg_weight if cfg_weight is not None else 0.45  # Bon équilibre
+            exag = exaggeration if exaggeration is not None else 0.4  # Voix naturelle française
+            cfg = cfg_weight if cfg_weight is not None else 0.55  # Pacing légèrement ralenti
 
-            # Générer avec voice cloning
+            # Générer avec voice cloning + tous les paramètres
             wav = self.mtl_model.generate(
                 text,
                 language_id=language,
                 audio_prompt_path=audio_prompt_path,
                 exaggeration=exag,
                 cfg_weight=cfg,
+                temperature=self.tts_config["temperature"],
+                top_p=self.tts_config["top_p"],
+                repetition_penalty=self.tts_config["repetition_penalty"],
+                n_timesteps=self.tts_config["n_timesteps"],
             )
 
             # Sauvegarder
