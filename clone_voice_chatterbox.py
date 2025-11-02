@@ -782,7 +782,8 @@ def main():
     parser.add_argument("--no-scoring", action="store_true", help="Désactiver le scoring (utiliser un seul fichier)")
     parser.add_argument("--max-files", type=int, default=10, help="Nombre max de fichiers pour few-shot (défaut: 10)")
     parser.add_argument("--score-only", action="store_true", help="Juste scorer les fichiers sans cloner")
-    parser.add_argument("--uvr", action="store_true", help="Utiliser UVR pour extraire vocals (enlève musique/bruit)")
+    parser.add_argument("--uvr", action="store_true", default=True, help="Utiliser UVR pour extraire vocals (activé par défaut)")
+    parser.add_argument("--no-uvr", action="store_false", dest="uvr", help="Désactiver UVR (utiliser fichiers bruts)")
 
     args = parser.parse_args()
 
