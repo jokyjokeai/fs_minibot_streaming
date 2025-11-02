@@ -192,7 +192,7 @@ class YouTubeVoiceExtractor:
             # Charger pipeline (télécharge automatiquement si nécessaire)
             logger.info("   Loading pipeline...")
             pipeline = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-3.1",
+                "pyannote/speaker-diarization-community-1",
                 use_auth_token=self.hf_token
             )
 
@@ -226,7 +226,7 @@ class YouTubeVoiceExtractor:
         except Exception as e:
             logger.error(f"❌ Diarization failed: {e}")
             logger.error("   Make sure you accepted terms at:")
-            logger.error("   https://huggingface.co/pyannote/speaker-diarization-3.1")
+            logger.error("   https://huggingface.co/pyannote/speaker-diarization-community-1")
             return None
 
     def analyze_speakers(self, diarization: object) -> Dict[str, float]:
