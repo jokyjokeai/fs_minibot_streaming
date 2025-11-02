@@ -315,6 +315,99 @@ class VoiceCloner:
             logger.error(f"    ❌ Conversion failed: {e}")
             return False
 
+    def _calculate_audio_quality_score(self, audio_data, sample_rate: int, file_size: int) -> float:
+        """
+        Calcule un score de qualité audio basé sur plusieurs critères.
+        Score plus élevé = meilleure qualité pour le clonage vocal.
+
+        Critères (inspirés d'ElevenLabs):
+        1. SNR (Signal-to-Noise Ratio) - > 40 dB optimal
+        2. Durée optimale (3-15 secondes)
+        3. Volume stable (peu de variations)
+        4. Pas de silence prolongé
+        5. Taille fichier (corrélation avec qualité)
+
+        Returns:
+            Score de 0 à 100
+        """
+        import numpy as np
+
+        try:
+            # Convertir en mono si stéréo
+            if len(audio_data.shape) > 1:
+                audio_data = np.mean(audio_data, axis=1)
+
+            duration = len(audio_data) / sample_rate
+            score = 0.0
+
+            # Critère 1: Durée optimale (3-15 secondes = meilleur)
+            if 3 <= duration <= 15:
+                score += 30  # Durée parfaite
+            elif 1 <= duration < 3:
+                score += 20  # Un peu court mais OK
+            elif 15 < duration <= 30:
+                score += 25  # Un peu long mais OK
+            elif duration > 30:
+                score += 10  # Trop long
+            else:
+                score += 5  # Trop court
+
+            # Critère 2: SNR (Signal-to-Noise Ratio)
+            # Estimer le bruit via les 10% les plus faibles en amplitude
+            sorted_abs = np.sort(np.abs(audio_data))
+            noise_floor = np.mean(sorted_abs[:int(len(sorted_abs) * 0.1)])
+            signal_level = np.mean(np.abs(audio_data))
+
+            if noise_floor > 0:
+                snr_estimate = 20 * np.log10(signal_level / noise_floor)
+                if snr_estimate > 40:
+                    score += 30  # SNR excellent (comme ElevenLabs)
+                elif snr_estimate > 30:
+                    score += 20  # SNR bon
+                elif snr_estimate > 20:
+                    score += 10  # SNR acceptable
+            else:
+                score += 15  # Pas de bruit détectable
+
+            # Critère 3: Stabilité du volume (faible écart-type = stable)
+            # Calculer l'enveloppe RMS par segments de 100ms
+            frame_length = int(0.1 * sample_rate)  # 100ms
+            rms_values = []
+            for i in range(0, len(audio_data) - frame_length, frame_length):
+                frame = audio_data[i:i+frame_length]
+                rms = np.sqrt(np.mean(frame**2))
+                rms_values.append(rms)
+
+            if len(rms_values) > 0:
+                rms_std = np.std(rms_values)
+                rms_mean = np.mean(rms_values)
+                if rms_mean > 0:
+                    variation_coef = rms_std / rms_mean
+                    if variation_coef < 0.3:
+                        score += 25  # Très stable
+                    elif variation_coef < 0.5:
+                        score += 15  # Stable
+                    else:
+                        score += 5  # Instable
+
+            # Critère 4: Pas de silence prolongé
+            silence_threshold = np.max(np.abs(audio_data)) * 0.01  # 1% du max
+            silence_frames = np.sum(np.abs(audio_data) < silence_threshold)
+            silence_ratio = silence_frames / len(audio_data)
+
+            if silence_ratio < 0.1:
+                score += 15  # Très peu de silence
+            elif silence_ratio < 0.3:
+                score += 10  # Silence acceptable
+            else:
+                score += 0  # Trop de silence
+
+            return min(score, 100.0)  # Cap à 100
+
+        except Exception as e:
+            logger.warning(f"    ⚠️  Error calculating quality score: {e}")
+            return 0.0
+
     def calculate_total_duration(self, audio_files: List[Path]) -> float:
         """
         Calcule la durée totale des fichiers audio
@@ -529,39 +622,63 @@ class VoiceCloner:
         # XTTS va extraire les embeddings de chaque fichier et les moyenner
         logger.info(f"\n🎤 Cloning voice '{voice_name}' with averaged embeddings...")
 
-        # Collecter TOUS les fichiers valides (pas vide, taille > 10KB)
-        valid_audio_files = []
+        # Analyser et scorer TOUS les fichiers pour sélectionner les meilleurs
+        logger.info(f"\n🔍 Analyzing audio quality to select best files...")
+
+        scored_files = []
         MIN_FILE_SIZE = 10 * 1024  # 10KB minimum
 
         for cleaned_file in cleaned_files:
             try:
                 file_size = cleaned_file.stat().st_size
-                if file_size >= MIN_FILE_SIZE:
-                    # Vérifier que le fichier peut être décodé
-                    import soundfile as sf
-                    try:
-                        data, sr = sf.read(str(cleaned_file))
-                        # Vérifier qu'il y a des données audio valides
-                        if len(data) > 0 and sr > 0:
-                            valid_audio_files.append(str(cleaned_file))
-                            logger.info(f"    ✅ Added: {cleaned_file.name} ({file_size/1024:.1f}KB)")
-                    except Exception as e:
-                        logger.warning(f"    ⚠️  Skipping corrupt file {cleaned_file.name}: {e}")
-                        continue
-                else:
-                    logger.warning(f"    ⚠️  Skipping small file {cleaned_file.name} ({file_size} bytes < {MIN_FILE_SIZE} bytes)")
+                if file_size < MIN_FILE_SIZE:
+                    continue
+
+                # Lire le fichier audio
+                import soundfile as sf
+                import numpy as np
+
+                data, sr = sf.read(str(cleaned_file))
+
+                if len(data) == 0 or sr == 0:
+                    continue
+
+                # Calculer le score de qualité
+                score = self._calculate_audio_quality_score(data, sr, file_size)
+
+                if score > 0:
+                    scored_files.append({
+                        'path': str(cleaned_file),
+                        'name': cleaned_file.name,
+                        'score': score,
+                        'size': file_size,
+                        'duration': len(data) / sr
+                    })
+                    logger.info(f"    📊 {cleaned_file.name}: score={score:.2f}, duration={len(data)/sr:.1f}s")
+
             except Exception as e:
-                logger.warning(f"    ⚠️  Error checking file {cleaned_file.name}: {e}")
+                logger.warning(f"    ⚠️  Error analyzing {cleaned_file.name}: {e}")
                 continue
 
-        if not valid_audio_files:
-            logger.error(f"❌ No valid audio files found (all files are corrupt or too small)")
+        if not scored_files:
+            logger.error(f"❌ No valid audio files found")
             return False
 
-        logger.info(f"\n📊 Using {len(valid_audio_files)} files for averaged embeddings")
+        # Trier par score décroissant et sélectionner les 10 meilleurs
+        scored_files.sort(key=lambda x: x['score'], reverse=True)
 
-        # Passer TOUS les fichiers à clone_voice() pour moyenne des embeddings
-        success = self.tts.clone_voice(valid_audio_files, voice_name)
+        # Sélectionner les N meilleurs (max 10 ou tous si moins de 10)
+        MAX_BEST_FILES = 10
+        best_files = scored_files[:min(MAX_BEST_FILES, len(scored_files))]
+
+        logger.info(f"\n🎯 Selected {len(best_files)} BEST files (out of {len(scored_files)} analyzed):")
+        for i, f in enumerate(best_files, 1):
+            logger.info(f"    {i}. {f['name']} - score: {f['score']:.2f}, duration: {f['duration']:.1f}s")
+
+        best_file_paths = [f['path'] for f in best_files]
+
+        # Passer les meilleurs fichiers à clone_voice() pour moyenne des embeddings
+        success = self.tts.clone_voice(best_file_paths, voice_name)
 
         if not success:
             logger.error(f"❌ Voice cloning failed")
