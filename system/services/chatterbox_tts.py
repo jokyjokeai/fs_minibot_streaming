@@ -393,15 +393,26 @@ class ChatterboxTTSService:
                 # Limiter au nombre max
                 selected_files = audio_files[:max_files]
 
-                # Normaliser volume de tous les fichiers à -3dB
-                logger.info(f"📊 Normalizing volume to -3dB...")
+                # Convertir et normaliser tous les fichiers
+                logger.info(f"📊 Converting to 22050Hz mono + normalizing to -3dB...")
                 normalized_files = []
+                TARGET_SR = 22050
 
                 for i, audio_file in enumerate(selected_files, 1):
                     # Charger audio
                     waveform, sr = torchaudio.load(str(audio_file))
 
-                    # Normaliser au pic à -3dB
+                    # 1. Convertir en mono si nécessaire
+                    if waveform.shape[0] > 1:
+                        waveform = torch.mean(waveform, dim=0, keepdim=True)
+
+                    # 2. Resample vers 22050Hz si nécessaire
+                    if sr != TARGET_SR:
+                        resampler = torchaudio.transforms.Resample(sr, TARGET_SR)
+                        waveform = resampler(waveform)
+                        sr = TARGET_SR
+
+                    # 3. Normaliser au pic à -3dB
                     peak = waveform.abs().max()
                     if peak > 0:
                         target_peak = 10 ** (-3.0 / 20.0)  # -3dB en linéaire
@@ -413,7 +424,7 @@ class ChatterboxTTSService:
                     torchaudio.save(temp_file.name, waveform, sr)
                     normalized_files.append(temp_file.name)
 
-                    logger.info(f"   [{i}/{len(selected_files)}] Normalized: {Path(audio_file).name}")
+                    logger.info(f"   [{i}/{len(selected_files)}] Converted & normalized: {Path(audio_file).name}")
 
                 logger.info(f"✅ {len(normalized_files)} files normalized and ready")
 
