@@ -325,10 +325,16 @@ class YouTubeVoiceExtractor:
                         temp_path = Path(temp_file.name)
 
                         # Transcrire avec Vosk
-                        transcription = vosk_stt.transcribe_file(temp_path)
+                        transcription_result = vosk_stt.transcribe_file(temp_path)
                         temp_path.unlink()  # Supprimer fichier temp
 
-                    if not transcription:
+                    # Vérifier si transcription valide
+                    if not transcription_result or not isinstance(transcription_result, dict):
+                        total_filtered += 1
+                        continue
+
+                    transcription_text = transcription_result.get('text', '').strip()
+                    if not transcription_text:
                         total_filtered += 1
                         continue  # Skip segment vide
 
@@ -349,7 +355,7 @@ class YouTubeVoiceExtractor:
 
                     # Comparer transcription Vosk vs sous-titres
                     sub_text = ' '.join([s['text'] for s in matching_subs]).lower()
-                    vosk_text = transcription.lower()
+                    vosk_text = transcription_text.lower()
 
                     # Simple similarité: compter mots communs
                     sub_words = set(sub_text.split())
