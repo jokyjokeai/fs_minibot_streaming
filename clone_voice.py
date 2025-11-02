@@ -116,7 +116,7 @@ class ChatterboxVoiceCloner:
         voice_name: str,
         force: bool = False,
         use_scoring: bool = True,
-        max_files: int = 20,  # Top 20 best files (was 10)
+        max_files: int = 30,  # Max files limit (dynamic selection targets 60-150s)
         use_uvr: bool = False
     ) -> bool:
         """
@@ -126,7 +126,7 @@ class ChatterboxVoiceCloner:
             voice_name: Nom de la voix
             force: Force le re-clonage même si déjà fait
             use_scoring: Utilise scoring pour sélectionner meilleurs fichiers
-            max_files: Nombre max de fichiers pour few-shot
+            max_files: Limite absolue de fichiers (sélection dynamique pour 60-150s total)
             use_uvr: Utiliser UVR pour extraire vocals avant scoring
 
         Returns:
@@ -755,21 +755,64 @@ class ChatterboxVoiceCloner:
         # Trier par score (meilleur en premier)
         scored_files.sort(key=lambda x: x[1], reverse=True)
 
-        # Sélectionner top N
-        selected_files = [f[0] for f in scored_files[:top_n]]
-
-        # Afficher résumé
+        # Sélection DYNAMIQUE pour atteindre 60-150 secondes total
+        # Au lieu de top_n fixe, on prend fichiers jusqu'à durée cible
         logger.info(f"\n{'='*60}")
-        logger.info(f"✅ TOP {len(selected_files)} FILES SELECTED:")
+        logger.info(f"🎯 DYNAMIC SELECTION: Target 60-150s total duration")
         logger.info(f"{'='*60}")
 
-        for i, (audio_file, score, metrics) in enumerate(scored_files[:top_n], 1):
-            duration = metrics.get('duration', 0)
-            snr = metrics.get('snr', 0)
-            logger.info(f"{i:2d}. {audio_file.name:30s} | Score: {score:5.1f} | {duration:.1f}s | SNR: {snr:.1f}dB")
+        MIN_TOTAL_DURATION = 60.0   # 1 minute minimum
+        MAX_TOTAL_DURATION = 150.0  # 2.5 minutes maximum
 
-        if len(scored_files) > top_n:
-            logger.info(f"\n⏭️  Skipped {len(scored_files) - top_n} lower-scored files")
+        selected_files = []
+        selected_scores = []
+        total_duration = 0.0
+
+        for audio_file, score, metrics in scored_files:
+            duration = metrics.get('duration', 0)
+
+            # Si on dépasse le MAX, arrêter
+            if total_duration + duration > MAX_TOTAL_DURATION:
+                # Sauf si on n'a pas encore atteint le MIN
+                if total_duration >= MIN_TOTAL_DURATION:
+                    logger.info(f"\n⏸️  Stopped at {total_duration:.1f}s (max {MAX_TOTAL_DURATION}s)")
+                    break
+                # Sinon, prendre ce fichier même si on dépasse un peu
+                elif total_duration < MIN_TOTAL_DURATION and len(selected_files) < top_n:
+                    selected_files.append(audio_file)
+                    selected_scores.append((audio_file, score, metrics))
+                    total_duration += duration
+                    logger.info(f"✅ {len(selected_files):2d}. {audio_file.name:30s} | {score:5.1f} | {duration:.1f}s (total: {total_duration:.1f}s)")
+                    break
+            else:
+                selected_files.append(audio_file)
+                selected_scores.append((audio_file, score, metrics))
+                total_duration += duration
+                logger.info(f"✅ {len(selected_files):2d}. {audio_file.name:30s} | {score:5.1f} | {duration:.1f}s (total: {total_duration:.1f}s)")
+
+            # Sécurité: limite absolue au nombre de fichiers
+            if len(selected_files) >= top_n:
+                logger.info(f"\n⏸️  Reached max {top_n} files")
+                break
+
+        # Afficher résumé final
+        logger.info(f"\n{'='*60}")
+        logger.info(f"✅ FINAL SELECTION:")
+        logger.info(f"{'='*60}")
+        logger.info(f"   Files selected: {len(selected_files)}")
+        logger.info(f"   Total duration: {total_duration:.1f}s ({total_duration/60:.1f} min)")
+        logger.info(f"   Target range: {MIN_TOTAL_DURATION}-{MAX_TOTAL_DURATION}s")
+
+        if total_duration < MIN_TOTAL_DURATION:
+            logger.warning(f"⚠️  Total duration ({total_duration:.1f}s) below minimum ({MIN_TOTAL_DURATION}s)")
+            logger.warning(f"   Voice cloning quality may be reduced")
+        elif total_duration > MAX_TOTAL_DURATION:
+            logger.warning(f"⚠️  Total duration ({total_duration:.1f}s) above maximum ({MAX_TOTAL_DURATION}s)")
+        else:
+            logger.info(f"✅ Duration is optimal for voice cloning!")
+
+        if len(scored_files) > len(selected_files):
+            logger.info(f"\n⏭️  Skipped {len(scored_files) - len(selected_files)} lower-scored files")
 
         return selected_files
 
@@ -782,7 +825,7 @@ def main():
     parser.add_argument("--theme", type=str, help="Thème spécifique pour TTS (crypto, energie, etc.)")
     parser.add_argument("--force", action="store_true", help="Force le re-clonage même si déjà fait")
     parser.add_argument("--no-scoring", action="store_true", help="Désactiver le scoring (utiliser un seul fichier)")
-    parser.add_argument("--max-files", type=int, default=10, help="Nombre max de fichiers pour few-shot (défaut: 10)")
+    parser.add_argument("--max-files", type=int, default=30, help="Nombre max de fichiers (limite absolue, défaut: 30)")
     parser.add_argument("--score-only", action="store_true", help="Juste scorer les fichiers sans cloner")
     parser.add_argument("--uvr", action="store_true", default=True, help="Utiliser UVR pour extraire vocals (activé par défaut)")
     parser.add_argument("--no-uvr", action="store_false", dest="uvr", help="Désactiver UVR (utiliser fichiers bruts)")

@@ -351,7 +351,7 @@ class ChatterboxTTSService:
             "cached_voices": list(self.cached_voices.keys()),
         }
 
-    def clone_voice(self, audio_path, voice_name: str, use_few_shot: bool = True, max_files: int = 20) -> bool:
+    def clone_voice(self, audio_path, voice_name: str, use_few_shot: bool = True, max_files: int = 30) -> bool:
         """
         Clone une voix avec few-shot learning (meilleure qualité).
 

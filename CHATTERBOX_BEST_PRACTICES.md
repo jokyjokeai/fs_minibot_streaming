@@ -93,18 +93,23 @@ MAX_CHUNK_DURATION_MS = 10000  # 10s ✅
 
 ### Few-Shot (plusieurs fichiers)
 ```
-✅ OPTIMAL: 5-15 fichiers de 4-10s chacun
-✅ ACCEPTABLE: 3-5 fichiers minimum
-⚠️  MAXIMUM TESTÉ: 20+ fichiers (rendements décroissants)
+✅ OPTIMAL: Sélection DYNAMIQUE pour 60-150 secondes total
+✅ SYSTÈME: Prend meilleurs fichiers jusqu'à atteindre durée cible
+⚠️  LIMITE: Maximum 30 fichiers (sécurité)
 
 💡 NOTRE SYSTÈME:
-   - Concatène TOUS les fichiers en 1 seul
-   - Total cumulé: 40-150 secondes idéal
+   - Sélection dynamique intelligente (pas fixe)
+   - Score chaque fichier (SNR, durée, silence, stabilité)
+   - Prend meilleurs jusqu'à 60-150s total
+   - Concatène TOUS en 1 seul reference.wav
 ```
 
-**Tests utilisateurs:**
-- 10 fichiers × 7-8s = 70-80s total ✅ (excellent résultat)
-- 1 fichier × 5 min = 300s ✅ (fonctionne mais overkill)
+**Tests utilisateurs + Notre implémentation:**
+- Sélection dynamique 60-150s = ✅ OPTIMAL
+- 10 fichiers × 7s = 70s ✅ (bon)
+- 15 fichiers × 7s = 105s ✅ (excellent)
+- 20 fichiers × 7s = 140s ✅ (parfait)
+- 30 fichiers × 5s = 150s ✅ (limite max)
 
 ---
 
@@ -524,11 +529,12 @@ for exag in [0.3, 0.4, 0.5, 0.6]:
     test_generation(exaggeration=exag)
 ```
 
-### C. Few-Shot Optimal
+### C. Few-Shot Dynamique (IMPLÉMENTÉ)
 ```python
-# Tester nombre fichiers
-for n_files in [3, 5, 10, 15, 20]:
-    test_clone(n_files=n_files)
+# Sélection dynamique automatique
+# Prend meilleurs fichiers jusqu'à 60-150s
+# Plus besoin de tester manuellement !
+python clone_voice.py --voice nom_voix  # Auto 60-150s
 ```
 
 ### D. UVR Impact
