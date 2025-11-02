@@ -526,12 +526,12 @@ class VoiceCloner:
                 logger.error("❌ Coqui TTS not available")
                 return False
 
-        # Cloner voix (utilise le premier fichier valide comme référence principale)
-        # Note: Coqui XTTS v2 peut utiliser plusieurs fichiers pour améliorer qualité
-        logger.info(f"\n🎤 Cloning voice '{voice_name}'...")
+        # Cloner voix avec TOUS les fichiers valides pour embeddings moyennés
+        # XTTS va extraire les embeddings de chaque fichier et les moyenner
+        logger.info(f"\n🎤 Cloning voice '{voice_name}' with averaged embeddings...")
 
-        # Trouver le premier fichier valide (pas vide, taille > 10KB)
-        reference_audio = None
+        # Collecter TOUS les fichiers valides (pas vide, taille > 10KB)
+        valid_audio_files = []
         MIN_FILE_SIZE = 10 * 1024  # 10KB minimum
 
         for cleaned_file in cleaned_files:
@@ -544,9 +544,8 @@ class VoiceCloner:
                         data, sr = sf.read(str(cleaned_file))
                         # Vérifier qu'il y a des données audio valides
                         if len(data) > 0 and sr > 0:
-                            reference_audio = str(cleaned_file)
-                            logger.info(f"    ✅ Selected reference: {cleaned_file.name} ({file_size/1024:.1f}KB)")
-                            break
+                            valid_audio_files.append(str(cleaned_file))
+                            logger.info(f"    ✅ Added: {cleaned_file.name} ({file_size/1024:.1f}KB)")
                     except Exception as e:
                         logger.warning(f"    ⚠️  Skipping corrupt file {cleaned_file.name}: {e}")
                         continue
@@ -556,11 +555,14 @@ class VoiceCloner:
                 logger.warning(f"    ⚠️  Error checking file {cleaned_file.name}: {e}")
                 continue
 
-        if not reference_audio:
-            logger.error(f"❌ No valid reference audio file found (all files are corrupt or too small)")
+        if not valid_audio_files:
+            logger.error(f"❌ No valid audio files found (all files are corrupt or too small)")
             return False
 
-        success = self.tts.clone_voice(reference_audio, voice_name)
+        logger.info(f"\n📊 Using {len(valid_audio_files)} files for averaged embeddings")
+
+        # Passer TOUS les fichiers à clone_voice() pour moyenne des embeddings
+        success = self.tts.clone_voice(valid_audio_files, voice_name)
 
         if not success:
             logger.error(f"❌ Voice cloning failed")

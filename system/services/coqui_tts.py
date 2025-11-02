@@ -206,44 +206,30 @@ class CoquiTTS:
                 return False
 
             embeddings_path = voice_folder / "embeddings.pth"
-            reference_wav = voice_folder / "reference.wav"
 
-            # Charger embeddings.pth si existe
-            if embeddings_path.exists():
-                try:
-                    embeddings_data = torch.load(embeddings_path, map_location=self.tts_config["device"])
+            # Charger embeddings.pth (OBLIGATOIRE - plus de fallback reference.wav)
+            if not embeddings_path.exists():
+                logger.error(f"❌ No embeddings.pth found for voice '{voice_name}'")
+                logger.error(f"   Please re-clone the voice to extract embeddings")
+                return False
 
-                    # Vérifier si ce sont de VRAIS embeddings ou juste un marqueur
-                    if isinstance(embeddings_data, dict) and "note" in embeddings_data:
-                        # Ancien format marqueur - utiliser reference.wav
-                        logger.info(f"📝 Voice '{voice_name}' uses reference.wav (no precomputed embeddings)")
-                        if reference_wav.exists():
-                            self.cached_reference_wavs[voice_name] = str(reference_wav)
-                            return True
-                        return False
+            try:
+                embeddings_data = torch.load(embeddings_path, map_location=self.tts_config["device"])
 
-                    # VRAIS embeddings - les mettre en cache !
-                    self.cached_embeddings[voice_name] = embeddings_data
-                    logger.info(f"🚀 Voice '{voice_name}' embeddings loaded in cache ({embeddings_data.shape})")
-
-                    # Aussi cacher reference.wav pour fallback
-                    if reference_wav.exists():
-                        self.cached_reference_wavs[voice_name] = str(reference_wav)
-
-                    return True
-
-                except Exception as e:
-                    logger.error(f"❌ Failed to load embeddings for '{voice_name}': {e}")
+                # Vérifier format (doit être un tensor, pas un dict marqueur)
+                if isinstance(embeddings_data, dict):
+                    logger.error(f"❌ Old marker format detected for '{voice_name}'")
+                    logger.error(f"   Please re-clone the voice to extract real embeddings")
                     return False
 
-            # Pas d'embeddings, utiliser reference.wav
-            elif reference_wav.exists():
-                self.cached_reference_wavs[voice_name] = str(reference_wav)
-                logger.info(f"📝 Voice '{voice_name}' will use reference.wav (no embeddings)")
+                # Charger embeddings en cache
+                self.cached_embeddings[voice_name] = embeddings_data
+                logger.info(f"🚀 Voice '{voice_name}' embeddings loaded in cache ({embeddings_data.shape})")
+
                 return True
 
-            else:
-                logger.error(f"❌ No embeddings or reference.wav found for voice '{voice_name}'")
+            except Exception as e:
+                logger.error(f"❌ Failed to load embeddings for '{voice_name}': {e}")
                 return False
 
         except Exception as e:
@@ -324,44 +310,25 @@ class CoquiTTS:
             return None
 
         try:
-            # Déterminer quelle référence utiliser
-            voice_ref = reference_voice or self.reference_voice_path
-
-            # Si voice_name fourni, vérifier si embeddings cachés disponibles
-            use_cached_embeddings = False
-            if voice_name and voice_name in self.cached_embeddings:
-                use_cached_embeddings = True
-                logger.debug(f"🚀 Using cached embeddings for voice '{voice_name}'")
-
-            # Sinon, utiliser reference_voice ou fallback
-            if not use_cached_embeddings:
-                if not voice_ref or not Path(voice_ref).exists():
-                    logger.error(f"Reference voice not found: {voice_ref}")
-                    return self.synthesize(text, output_file)
+            # Vérifier que voice_name est fourni et embeddings sont cachés
+            if not voice_name or voice_name not in self.cached_embeddings:
+                logger.error(f"❌ Voice '{voice_name}' not loaded in cache")
+                logger.error(f"   Call load_voice('{voice_name}') first or use reference_voice parameter")
+                return None
 
             if not output_file:
                 output_file = tempfile.mktemp(suffix=".wav", dir=config.AUDIO_DIR)
 
             start_time = time.time()
 
-            # Synthèse avec embeddings cachés ou speaker_wav
-            if use_cached_embeddings:
-                # Utiliser embeddings préchargés (RAPIDE)
-                embeddings = self.cached_embeddings[voice_name]
-                self.tts_model.tts_to_file(
-                    text=text,
-                    file_path=output_file,
-                    speaker_embedding=embeddings,
-                    language=self.tts_config["language"]
-                )
-            else:
-                # Fallback: calculer embeddings à la volée depuis speaker_wav (LENT)
-                self.tts_model.tts_to_file(
-                    text=text,
-                    file_path=output_file,
-                    speaker_wav=voice_ref,
-                    language=self.tts_config["language"]
-                )
+            # Synthèse avec embeddings cachés (RAPIDE - plus de fallback speaker_wav)
+            embeddings = self.cached_embeddings[voice_name]
+            self.tts_model.tts_to_file(
+                text=text,
+                file_path=output_file,
+                speaker_embedding=embeddings,
+                language=self.tts_config["language"]
+            )
 
             generation_time = time.time() - start_time
 
@@ -372,8 +339,7 @@ class CoquiTTS:
                 / self.stats["total_generations"]
             )
 
-            cache_status = "cached" if use_cached_embeddings else "on-the-fly"
-            logger.info(f"✅ TTS ({cache_status}) generated in {generation_time:.2f}s: {output_file}")
+            logger.info(f"✅ TTS (cached embeddings) generated in {generation_time:.2f}s: {output_file}")
 
             return output_file
 
@@ -381,12 +347,13 @@ class CoquiTTS:
             logger.error(f"❌ TTS voice cloning error: {e}", exc_info=True)
             return None
 
-    def clone_voice(self, audio_path: str, voice_name: str) -> bool:
+    def clone_voice(self, audio_path, voice_name: str) -> bool:
         """
         Clone une voix et sauvegarde l'embedding de manière persistante.
+        Supporte fichier unique OU liste de fichiers pour embeddings moyennés.
 
         Args:
-            audio_path: Chemin vers fichier audio de référence
+            audio_path: Chemin fichier audio OU liste de chemins pour moyenne
             voice_name: Nom de la voix (ex: julie, marc)
 
         Returns:
@@ -397,68 +364,67 @@ class CoquiTTS:
             return False
 
         try:
-            audio_file = Path(audio_path)
-            if not audio_file.exists():
-                logger.error(f"Audio file not found: {audio_path}")
-                return False
+            # Supporter fichier unique ou liste
+            if isinstance(audio_path, (list, tuple)):
+                audio_files = [Path(p) for p in audio_path]
+                # Vérifier que tous existent
+                for f in audio_files:
+                    if not f.exists():
+                        logger.error(f"Audio file not found: {f}")
+                        return False
+                logger.info(f"🎤 Cloning voice '{voice_name}' from {len(audio_files)} files...")
+            else:
+                audio_files = [Path(audio_path)]
+                if not audio_files[0].exists():
+                    logger.error(f"Audio file not found: {audio_path}")
+                    return False
+                logger.info(f"🎤 Cloning voice '{voice_name}' from {audio_path}...")
 
             # Créer dossier voix
             voice_dir = config.VOICES_DIR / voice_name
             voice_dir.mkdir(parents=True, exist_ok=True)
 
-            logger.info(f"🎤 Cloning voice '{voice_name}' from {audio_path}...")
-
-            # Copier fichier référence
-            reference_path = voice_dir / "reference.wav"
-            import shutil
-            shutil.copy2(audio_path, reference_path)
-
-            # Générer embeddings (XTTS calcule automatiquement depuis speaker_wav)
-            # On va créer un fichier test pour vérifier que ça fonctionne
-            test_text = "Ceci est un test de clonage vocal."
-            test_output = voice_dir / "test_clone.wav"
-
-            start_time = time.time()
-
-            self.tts_model.tts_to_file(
-                text=test_text,
-                file_path=str(test_output),
-                speaker_wav=str(reference_path),
-                language=self.tts_config["language"]
-            )
-
-            clone_time = time.time() - start_time
-
-            # Extraire et sauvegarder les VRAIS embeddings speaker
+            # Extraire et sauvegarder les VRAIS embeddings speaker de TOUS les fichiers
             # CRITIQUE pour performance (évite recalcul à chaque génération TTS)
             embeddings_path = voice_dir / "embeddings.pth"
 
             try:
-                logger.info(f"🔬 Extracting speaker embeddings...")
+                logger.info(f"🔬 Extracting speaker embeddings from {len(audio_files)} file(s)...")
 
                 # Accéder au modèle XTTS interne pour extraire les embeddings
                 # XTTS structure: tts_model.synthesizer.tts_model.speaker_manager.encoder
                 if hasattr(self.tts_model, 'synthesizer') and hasattr(self.tts_model.synthesizer, 'tts_model'):
                     tts_internal = self.tts_model.synthesizer.tts_model
 
-                    # Charger et encoder l'audio de référence
+                    # Charger et encoder tous les fichiers audio
                     if hasattr(tts_internal, 'speaker_manager') and hasattr(tts_internal.speaker_manager, 'encoder'):
                         import torchaudio
 
-                        # Charger audio
-                        waveform, sample_rate = torchaudio.load(str(reference_path))
+                        embeddings_list = []
 
-                        # Resample si nécessaire (XTTS attend 22050Hz)
-                        if sample_rate != 22050:
-                            resampler = torchaudio.transforms.Resample(sample_rate, 22050)
-                            waveform = resampler(waveform)
+                        for audio_file in audio_files:
+                            # Charger audio
+                            waveform, sample_rate = torchaudio.load(str(audio_file))
 
-                        # Encoder pour obtenir embeddings
-                        with torch.no_grad():
-                            embeddings = tts_internal.speaker_manager.encoder.forward(
-                                waveform.to(self.tts_config["device"]),
-                                l2_norm=True
-                            )
+                            # Resample si nécessaire (XTTS attend 22050Hz)
+                            if sample_rate != 22050:
+                                resampler = torchaudio.transforms.Resample(sample_rate, 22050)
+                                waveform = resampler(waveform)
+
+                            # Encoder pour obtenir embeddings
+                            with torch.no_grad():
+                                emb = tts_internal.speaker_manager.encoder.forward(
+                                    waveform.to(self.tts_config["device"]),
+                                    l2_norm=True
+                                )
+                                embeddings_list.append(emb)
+
+                        # Moyenner tous les embeddings (comme XTTS le fait en interne)
+                        if len(embeddings_list) > 1:
+                            embeddings = torch.stack(embeddings_list).mean(dim=0)
+                            logger.info(f"📊 Averaged {len(embeddings_list)} embeddings")
+                        else:
+                            embeddings = embeddings_list[0]
 
                         # Sauvegarder embeddings
                         torch.save(embeddings.cpu(), embeddings_path)
@@ -466,7 +432,6 @@ class CoquiTTS:
 
                         # Mettre en cache immédiatement
                         self.cached_embeddings[voice_name] = embeddings
-                        self.cached_reference_wavs[voice_name] = str(reference_path)
 
                     else:
                         raise AttributeError("Speaker encoder not found in XTTS model")
@@ -474,20 +439,24 @@ class CoquiTTS:
                     raise AttributeError("XTTS internal structure not accessible")
 
             except Exception as e:
-                logger.warning(f"⚠️  Could not extract embeddings: {e}")
-                logger.info(f"📝 Creating marker file instead (will use reference.wav at runtime)")
+                logger.error(f"❌ Failed to extract embeddings: {e}", exc_info=True)
+                return False
 
-                # Fallback: créer fichier marqueur
-                marker_data = {
-                    "voice_name": voice_name,
-                    "reference_wav": str(reference_path.name),
-                    "created_at": time.time(),
-                    "note": "XTTS calculates embeddings on-the-fly from reference.wav"
-                }
-                torch.save(marker_data, embeddings_path)
+            # Générer fichier test avec les embeddings pour vérifier la qualité
+            logger.info(f"🎵 Generating test audio with embeddings...")
+            test_text = "Ceci est un test de clonage vocal avec embeddings moyennés."
+            test_output = voice_dir / "test_clone.wav"
 
-                # Cacher reference.wav pour fallback
-                self.cached_reference_wavs[voice_name] = str(reference_path)
+            start_time = time.time()
+
+            self.tts_model.tts_to_file(
+                text=test_text,
+                file_path=str(test_output),
+                speaker_embedding=embeddings,
+                language=self.tts_config["language"]
+            )
+
+            clone_time = time.time() - start_time
 
             # Créer métadonnées
             import json
@@ -495,13 +464,15 @@ class CoquiTTS:
 
             metadata = {
                 "voice_name": voice_name,
-                "reference_audio": str(reference_path.name),
+                "num_source_files": len(audio_files),
+                "source_files": [str(f.name) for f in audio_files[:5]] + (["..."] if len(audio_files) > 5 else []),
                 "created_at": datetime.now().isoformat(),
                 "model": self.tts_config["model_name"],
                 "language": self.tts_config["language"],
                 "test_audio": str(test_output.name),
                 "clone_time": clone_time,
-                "audio_duration": self._get_audio_duration(reference_path)
+                "embeddings_shape": str(embeddings.shape),
+                "embeddings_averaged": len(audio_files) > 1
             }
 
             metadata_path = voice_dir / "metadata.json"
@@ -510,7 +481,7 @@ class CoquiTTS:
 
             logger.info(f"✅ Voice '{voice_name}' cloned successfully in {clone_time:.2f}s")
             logger.info(f"📁 Saved to: {voice_dir}")
-            logger.info(f"🎵 Reference: {reference_path.name}")
+            logger.info(f"📊 Files used: {len(audio_files)}")
             logger.info(f"📄 Metadata: {metadata_path.name}")
 
             return True
