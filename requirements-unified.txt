@@ -1,0 +1,191 @@
+# MiniBotPanel v3 - Requirements UNIFIED (Chatterbox + UVR + Custom Diarization)
+# Python 3.10 ou 3.11 (IMPORTANT: Python 3.13 NON COMPATIBLE)
+# Toutes dépendances testées et compatibles ensemble
+
+# ============================================
+# SYSTEM DEPENDENCIES (installer via apt/brew)
+# ============================================
+# IMPORTANT: Ces packages DOIVENT être installés avant pip install
+# Ubuntu/Debian: apt-get install -y ffmpeg postgresql-14 libpq-dev
+# macOS:         brew install ffmpeg postgresql
+#
+# ffmpeg        - Requis pour yt-dlp, pydub, audio-separator
+# postgresql    - Base de données
+# libpq-dev     - Headers PostgreSQL pour psycopg2-binary
+
+# ============================================
+# WEB FRAMEWORK & API
+# ============================================
+fastapi==0.118.2
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+pydantic==2.12.0
+pydantic-settings>=2.1.0
+
+# ============================================
+# DATABASE
+# ============================================
+sqlalchemy==2.0.25
+psycopg2-binary==2.9.11
+alembic==1.13.1
+
+# ============================================
+# AI SERVICES - PyTorch AVANT tout
+# ============================================
+# IMPORTANT: PyTorch 2.4.0 est le maximum pour compatibilité
+# Python 3.11 max, numpy 1.25.2 requis
+# Installer EN PREMIER pour éviter upgrades automatiques
+
+--index-url https://download.pytorch.org/whl/cpu
+torch==2.4.0
+torchaudio==2.4.0
+torchvision==0.19.0
+--index-url https://pypi.org/simple
+
+# Numpy APRÈS torch, AVANT tout le reste
+numpy==1.25.2
+
+# Transformers (requis par Chatterbox et TTS)
+transformers==4.46.3
+
+# ============================================
+# TTS ENGINE
+# ============================================
+
+# Chatterbox TTS (0.5B Llama, MIT license, SEUL ENGINE)
+# Meilleure qualité que Coqui TTS et ElevenLabs (63.8% préférence blind test)
+# IMPORTANT: Installer avec --no-deps, accepte torch 2.4.0 malgré warnings
+# Installation manuelle: pip install git+https://github.com/resemble-ai/chatterbox.git --no-deps
+# NOTE: Ne pas mettre dans requirements.txt, voir install_complete_system.sh
+
+# ❌ Coqui TTS RETIRÉ (remplacé par Chatterbox uniquement)
+
+# ============================================
+# AUDIO PROCESSING CORE
+# ============================================
+soundfile==0.12.1
+pydub==0.25.1
+scipy==1.11.4
+librosa==0.10.1
+webrtcvad==2.0.10
+noisereduce==3.0.2
+
+# UVR (Ultimate Vocal Remover) - Voice extraction
+audio-separator==0.12.0
+
+# ============================================
+# SPEECH-TO-TEXT
+# ============================================
+vosk==0.3.45
+
+# ============================================
+# SPEAKER DIARIZATION - SYSTÈME MAISON
+# ============================================
+# IMPORTANT: PLUS de pyannote.audio (dépendances incompatibles)
+# Utilise system/services/simple_diarization.py (MFCC + Clustering)
+
+scikit-learn>=1.3.2
+# librosa (déjà installé ci-dessus)
+# numpy (déjà installé ci-dessus)
+
+# ============================================
+# YOUTUBE EXTRACTION
+# ============================================
+# IMPORTANT: Toujours garder à jour
+yt-dlp>=2024.10.22
+
+# ============================================
+# NLP & OLLAMA
+# ============================================
+ollama>=0.6.0
+requests==2.31.0
+
+# ============================================
+# UTILITIES
+# ============================================
+python-dotenv==1.1.1
+python-json-logger==2.0.7
+colorama==0.4.6
+click==8.3.0
+tabulate==0.9.0
+openpyxl==3.1.2
+phonenumbers==8.13.27
+invoke==2.2.1
+tqdm>=4.66.0
+
+# ============================================
+# MONITORING & LOGGING
+# ============================================
+prometheus-client==0.19.0
+
+# ============================================
+# TESTING (DEV)
+# ============================================
+pytest==7.4.4
+pytest-asyncio==0.23.3
+pytest-cov==4.1.0
+httpx>=0.27.0
+
+# ============================================
+# CODE QUALITY (DEV)
+# ============================================
+black==24.1.1
+flake8==7.0.0
+mypy==1.8.0
+isort==5.13.2
+
+# ============================================
+# ORDRE D'INSTALLATION RECOMMANDÉ
+# ============================================
+#
+# 1. Créer environnement virtuel (Python 3.10 ou 3.11 UNIQUEMENT):
+#    python3.11 -m venv venv
+#    source venv/bin/activate  (Linux/macOS)
+#
+# 2. Installer dans l'ORDRE STRICT:
+#    pip install --upgrade pip setuptools wheel
+#
+#    # PyTorch + numpy EN PREMIER
+#    pip install --index-url https://download.pytorch.org/whl/cpu torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0
+#    pip install numpy==1.25.2
+#    pip install transformers==4.46.3
+#
+#    # TTS Engines
+#    pip install TTS==0.22.0
+#    pip install git+https://github.com/resemble-ai/chatterbox.git --no-deps
+#
+#    # Reste des dépendances
+#    pip install -r requirements-unified.txt
+#
+# 3. OU utiliser le script automatisé:
+#    bash install_final_with_uvr.sh
+#
+# 4. Modèle Vosk (français):
+#    wget https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip
+#    unzip vosk-model-small-fr-0.22.zip -d models/
+#
+# 5. Ollama (installer séparément):
+#    https://ollama.ai/download
+#    ollama pull mistral:7b
+#
+# ============================================
+# NOTES IMPORTANTES
+# ============================================
+#
+# - Python 3.13 NON COMPATIBLE (PyTorch 2.4.0 max = Python 3.11)
+# - pyannote.audio RETIRÉ (remplacé par simple_diarization.py)
+# - Chatterbox requiert --no-deps mais fonctionne avec torch 2.4.0
+# - UVR (audio-separator) fonctionne avec torch 2.4.0
+# - Tous les packages testés ensemble et compatibles
+# - Pas de HuggingFace token requis (plus de pyannote)
+#
+# SYSTÈME DE DIARIZATION MAISON:
+# - system/services/simple_diarization.py
+# - Basé sur MFCC + Clustering (scikit-learn)
+# - Pas de dépendances externes complexes
+# - Pas besoin de token HuggingFace
+# - Performance suffisante pour voice cloning
+#
+# ORDRE DE PRIORITÉ TTS:
+# 1. Chatterbox (0.5B, rapide, qualité excellente)
+# 2. Coqui XTTS v2 (backup si Chatterbox échoue)

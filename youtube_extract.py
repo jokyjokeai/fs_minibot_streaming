@@ -9,7 +9,7 @@ Workflow:
 1. Demande URL YouTube
 2. Sélectionne dossier destination dans voices/
 3. Télécharge et extrait audio (yt-dlp)
-4. Identifie locuteurs avec pyannote.audio 3.1
+4. Identifie locuteurs avec SYSTÈME MAISON (sans pyannote)
 5. Affiche durée par locuteur + preview audio
 6. Sélectionne locuteur à extraire
 7. Découpe intelligent 4-10s (sans couper mots)
@@ -30,8 +30,9 @@ import warnings
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
-# Supprimer warning pyannote.audio (torchaudio backend déprécié)
-warnings.filterwarnings("ignore", message="torchaudio._backend.set_audio_backend has been deprecated")
+# Supprimer warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 
 # Audio processing
 try:
@@ -54,14 +55,14 @@ except ImportError:
     print("❌ yt-dlp not available")
     print("   Install: pip install yt-dlp")
 
-# Speaker diarization
+# Speaker diarization (système maison)
 try:
-    from pyannote.audio import Pipeline
-    PYANNOTE_AVAILABLE = True
+    from system.services.simple_diarization import SimpleDiarization, SpeakerSegment
+    DIARIZATION_AVAILABLE = True
 except ImportError:
-    PYANNOTE_AVAILABLE = False
-    print("❌ pyannote.audio not available")
-    print("   Install: pip install pyannote.audio")
+    DIARIZATION_AVAILABLE = False
+    print("❌ simple_diarization not available")
+    print("   Install: pip install librosa scikit-learn numpy")
 
 from system.config import config
 
@@ -75,9 +76,9 @@ logger = logging.getLogger(__name__)
 class YouTubeVoiceExtractor:
     """Extracteur audio YouTube avec diarization et découpage intelligent"""
 
-    # Format optimal pour Coqui TTS
-    TARGET_SAMPLE_RATE = 22050
-    TARGET_CHANNELS = 1
+    # Format optimal pour Chatterbox TTS (best practices: 44.1kHz minimum 24kHz)
+    TARGET_SAMPLE_RATE = 44100  # Upgraded from 22050 for better quality
+    TARGET_CHANNELS = 1  # Mono
     TARGET_FORMAT = "wav"
 
     # Découpage intelligent
@@ -91,13 +92,15 @@ class YouTubeVoiceExtractor:
         self.voices_dir = Path(config.VOICES_DIR)
         self.voices_dir.mkdir(exist_ok=True)
 
-        # HuggingFace token
-        self.hf_token = config.HUGGINGFACE_TOKEN
-        if not self.hf_token:
-            logger.warning("⚠️  HUGGINGFACE_TOKEN not configured in .env")
-            logger.warning("   Speaker diarization will not work")
+        # Initialiser système de diarization maison
+        self.diarizer = SimpleDiarization(
+            min_segment_duration=0.5,
+            n_mfcc=20,
+            min_speakers=1,
+            max_speakers=5
+        )
 
-        logger.info("🎬 YouTubeVoiceExtractor initialized")
+        logger.info("🎬 YouTubeVoiceExtractor initialized (custom diarization)")
 
     def detect_available_voices(self) -> List[str]:
         """
@@ -170,96 +173,61 @@ class YouTubeVoiceExtractor:
             logger.error(f"❌ Download failed: {e}")
             return None
 
-    def perform_speaker_diarization(self, audio_path: Path) -> Optional[object]:
+    def perform_speaker_diarization(self, audio_path: Path, n_speakers: Optional[int] = None) -> Optional[List[SpeakerSegment]]:
         """
-        Identifie les locuteurs dans un fichier audio
+        Identifie les locuteurs dans un fichier audio (système maison)
 
         Args:
             audio_path: Chemin fichier audio
+            n_speakers: Nombre de locuteurs (None = auto-détection)
 
         Returns:
-            Objet diarization pyannote ou None
+            Liste de SpeakerSegment ou None
         """
-        if not self.hf_token:
-            logger.error("❌ HUGGINGFACE_TOKEN required for speaker diarization")
-            logger.error("   Configure in .env file")
-            return None
-
         logger.info(f"\n🎤 Performing speaker diarization...")
-        logger.info(f"   Using pyannote.audio 3.1")
+        logger.info(f"   Using custom MFCC+Clustering system")
 
         try:
-            # Charger pipeline (télécharge automatiquement si nécessaire)
-            logger.info("   Loading pipeline...")
-            pipeline = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-community-1",
-                use_auth_token=self.hf_token
+            # Utiliser notre système maison
+            segments = self.diarizer.diarize(
+                audio_path,
+                n_speakers=n_speakers,
+                vad_threshold_db=-30,
+                min_silence_duration=0.3
             )
 
-            # Exécuter diarization avec progression
-            logger.info(f"   Analyzing audio: {audio_path.name}")
-
-            # Callback pour progression
-            from tqdm import tqdm
-
-            class ProgressHook:
-                def __init__(self):
-                    self.pbar = None
-
-                def __call__(self, step_name, step_artefact, file=None, total=None, completed=None):
-                    if completed == 0 and total is not None:
-                        if self.pbar is not None:
-                            self.pbar.close()
-                        self.pbar = tqdm(total=total, desc=f"   {step_name}", unit="chunk")
-                    elif self.pbar is not None and completed is not None:
-                        self.pbar.update(completed - self.pbar.n)
-                        if completed >= total:
-                            self.pbar.close()
-                            self.pbar = None
-
-            hook = ProgressHook()
-            diarization = pipeline(str(audio_path), hook=hook)
+            if not segments:
+                logger.error("❌ No speakers detected")
+                return None
 
             logger.info("✅ Diarization completed")
-            return diarization
+            return segments
 
         except Exception as e:
             logger.error(f"❌ Diarization failed: {e}")
-            logger.error("   Make sure you accepted terms at:")
-            logger.error("   https://huggingface.co/pyannote/speaker-diarization-community-1")
             return None
 
-    def analyze_speakers(self, diarization: object) -> Dict[str, float]:
+    def analyze_speakers(self, segments: List[SpeakerSegment]) -> Dict[str, float]:
         """
         Analyse les locuteurs et calcule durées
 
         Args:
-            diarization: Objet pyannote diarization
+            segments: Liste de SpeakerSegment
 
         Returns:
-            Dict {speaker: duration_seconds}
+            Dict {speaker_name: duration_seconds}
         """
-        speaker_durations = {}
+        return self.diarizer.get_speaker_durations(segments)
 
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
-            duration = turn.end - turn.start
-
-            if speaker not in speaker_durations:
-                speaker_durations[speaker] = 0.0
-
-            speaker_durations[speaker] += duration
-
-        return speaker_durations
-
-    def preview_speaker(self, audio_path: Path, diarization: object,
+    def preview_speaker(self, audio_path: Path, segments: List[SpeakerSegment],
                        speaker: str, duration_seconds: float = 5.0):
         """
         Joue un extrait audio d'un locuteur
 
         Args:
             audio_path: Fichier audio source
-            diarization: Objet diarization
-            speaker: ID du locuteur
+            segments: Liste de SpeakerSegment
+            speaker: Nom du locuteur (ex: "SPEAKER_0")
             duration_seconds: Durée preview
         """
         logger.info(f"🔊 Playing {duration_seconds}s preview of {speaker}...")
@@ -267,21 +235,24 @@ class YouTubeVoiceExtractor:
         # Charger audio
         audio = AudioSegment.from_file(str(audio_path))
 
-        # Trouver premier segment du locuteur
+        # Extraire ID du locuteur (SPEAKER_0 → 0)
+        speaker_id = int(speaker.split('_')[1])
+
+        # Trouver segments du locuteur
         preview_audio = None
         accumulated_duration = 0
 
-        for turn, _, spk in diarization.itertracks(yield_label=True):
-            if spk == speaker:
-                start_ms = int(turn.start * 1000)
-                end_ms = int(turn.end * 1000)
+        for seg in segments:
+            if seg.speaker == speaker_id:
+                start_ms = int(seg.start * 1000)
+                end_ms = int(seg.end * 1000)
 
-                segment = audio[start_ms:end_ms]
+                segment_audio = audio[start_ms:end_ms]
 
                 if preview_audio is None:
-                    preview_audio = segment
+                    preview_audio = segment_audio
                 else:
-                    preview_audio += segment
+                    preview_audio += segment_audio
 
                 accumulated_duration = len(preview_audio) / 1000.0
 
@@ -301,15 +272,15 @@ class YouTubeVoiceExtractor:
         else:
             logger.warning(f"⚠️  No audio found for {speaker}")
 
-    def extract_speaker_audio(self, audio_path: Path, diarization: object,
+    def extract_speaker_audio(self, audio_path: Path, segments: List[SpeakerSegment],
                              speaker: str) -> AudioSegment:
         """
         Extrait tous les segments d'un locuteur
 
         Args:
             audio_path: Fichier audio source
-            diarization: Objet diarization
-            speaker: ID du locuteur
+            segments: Liste de SpeakerSegment
+            speaker: Nom du locuteur (ex: "SPEAKER_0")
 
         Returns:
             AudioSegment avec audio du locuteur
@@ -319,24 +290,27 @@ class YouTubeVoiceExtractor:
         # Charger audio
         audio = AudioSegment.from_file(str(audio_path))
 
-        # Compter segments
-        segments_list = [(turn, spk) for turn, _, spk in diarization.itertracks(yield_label=True) if spk == speaker]
+        # Extraire ID du locuteur
+        speaker_id = int(speaker.split('_')[1])
 
-        # Extraire tous les segments du locuteur avec progression
+        # Filtrer segments du locuteur
+        speaker_segments = [seg for seg in segments if seg.speaker == speaker_id]
+
+        # Extraire tous les segments avec progression
         speaker_audio = None
 
         from tqdm import tqdm
 
-        for turn, spk in tqdm(segments_list, desc="   Extracting segments", unit="segment"):
-            start_ms = int(turn.start * 1000)
-            end_ms = int(turn.end * 1000)
+        for seg in tqdm(speaker_segments, desc="   Extracting segments", unit="segment"):
+            start_ms = int(seg.start * 1000)
+            end_ms = int(seg.end * 1000)
 
-            segment = audio[start_ms:end_ms]
+            segment_audio = audio[start_ms:end_ms]
 
             if speaker_audio is None:
-                speaker_audio = segment
+                speaker_audio = segment_audio
             else:
-                speaker_audio += segment
+                speaker_audio += segment_audio
 
         if speaker_audio:
             logger.info(f"✅ Extracted {len(speaker_audio)/1000.0:.1f}s of audio")
@@ -442,11 +416,11 @@ class YouTubeVoiceExtractor:
 
         for i, chunk in tqdm(enumerate(chunks, 1), total=len(chunks), desc="   Saving", unit="file"):
             try:
-                # Convertir mono
+                # Convertir mono 44.1kHz (optimal pour Chatterbox)
                 if chunk.channels > 1:
                     chunk = chunk.set_channels(self.TARGET_CHANNELS)
 
-                # Convertir sample rate
+                # Convertir sample rate (44.1kHz pour qualité optimale)
                 if chunk.frame_rate != self.TARGET_SAMPLE_RATE:
                     chunk = chunk.set_frame_rate(self.TARGET_SAMPLE_RATE)
 
@@ -493,13 +467,13 @@ class YouTubeVoiceExtractor:
                 return False
 
             # 2. Diarization
-            diarization = self.perform_speaker_diarization(audio_file)
-            if not diarization:
+            segments = self.perform_speaker_diarization(audio_file)
+            if not segments:
                 return False
 
             # 3. Analyser locuteurs
             logger.info(f"\n📊 Speaker Analysis:")
-            speaker_durations = self.analyze_speakers(diarization)
+            speaker_durations = self.analyze_speakers(segments)
 
             if not speaker_durations:
                 logger.error("❌ No speakers detected")
@@ -546,7 +520,7 @@ class YouTubeVoiceExtractor:
                         index = int(choice) - 1
                         if 0 <= index < len(speaker_list):
                             speaker = speaker_list[index]
-                            self.preview_speaker(audio_file, diarization, speaker)
+                            self.preview_speaker(audio_file, segments, speaker)
 
                             print(f"\n✅ Use this speaker? (y/n): ", end='')
                             confirm = input().strip().lower()
@@ -562,7 +536,7 @@ class YouTubeVoiceExtractor:
             logger.info(f"   Duration: {speaker_durations[selected_speaker]:.1f}s")
 
             # 5. Extraire audio du locuteur
-            speaker_audio = self.extract_speaker_audio(audio_file, diarization, selected_speaker)
+            speaker_audio = self.extract_speaker_audio(audio_file, segments, selected_speaker)
             if len(speaker_audio) == 0:
                 return False
 
@@ -661,9 +635,9 @@ def main():
     args = parser.parse_args()
 
     # Vérifier dépendances
-    if not all([AUDIO_AVAILABLE, YT_DLP_AVAILABLE, PYANNOTE_AVAILABLE]):
+    if not all([AUDIO_AVAILABLE, YT_DLP_AVAILABLE, DIARIZATION_AVAILABLE]):
         logger.error("❌ Missing required dependencies")
-        logger.error("   Install: pip install pydub soundfile yt-dlp pyannote.audio")
+        logger.error("   Install: pip install pydub soundfile yt-dlp librosa scikit-learn numpy")
         return
 
     print("\n" + "="*60)

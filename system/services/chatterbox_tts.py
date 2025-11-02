@@ -73,18 +73,13 @@ class ChatterboxTTSService:
         self.tts_config = {
             "device": "cuda" if torch.cuda.is_available() else "cpu",
             "language": "fr",  # Langue par défaut (en=English, fr=French)
-            "sample_rate": 24000,  # Chatterbox génère en 24kHz
+            "sample_rate": 24000,  # Chatterbox génère en 24kHz natif
             "output_format": "wav",
 
-            # Paramètres optimisés pour voix naturelle française
-            "exaggeration": 0.4,      # Emotion control - Moins expressif = plus naturel
-            "cfg_weight": 0.55,       # CFG scale pour pacing - Légèrement plus lent
-            "temperature": 0.85,      # Randomness - Plus stable
-            "top_p": 0.93,           # Nucleus sampling - Plus conservateur
-            "min_p": 0.1,            # Min probability (défaut 0.1)
-            "repetition_penalty": 1.4,  # Anti-répétition - Plus strict
-            "n_timesteps": 40,       # Diffusion steps - Meilleure qualité
-            "max_new_tokens": 4096,  # Max ~163 secondes
+            # Paramètres VALIDÉS selon docs officielles Resemble AI
+            # SEULEMENT exaggeration et cfg_weight sont supportés
+            "exaggeration": 0.4,      # 0.3-0.5 = naturel (0.5 = default)
+            "cfg_weight": 0.5,        # 0.5 = default équilibré, 0.3 = faster speaker, 0.7 = slower
         }
 
         # Statistiques
@@ -309,10 +304,11 @@ class ChatterboxTTSService:
             audio_prompt_path = voice_data["audio_prompt_path"]
             language = voice_data.get("language", self.tts_config["language"])
 
-            # Paramètres optimisés pour voix naturelle (appels téléphoniques)
-            # Si pas d'override, utiliser paramètres optimisés
-            exag = exaggeration if exaggeration is not None else 0.4  # Voix naturelle française
-            cfg = cfg_weight if cfg_weight is not None else 0.55  # Pacing légèrement ralenti
+            # Paramètres VALIDÉS selon best practices Resemble AI
+            # exaggeration: 0.3-0.5 = naturel, 0.5 = default
+            # cfg_weight: 0.5 = default, 0.3 = faster speaker, 0.7 = slower
+            exag = exaggeration if exaggeration is not None else self.tts_config["exaggeration"]
+            cfg = cfg_weight if cfg_weight is not None else self.tts_config["cfg_weight"]
 
             # Générer avec voice cloning
             # Note: Chatterbox supporte seulement exaggeration et cfg_weight
@@ -355,7 +351,7 @@ class ChatterboxTTSService:
             "cached_voices": list(self.cached_voices.keys()),
         }
 
-    def clone_voice(self, audio_path, voice_name: str, use_few_shot: bool = True, max_files: int = 10) -> bool:
+    def clone_voice(self, audio_path, voice_name: str, use_few_shot: bool = True, max_files: int = 20) -> bool:
         """
         Clone une voix avec few-shot learning (meilleure qualité).
 
@@ -395,9 +391,10 @@ class ChatterboxTTSService:
                 selected_files = audio_files[:max_files]
 
                 # Convertir et normaliser tous les fichiers
-                logger.info(f"📊 Converting to 22050Hz mono + normalizing to -3dB...")
+                # Best practice: 44.1kHz selon docs officielles (24kHz minimum)
+                logger.info(f"📊 Converting to 44100Hz mono + normalizing to -3dB...")
                 normalized_files = []
-                TARGET_SR = 22050
+                TARGET_SR = 44100  # Optimal quality (was 22050)
 
                 for i, audio_file in enumerate(selected_files, 1):
                     # Charger audio
