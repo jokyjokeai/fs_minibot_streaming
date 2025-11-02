@@ -53,12 +53,13 @@ echo -e "${GREEN}1️⃣ Installation numpy<2.0 (compatible)...${NC}"
 pip install "numpy>=1.24.3,<2.0"
 
 # 2. PyTorch (installer AVANT chatterbox-tts)
+# IMPORTANT: Torch 2.6.0 requis par Chatterbox (compatible audio-separator aussi)
 if $GPU_MODE; then
-    echo -e "${GREEN}2️⃣ Installation PyTorch (GPU CUDA 11.8)...${NC}"
-    pip install torch==2.1.2 torchaudio==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu118
+    echo -e "${GREEN}2️⃣ Installation PyTorch 2.6.0 (GPU CUDA 12.1)...${NC}"
+    pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu121
 else
-    echo -e "${GREEN}2️⃣ Installation PyTorch (CPU-only)...${NC}"
-    pip install torch==2.1.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cpu
+    echo -e "${GREEN}2️⃣ Installation PyTorch 2.6.0 (CPU-only)...${NC}"
+    pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
 fi
 
 # 3. Chatterbox TTS
