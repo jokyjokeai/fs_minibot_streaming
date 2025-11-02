@@ -366,19 +366,18 @@ class VoiceCloner:
         raw_file, cleaned_dir = args
 
         try:
-            # Chemins de sortie
+            # Chemin de sortie (plus de fichier _optimal, c'était un doublon inutile)
             cleaned_file = cleaned_dir / f"{raw_file.stem}_cleaned.wav"
-            optimal_file = cleaned_dir / f"{raw_file.stem}_optimal.wav"
 
-            # Nettoyer
+            # Nettoyer ET convertir au format optimal (22050Hz mono)
             if not self.clean_audio_file(raw_file, cleaned_file):
                 return None
 
-            # Convertir au format optimal
-            if not self.convert_to_optimal_format(cleaned_file, optimal_file):
+            # Convertir directement le fichier cleaned au format optimal
+            if not self.convert_to_optimal_format(cleaned_file, cleaned_file):
                 return None
 
-            return optimal_file
+            return cleaned_file
 
         except Exception as e:
             logger.error(f"    ❌ Error processing {raw_file.name}: {e}")
