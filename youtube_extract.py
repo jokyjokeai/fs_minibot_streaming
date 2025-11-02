@@ -226,15 +226,51 @@ class PyannoteService:
         import requests
 
         try:
-            logger.info(f"📤 Sending audio to Pyannote service...")
+            import os
+            from tqdm import tqdm
 
-            with open(audio_path, 'rb') as f:
-                files = {'file': (audio_path.name, f, 'audio/wav')}
-                response = requests.post(
-                    f"{self.base_url}/diarize",
-                    files=files,
-                    timeout=300  # 5 minutes max
-                )
+            # Get file size for progress estimation
+            file_size = os.path.getsize(audio_path)
+            audio_duration = file_size / (16000 * 2)  # Rough estimate for 16kHz mono
+            estimated_time = max(10, int(audio_duration * 0.3))  # ~30% of audio duration
+
+            logger.info(f"📤 Sending audio to Pyannote service...")
+            logger.info(f"   Estimated processing time: {estimated_time}s")
+
+            # Show progress bar during upload + processing
+            with tqdm(total=estimated_time, desc="   Pyannote Diarization", unit="s", ncols=80) as pbar:
+                # Upload file
+                with open(audio_path, 'rb') as f:
+                    files = {'file': (audio_path.name, f, 'audio/wav')}
+
+                    # Start request in thread
+                    import threading
+                    import time
+                    result_container = {}
+
+                    def send_request():
+                        result_container['response'] = requests.post(
+                            f"{self.base_url}/diarize",
+                            files=files,
+                            timeout=300
+                        )
+
+                    req_thread = threading.Thread(target=send_request)
+                    req_thread.start()
+
+                    # Update progress bar while waiting
+                    start_time = time.time()
+                    while req_thread.is_alive():
+                        elapsed = int(time.time() - start_time)
+                        pbar.n = min(elapsed, estimated_time)
+                        pbar.refresh()
+                        time.sleep(1)
+
+                    req_thread.join()
+                    pbar.n = estimated_time
+                    pbar.refresh()
+
+                    response = result_container['response']
 
             if response.status_code != 200:
                 logger.error(f"❌ Service returned error: {response.status_code}")
@@ -724,13 +760,38 @@ class YouTubeVoiceExtractor:
                 # Get audio duration for progress estimation
                 from pydub import AudioSegment
                 audio_duration = len(AudioSegment.from_file(str(normalized_file))) / 1000
-                logger.info(f"   Processing {audio_duration:.0f}s of audio (estimated: {audio_duration*0.4:.0f}s)...")
+                estimated_time = audio_duration * 0.4
+                logger.info(f"   Processing {audio_duration:.0f}s of audio (estimated: {estimated_time:.0f}s)...")
 
                 import time
+                import threading
+                from tqdm import tqdm
+
+                # Animated progress bar based on estimated time
                 start_time = time.time()
-                output_files = separator.separate(str(normalized_file))
+
+                # Run separation in thread to show progress
+                result_container = {}
+                def run_separation():
+                    result_container['output'] = separator.separate(str(normalized_file))
+
+                sep_thread = threading.Thread(target=run_separation)
+                sep_thread.start()
+
+                # Show progress bar while processing
+                with tqdm(total=int(estimated_time), desc="   UVR Processing", unit="s", ncols=80) as pbar:
+                    while sep_thread.is_alive():
+                        elapsed = time.time() - start_time
+                        pbar.n = min(int(elapsed), int(estimated_time))
+                        pbar.refresh()
+                        time.sleep(1)
+                    pbar.n = int(estimated_time)
+                    pbar.refresh()
+
+                sep_thread.join()
+                output_files = result_container['output']
                 elapsed = time.time() - start_time
-                logger.info(f"   Completed in {elapsed:.1f}s")
+                logger.info(f"   ✅ Completed in {elapsed:.1f}s")
 
                 # Trouver le fichier vocals
                 vocals_file = None
