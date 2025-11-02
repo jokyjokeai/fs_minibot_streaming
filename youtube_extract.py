@@ -55,14 +55,26 @@ except ImportError:
     print("❌ yt-dlp not available")
     print("   Install: pip install yt-dlp")
 
-# Speaker diarization (système maison)
+# Speaker diarization (Resemblyzer - custom)
+try:
+    from resemblyzer import VoiceEncoder, preprocess_wav
+    from sklearn.cluster import AgglomerativeClustering
+    from sklearn.metrics import silhouette_score
+    import numpy as np
+    RESEMBLYZER_AVAILABLE = True
+except ImportError:
+    RESEMBLYZER_AVAILABLE = False
+    print("❌ Resemblyzer not available")
+    print("   Install: pip install resemblyzer scikit-learn")
+
+# Fallback: SimpleDiarization
 try:
     from system.services.simple_diarization import SimpleDiarization, SpeakerSegment
-    DIARIZATION_AVAILABLE = True
+    SIMPLE_DIARIZATION_AVAILABLE = True
 except ImportError:
-    DIARIZATION_AVAILABLE = False
-    print("❌ simple_diarization not available")
-    print("   Install: pip install librosa scikit-learn numpy")
+    SIMPLE_DIARIZATION_AVAILABLE = False
+
+DIARIZATION_AVAILABLE = RESEMBLYZER_AVAILABLE or SIMPLE_DIARIZATION_AVAILABLE
 
 from system.config import config
 
@@ -71,6 +83,232 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# RESEMBLYZER DIARIZATION - Custom Implementation
+# ============================================================
+
+class SpeakerSegment:
+    """Segment audio avec speaker ID"""
+    def __init__(self, start: float, end: float, speaker: str):
+        self.start = start
+        self.end = end
+        self.speaker = speaker
+        self.duration = end - start
+
+
+class ResemblyzerDiarization:
+    """
+    Diarization ultra-performante avec Resemblyzer
+
+    - Voice encoder pré-entraîné (256D embeddings)
+    - Clustering hiérarchique automatique
+    - Post-processing intelligent
+    """
+
+    def __init__(self,
+                 min_segment_duration: float = 0.5,
+                 embedding_window: float = 0.5,
+                 min_speakers: int = 1,
+                 max_speakers: int = 8):
+        """
+        Args:
+            min_segment_duration: Durée minimale segment (secondes)
+            embedding_window: Fenêtre pour embeddings (secondes)
+            min_speakers: Nombre minimum locuteurs
+            max_speakers: Nombre maximum locuteurs
+        """
+        self.min_segment_duration = min_segment_duration
+        self.embedding_window = embedding_window
+        self.min_speakers = min_speakers
+        self.max_speakers = max_speakers
+
+        # Charger voice encoder Resemblyzer
+        logger.info("🎤 Loading Resemblyzer voice encoder...")
+        self.encoder = VoiceEncoder()
+        logger.info("✅ Resemblyzer encoder loaded")
+
+    def diarize(self, audio_file: Path) -> List[SpeakerSegment]:
+        """
+        Diarization complète d'un fichier audio
+
+        Args:
+            audio_file: Chemin fichier audio WAV
+
+        Returns:
+            Liste de SpeakerSegment
+        """
+        logger.info("\n============================================================")
+        logger.info("🎤 Resemblyzer Speaker Diarization")
+        logger.info("============================================================")
+        logger.info(f"Audio: {audio_file.name}")
+
+        # 1. Prétraiter audio
+        logger.info("🔊 Preprocessing audio...")
+        wav = preprocess_wav(audio_file)
+        duration = len(wav) / 16000  # Resemblyzer use 16kHz
+        logger.info(f"   Duration: {duration:.1f}s")
+
+        # 2. Voice Activity Detection simple
+        logger.info("🔊 Voice Activity Detection...")
+        from pydub import AudioSegment
+        from pydub.silence import detect_nonsilent
+
+        audio = AudioSegment.from_wav(str(audio_file))
+        nonsilent_ranges = detect_nonsilent(
+            audio,
+            min_silence_len=300,
+            silence_thresh=-40
+        )
+
+        logger.info(f"✅ Detected {len(nonsilent_ranges)} voice segments")
+
+        # 3. Extraire embeddings pour chaque segment
+        logger.info("🎵 Extracting voice embeddings...")
+        embeddings = []
+        timestamps = []
+
+        for start_ms, end_ms in nonsilent_ranges:
+            start_s = start_ms / 1000
+            end_s = end_ms / 1000
+
+            # Skip segments trop courts
+            if (end_s - start_s) < self.min_segment_duration:
+                continue
+
+            # Extraire segment
+            start_sample = int(start_s * 16000)
+            end_sample = int(end_s * 16000)
+            segment_wav = wav[start_sample:end_sample]
+
+            # Embedding
+            try:
+                embedding = self.encoder.embed_utterance(segment_wav)
+                embeddings.append(embedding)
+                timestamps.append((start_s, end_s))
+            except Exception as e:
+                logger.warning(f"   ⚠️  Failed to embed segment {start_s:.1f}s: {e}")
+                continue
+
+        if not embeddings:
+            logger.error("❌ No embeddings extracted")
+            return []
+
+        embeddings = np.array(embeddings)
+        logger.info(f"✅ Extracted {len(embeddings)} embeddings")
+
+        # 4. Clustering hiérarchique automatique
+        logger.info("👥 Clustering speakers...")
+        best_n_speakers = self._find_optimal_clusters(embeddings)
+
+        clustering = AgglomerativeClustering(
+            n_clusters=best_n_speakers,
+            metric='cosine',
+            linkage='average'
+        )
+        speaker_labels = clustering.fit_predict(embeddings)
+
+        logger.info(f"✅ Detected {best_n_speakers} speakers")
+
+        # 5. Créer segments
+        segments = []
+        for (start_s, end_s), label in zip(timestamps, speaker_labels):
+            segment = SpeakerSegment(
+                start=start_s,
+                end=end_s,
+                speaker=f"SPEAKER_{label}"
+            )
+            segments.append(segment)
+
+        # 6. Merge segments consécutifs du même locuteur
+        segments = self._merge_consecutive_segments(segments)
+
+        logger.info(f"\n📊 Diarization Results:")
+        speaker_durations = {}
+        for seg in segments:
+            if seg.speaker not in speaker_durations:
+                speaker_durations[seg.speaker] = 0
+            speaker_durations[seg.speaker] += seg.duration
+
+        for speaker, duration in sorted(speaker_durations.items(),
+                                       key=lambda x: x[1], reverse=True):
+            logger.info(f"   {speaker}: {duration:.1f}s ({duration/60:.1f}min)")
+
+        logger.info(f"✅ Diarization completed: {len(segments)} segments")
+        logger.info("============================================================\n")
+
+        return segments
+
+    def _find_optimal_clusters(self, embeddings: np.ndarray) -> int:
+        """
+        Trouve nombre optimal de clusters avec silhouette score
+
+        Args:
+            embeddings: Embeddings vocaux
+
+        Returns:
+            Nombre optimal de speakers
+        """
+        if len(embeddings) < self.min_speakers + 1:
+            return max(1, len(embeddings))
+
+        best_score = -1
+        best_n = self.min_speakers
+
+        for n in range(self.min_speakers, min(self.max_speakers + 1, len(embeddings))):
+            try:
+                clustering = AgglomerativeClustering(
+                    n_clusters=n,
+                    metric='cosine',
+                    linkage='average'
+                )
+                labels = clustering.fit_predict(embeddings)
+
+                # Silhouette score (higher = better)
+                score = silhouette_score(embeddings, labels, metric='cosine')
+                logger.info(f"   n={n} speakers: silhouette={score:.3f}")
+
+                if score > best_score:
+                    best_score = score
+                    best_n = n
+            except Exception as e:
+                logger.warning(f"   ⚠️  n={n} failed: {e}")
+                continue
+
+        logger.info(f"✅ Auto-detected {best_n} speakers (score={best_score:.3f})")
+        return best_n
+
+    def _merge_consecutive_segments(self, segments: List[SpeakerSegment]) -> List[SpeakerSegment]:
+        """
+        Merge segments consécutifs du même locuteur
+
+        Args:
+            segments: Segments à merger
+
+        Returns:
+            Segments mergés
+        """
+        if not segments:
+            return []
+
+        # Trier par temps
+        segments = sorted(segments, key=lambda s: s.start)
+
+        merged = [segments[0]]
+        for seg in segments[1:]:
+            prev = merged[-1]
+
+            # Même speaker et segments proches (< 1s gap)
+            if seg.speaker == prev.speaker and (seg.start - prev.end) < 1.0:
+                # Merge
+                prev.end = seg.end
+                prev.duration = prev.end - prev.start
+            else:
+                merged.append(seg)
+
+        logger.info(f"🔗 Merged {len(segments)} → {len(merged)} segments")
+        return merged
 
 
 class YouTubeVoiceExtractor:
@@ -92,15 +330,26 @@ class YouTubeVoiceExtractor:
         self.voices_dir = Path(config.VOICES_DIR)
         self.voices_dir.mkdir(exist_ok=True)
 
-        # Initialiser système de diarization maison
-        self.diarizer = SimpleDiarization(
-            min_segment_duration=0.5,
-            n_mfcc=20,
-            min_speakers=1,
-            max_speakers=5
-        )
-
-        logger.info("🎬 YouTubeVoiceExtractor initialized (custom diarization)")
+        # Initialiser système de diarization
+        if RESEMBLYZER_AVAILABLE:
+            logger.info("🎬 YouTubeVoiceExtractor initialized (Resemblyzer diarization)")
+            self.diarizer = ResemblyzerDiarization(
+                min_segment_duration=0.5,
+                min_speakers=1,
+                max_speakers=8  # Plus de speakers possibles avec Resemblyzer
+            )
+            self.use_resemblyzer = True
+        elif SIMPLE_DIARIZATION_AVAILABLE:
+            logger.info("🎬 YouTubeVoiceExtractor initialized (SimpleDiarization fallback)")
+            self.diarizer = SimpleDiarization(
+                min_segment_duration=0.5,
+                n_mfcc=20,
+                min_speakers=1,
+                max_speakers=5
+            )
+            self.use_resemblyzer = False
+        else:
+            raise RuntimeError("❌ No diarization system available")
 
     def detect_available_voices(self) -> List[str]:
         """
@@ -395,7 +644,7 @@ class YouTubeVoiceExtractor:
 
     def perform_speaker_diarization(self, audio_path: Path, n_speakers: Optional[int] = None) -> Optional[List[SpeakerSegment]]:
         """
-        Identifie les locuteurs dans un fichier audio (système maison)
+        Identifie les locuteurs dans un fichier audio
 
         Args:
             audio_path: Chemin fichier audio
@@ -405,16 +654,24 @@ class YouTubeVoiceExtractor:
             Liste de SpeakerSegment ou None
         """
         logger.info(f"\n🎤 Performing speaker diarization...")
-        logger.info(f"   Using custom MFCC+Clustering system")
+
+        if self.use_resemblyzer:
+            logger.info(f"   Using Resemblyzer (voice embeddings + clustering)")
+        else:
+            logger.info(f"   Using SimpleDiarization (MFCC+Clustering)")
 
         try:
-            # Utiliser notre système maison
-            segments = self.diarizer.diarize(
-                audio_path,
-                n_speakers=n_speakers,
-                vad_threshold_db=-30,
-                min_silence_duration=0.3
-            )
+            # Resemblyzer: méthode simple sans paramètres avancés
+            if self.use_resemblyzer:
+                segments = self.diarizer.diarize(audio_path)
+            # SimpleDiarization: méthode avec paramètres
+            else:
+                segments = self.diarizer.diarize(
+                    audio_path,
+                    n_speakers=n_speakers,
+                    vad_threshold_db=-30,
+                    min_silence_duration=0.3
+                )
 
             if not segments:
                 logger.error("❌ No speakers detected")
@@ -699,14 +956,15 @@ class YouTubeVoiceExtractor:
             if not segments:
                 return False
 
-            # 4. Validation Vosk: filtrer segments avec voix mixtes
-            if subtitles:
-                logger.info(f"\n🎤 Validating segments with Vosk STT...")
-                segments = self.validate_segments_with_vosk(audio_file, segments, subtitles)
-                if not segments:
-                    logger.error("❌ No valid segments after Vosk filtering")
-                    return False
-                logger.info(f"   ✅ {len(segments)} segments validated")
+            # 4. Validation Vosk: DÉSACTIVÉ temporairement (filtrait tous les segments)
+            # TODO: Améliorer validation Vosk ou utiliser autre méthode
+            # if subtitles:
+            #     logger.info(f"\n🎤 Validating segments with Vosk STT...")
+            #     segments = self.validate_segments_with_vosk(audio_file, segments, subtitles)
+            #     if not segments:
+            #         logger.error("❌ No valid segments after Vosk filtering")
+            #         return False
+            #     logger.info(f"   ✅ {len(segments)} segments validated")
 
             # 5. Analyser locuteurs
             logger.info(f"\n📊 Speaker Analysis:")

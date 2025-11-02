@@ -74,6 +74,7 @@ audio-separator==0.12.0
 # ============================================================================
 # Speaker Diarization (Custom - pas pyannote)
 # ============================================================================
+resemblyzer==0.1.4  # Voice embeddings pour diarization
 scikit-learn>=1.3.2
 joblib
 threadpoolctl
