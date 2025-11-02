@@ -1291,7 +1291,9 @@ class YouTubeVoiceExtractor:
             logger.info(f"   Scoring quality...")
             scored_chunks = []
 
-            for idx, chunk in enumerate(chunks_data):
+            from tqdm import tqdm
+            for idx, chunk in tqdm(enumerate(chunks_data), total=len(chunks_data),
+                                   desc="   Quality Scoring", unit="chunk", ncols=80):
                 # Export temporaire pour scoring
                 chunk_path = chunk_dir / f"chunk_{idx:03d}.wav"
                 chunk.export(str(chunk_path), format="wav")
@@ -1352,7 +1354,8 @@ class YouTubeVoiceExtractor:
             # Transcrire et filtrer
             validated_chunks = []
 
-            for chunk_path, quality_score in chunks:
+            from tqdm import tqdm
+            for chunk_path, quality_score in tqdm(chunks, desc="   Vosk Validation", unit="chunk", ncols=80):
                 try:
                     # Transcrire
                     result = vosk.transcribe_file(chunk_path)
