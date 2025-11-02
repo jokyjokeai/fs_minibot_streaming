@@ -116,15 +116,30 @@ class ChatterboxTTSService:
 
             start_time = time.time()
 
+            # IMPORTANT: Forcer CPU si pas de GPU disponible
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
             # Charger modèle anglais (base)
             self.tts_model = ChatterboxTTS.from_pretrained(
-                device=self.tts_config["device"]
+                device=device
             )
 
             # Charger modèle multilingue pour français
-            self.mtl_model = ChatterboxMultilingualTTS.from_pretrained(
-                device=self.tts_config["device"]
-            )
+            # Fix: Chatterbox a un bug où il charge en CUDA même sur CPU
+            # On doit patcher torch.load temporairement
+            original_load = torch.load
+            def patched_load(*args, **kwargs):
+                kwargs['map_location'] = device
+                return original_load(*args, **kwargs)
+
+            torch.load = patched_load
+            try:
+                self.mtl_model = ChatterboxMultilingualTTS.from_pretrained(
+                    device=device
+                )
+            finally:
+                torch.load = original_load
 
             load_time = time.time() - start_time
             logger.info(f"✅ Chatterbox TTS models loaded in {load_time:.2f}s")
