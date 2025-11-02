@@ -427,11 +427,15 @@ class ScenarioBuilder:
         # 9. Configuration qualification
         self._ask_qualification_rules()
 
-        # 10. Génération TTS objections
+        # 10. Nettoyage audios custom avec UVR (optionnel)
+        if ask_yes_no("\nNettoyer des audios pré-enregistrés avec UVR ?", default=False):
+            self._clean_custom_audios()
+
+        # 11. Génération TTS objections
         if self.objections_responses and ask_yes_no("\nGénérer les audios TTS pour les objections ?", default=True):
             self._generate_objections_tts()
 
-        # 11. Sauvegarde
+        # 12. Sauvegarde
         self._save_scenario()
 
     def _ask_basic_info(self):
@@ -964,13 +968,92 @@ class ScenarioBuilder:
         print_success(f"Qualification: Seuil {threshold}% (scoring cumulatif)")
         print_info("Le système calculera automatiquement le score final")
 
+    def _clean_custom_audios(self):
+        """Nettoie les audios pré-enregistrés avec UVR (enlève musique/bruits)"""
+        print_header("🎵 Nettoyage audios pré-enregistrés (UVR)")
+
+        print_info("Cette fonction nettoie vos audios personnalisés (enlève musique, bruits de fond)")
+        print_info("Utile pour préparer des messages pré-enregistrés de qualité\n")
+
+        audio_custom_dir = Path("audio/custom")
+        if not audio_custom_dir.exists():
+            print_warning(f"Dossier {audio_custom_dir} inexistant")
+            audio_custom_dir.mkdir(parents=True, exist_ok=True)
+            print_info(f"Créé: {audio_custom_dir}/")
+            return
+
+        # Trouver fichiers WAV non-nettoyés
+        audio_files = [f for f in audio_custom_dir.glob("*.wav") if "_clean" not in f.stem]
+
+        if not audio_files:
+            print_warning("Aucun fichier .wav à nettoyer dans audio/custom/")
+            return
+
+        print(f"📂 {len(audio_files)} fichier(s) trouvé(s):")
+        for f in audio_files:
+            print(f"   • {f.name}")
+        print()
+
+        if not ask_yes_no("Nettoyer ces fichiers avec UVR ?", default=False):
+            return
+
+        try:
+            from audio_separator.separator import Separator
+
+            print_info("🔧 Chargement modèle UVR...")
+            separator = Separator(
+                log_level=40,  # ERROR only
+                model_file_dir=str(Path.home() / ".cache" / "audio-separator")
+            )
+            separator.load_model("UVR-MDX-NET-Voc_FT")
+            print_success("Modèle chargé\n")
+
+            for i, audio_file in enumerate(audio_files, 1):
+                print(f"[{i}/{len(audio_files)}] 🎵 {audio_file.name}")
+
+                # Séparer vocals
+                output_files = separator.separate(str(audio_file))
+
+                # Trouver fichier vocals
+                vocals_file = None
+                for f in output_files:
+                    if "Vocals" in f or "vocals" in f:
+                        vocals_file = Path(f)
+                        break
+
+                if vocals_file and vocals_file.exists():
+                    # Renommer avec _clean
+                    output_name = audio_file.stem + "_clean" + audio_file.suffix
+                    output_path = audio_custom_dir / output_name
+                    vocals_file.rename(output_path)
+
+                    # Nettoyer instrumental
+                    for f in output_files:
+                        f_path = Path(f)
+                        if f_path.exists() and f_path != output_path:
+                            f_path.unlink()
+
+                    print_success(f"   → {output_name} ({output_path.stat().st_size / 1024:.1f} KB)")
+                else:
+                    print_error("   → Échec extraction vocals")
+
+                print()
+
+            print_success(f"✅ {len(audio_files)} fichier(s) nettoyé(s)")
+
+        except ImportError:
+            print_error("audio-separator non disponible")
+            print_info("Installation: pip install audio-separator==0.12.0")
+        except Exception as e:
+            print_error(f"Erreur UVR: {e}")
+
     def _generate_objections_tts(self):
         """Génère TTS pour objections"""
         print_header("🎙️ Génération TTS objections")
 
         try:
-            from system.services.coqui_tts import CoquiTTS
-            tts = CoquiTTS()
+            from system.services.chatterbox_tts import ChatterboxTTSService
+            tts = ChatterboxTTSService()
 
             if not tts.is_available:
                 print_error("Service TTS non disponible")

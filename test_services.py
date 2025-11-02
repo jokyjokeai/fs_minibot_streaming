@@ -24,7 +24,7 @@ from pathlib import Path
 from system.config import config
 from system.services.vosk_stt import VoskSTT
 from system.services.ollama_nlp import OllamaNLP
-from system.services.coqui_tts import CoquiTTS
+from system.services.chatterbox_tts import ChatterboxTTSService
 from system.services.amd_service import AMDService
 
 logging.basicConfig(
@@ -106,16 +106,16 @@ def test_coqui() -> bool:
     Returns:
         True si disponible, False sinon
     """
-    logger.info("\n🗣️ TEST COQUI TTS")
+    logger.info("\n🗣️ TEST CHATTERBOX TTS")
     logger.info("=" * 60)
 
     try:
-        tts = CoquiTTS()
+        tts = ChatterboxTTSService()
 
         if tts.is_available:
-            logger.info(f"✅ Coqui disponible")
-            logger.info(f"🤖 Modèle: {config.COQUI_MODEL}")
-            logger.info(f"🎮 GPU: {'Activé' if config.COQUI_USE_GPU else 'Désactivé'}")
+            logger.info(f"✅ Chatterbox TTS disponible")
+            logger.info(f"🤖 Modèle: Chatterbox 0.5B (MIT)")
+            logger.info(f"🎮 Device: {tts.tts_config.get('device', 'cpu')}")
 
             # Test génération
             test_text = "Bonjour, ceci est un test de synthèse vocale."

@@ -145,11 +145,11 @@ class RobotFreeSWITCH:
                 self.stt_service = None
 
             try:
-                from system.services.coqui_tts import CoquiTTS
-                self.tts_service = CoquiTTS()
-                logger.info("✅ Coqui TTS loaded")
+                from system.services.chatterbox_tts import ChatterboxTTSService
+                self.tts_service = ChatterboxTTSService()
+                logger.info("✅ Chatterbox TTS loaded")
             except Exception as e:
-                logger.warning(f"⚠️ Coqui TTS not available: {e}")
+                logger.warning(f"⚠️ Chatterbox TTS not available: {e}")
                 self.tts_service = None
 
             try:

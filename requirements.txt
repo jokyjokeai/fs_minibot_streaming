@@ -1,154 +1,171 @@
-# MiniBotPanel v3 - Requirements
-# Python 3.11+ (recommandé: 3.11 ou 3.12)
+# ============================================================================
+# FS MiniBot Streaming - Requirements Unifié
+# Python 3.10 ou 3.11 UNIQUEMENT (3.13 incompatible)
+# Date: 2025-11-02
+# ============================================================================
 
-# ============================================
-# SYSTEM DEPENDENCIES (installer via apt/yum)
-# ============================================
-# IMPORTANT: Ces packages DOIVENT être installés avant pip install
-# Ubuntu/Debian: apt-get install -y ffmpeg postgresql-14 libpq-dev
-# CentOS/RHEL:   yum install -y ffmpeg postgresql postgresql-devel
+# ============================================================================
+# CRITIQUE: PyTorch + numpy (INSTALLER EN PREMIER)
+# ============================================================================
+# Pour CPU (VPS sans GPU):
+#   pip install --index-url https://download.pytorch.org/whl/cpu \
+#       torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0
 #
-# ffmpeg        - Requis pour yt-dlp, pydub, audio-separator (YouTube Extract Phase 7)
-# postgresql    - Base de données
-# libpq-dev     - Headers PostgreSQL pour psycopg2-binary
+# Pour GPU (CUDA 11.8):
+#   pip install --index-url https://download.pytorch.org/whl/cu118 \
+#       torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0
+#
+# Pour GPU (CUDA 12.1):
+#   pip install --index-url https://download.pytorch.org/whl/cu121 \
+#       torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0
 
-# ============================================
-# WEB FRAMEWORK & API
-# ============================================
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-python-multipart==0.0.6
-pydantic>=2.9.0
-pydantic-settings>=2.1.0
+torch==2.4.0
+torchaudio==2.4.0
+torchvision==0.19.0
+numpy==1.25.2
 
-# ============================================
-# DATABASE
-# ============================================
-sqlalchemy==2.0.25
-psycopg2-binary==2.9.9
-alembic==1.13.1
+# ============================================================================
+# Transformers (après PyTorch)
+# ============================================================================
+transformers==4.46.3
+huggingface-hub
+safetensors
+tokenizers
+regex
 
-# ============================================
-# FREESWITCH
-# ============================================
-# ESL Python (Event Socket Library)
-# IMPORTANT: Doit être compilé manuellement depuis sources FreeSWITCH (voir install_fs_minbot.md section 10.5)
-# Le flag -classic de swig est déprécié, donc on ne peut pas l'installer via pip
-#python-esl==1.4.18; platform_system != "Darwin"
+# ============================================================================
+# Chatterbox TTS Dependencies (avant Chatterbox)
+# ============================================================================
+resemble-perth
+s3tokenizer
+onnxruntime
+gradio==5.44.1
+pykakasi
+spacy-pkuseg
+diffusers==0.29.0
 
-# ============================================
-# AI SERVICES
-# ============================================
+# Chatterbox stress (depuis GitHub)
+# pip install git+https://github.com/Vuizur/add-stress-to-epub
 
-# Vosk STT (Speech-to-Text)
-vosk==0.3.45
+# ============================================================================
+# Chatterbox TTS (SEUL moteur TTS)
+# ============================================================================
+# Installation manuelle APRÈS les dépendances ci-dessus:
+#   pip install git+https://github.com/resemble-ai/chatterbox.git --no-deps
+#
+# ❌ Coqui TTS RETIRÉ (remplacé par Chatterbox uniquement)
+# ❌ networkx RETIRÉ (était seulement pour Coqui TTS)
+
+# ============================================================================
+# Audio Processing Stack
+# ============================================================================
 soundfile==0.12.1
-scipy>=1.11.2  # TTS needs >=1.11.2
+pydub==0.25.1
+scipy==1.11.4
+librosa==0.10.1
+webrtcvad==2.0.10
+noisereduce==3.0.2
 
-# Ollama (NLP - Intent + Sentiment)
+# ============================================================================
+# UVR (Ultimate Vocal Remover)
+# ============================================================================
+audio-separator==0.12.0
+
+# ============================================================================
+# Speaker Diarization (Custom - pas pyannote)
+# ============================================================================
+scikit-learn>=1.3.2
+joblib
+threadpoolctl
+
+# ============================================================================
+# YouTube Extraction
+# ============================================================================
+yt-dlp>=2024.10.22
+certifi
+mutagen
+pycryptodome
+websockets
+brotli
+
+# ============================================================================
+# Speech-to-Text (Vosk)
+# ============================================================================
+vosk==0.3.45
+cffi
+srt
+
+# ============================================================================
+# NLP & AI
+# ============================================================================
 ollama>=0.6.0
 requests==2.31.0
 
-# PyTorch - Par défaut CPU (VPS sans GPU)
-# Compatible Python 3.11+
-# IMPORTANT: Installer AVANT coqui-tts pour éviter upgrade vers torch 2.8+
---index-url https://download.pytorch.org/whl/cpu
-torch==2.1.2
-torchaudio==2.1.2
---index-url https://pypi.org/simple
+# ============================================================================
+# Web Framework
+# ============================================================================
+fastapi==0.118.2
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+pydantic==2.12.0
+pydantic-settings>=2.1.0
 
-# ============================================
-# AUDIO PROCESSING
-# ============================================
-# IMPORTANT: Installer numpy AVANT coqui-tts pour éviter upgrade vers numpy 2.x
-numpy>=1.24.3,<2.0
+# ============================================================================
+# Database
+# ============================================================================
+sqlalchemy==2.0.25
+psycopg2-binary==2.9.11
+alembic==1.13.1
 
-# Coqui TTS (Text-to-Speech) - Fork maintenu avec Python 3.11+ support
-# IMPORTANT: coqui-tts (fork Idiap) remplace TTS (abandonné)
-# Installer APRÈS torch et numpy pour éviter upgrades non désirés
-coqui-tts==0.27.2
-transformers>=4.52.1,<4.56  # Compatible coqui-tts 0.27.2
-pydub==0.25.1
-webrtcvad==2.0.10
-librosa>=0.11.0  # Requis par coqui-tts 0.27.2
-networkx==2.8.8
-
-# Audio cleaning & voice extraction
-noisereduce==3.0.2  # Noise reduction
-
-# Speaker diarization (YouTube Extract)
-# IMPORTANT: pyannote.audio 3.1.1 requiert numpy>=2.0 (incompatible avec coqui-tts)
-# Downgrade à 3.0.1 pour compatibilité numpy<2.0
-pyannote.audio==3.0.1
-
-# YouTube download
-# IMPORTANT: Toujours garder à jour (pip install --upgrade yt-dlp)
-# YouTube change régulièrement son API, nécessite version récente
-yt-dlp>=2024.10.22  # YouTube audio extraction (pas de version fixe)
-
-# ============================================
-# UTILITIES
-# ============================================
-python-dotenv==1.0.0
+# ============================================================================
+# Utilities
+# ============================================================================
+python-dotenv==1.1.1
 python-json-logger==2.0.7
 colorama==0.4.6
-click==8.1.7
+click==8.3.0
 tabulate==0.9.0
-openpyxl==3.1.2  # Pour import Excel
-phonenumbers==8.13.27  # Validation numéros
-
-# ============================================
-# MONITORING & LOGGING
-# ============================================
+openpyxl==3.1.2
+phonenumbers==8.13.27
+invoke==2.2.1
+tqdm>=4.66.0
 prometheus-client==0.19.0
-python-json-logger==2.0.7
 
-# ============================================
-# TESTING (DEV)
-# ============================================
-pytest==7.4.4
-pytest-asyncio==0.23.3
-pytest-cov==4.1.0
-httpx>=0.27.0  # Pour tester FastAPI + compatible ollama
-
-# ============================================
-# CODE QUALITY (DEV)
-# ============================================
-black==24.1.1
-flake8==7.0.0
-mypy==1.8.0
-isort==5.13.2
-
-# ============================================
-# NOTES D'INSTALLATION
-# ============================================
+# ============================================================================
+# Notes d'Installation
+# ============================================================================
 #
-# 1. Créer environnement virtuel (Python 3.11+ requis):
+# ORDRE STRICT:
+#
+# 1. System dependencies (si Linux):
+#    sudo apt-get install -y ffmpeg postgresql-14 libpq-dev
+#
+# 2. Venv:
 #    python3.11 -m venv venv
-#    source venv/bin/activate  (Linux/macOS)
-#    venv\Scripts\activate     (Windows)
+#    source venv/bin/activate
 #
-# 2. Installer dépendances:
+# 3. Pip upgrade:
+#    pip install --upgrade pip setuptools wheel
+#
+# 4. PyTorch (choisir CPU ou GPU):
+#    pip install --index-url https://download.pytorch.org/whl/cpu \
+#        torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0
+#
+# 5. numpy:
+#    pip install numpy==1.25.2
+#
+# 6. Transformers:
+#    pip install transformers==4.46.3
+#
+# 7. Chatterbox dependencies:
+#    pip install resemble-perth s3tokenizer onnxruntime gradio==5.44.1
+#    pip install pykakasi spacy-pkuseg diffusers==0.29.0
+#    pip install git+https://github.com/Vuizur/add-stress-to-epub
+#
+# 8. Chatterbox (--no-deps IMPORTANT):
+#    pip install git+https://github.com/resemble-ai/chatterbox.git --no-deps
+#
+# 9. Reste des requirements:
 #    pip install -r requirements.txt
 #
-# 3. Modèle Vosk (français):
-#    wget https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip
-#    unzip vosk-model-small-fr-0.22.zip -d models/
-#
-# 4. Ollama (installer séparément):
-#    https://ollama.ai/download
-#    ollama pull mistral:7b
-#
-# 4b. HuggingFace Token (pour pyannote.audio):
-#    1. Créer compte sur https://huggingface.co
-#    2. Générer token: https://huggingface.co/settings/tokens
-#    3. Ajouter dans .env: HUGGINGFACE_TOKEN=hf_...
-#    4. Accepter conditions: https://huggingface.co/pyannote/speaker-diarization-3.1
-#
-# 5. FreeSWITCH ESL:
-#    - Linux: apt install freeswitch-python-esl
-#    - macOS: compiler depuis sources
-#    - Ou utiliser python-esl via pip (si disponible)
-#
-# 6. GPU pour Coqui TTS (optionnel):
-#    pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
+# ============================================================================

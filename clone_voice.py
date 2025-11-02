@@ -195,11 +195,50 @@ class ChatterboxVoiceCloner:
                 if source_candidates:
                     logger.info(f"📂 Found {len(source_candidates)} cleaned files in voices/{voice_name}/cleaned/")
 
+            # Cas spécial: 1 seul gros fichier YouTube → découper automatiquement
+            if len(source_candidates) == 1 and youtube_files:
+                big_file = source_candidates[0]
+                logger.info(f"📂 Found 1 large YouTube file: {big_file.name}")
+
+                # Vérifier durée
+                from pydub import AudioSegment
+                audio = AudioSegment.from_wav(str(big_file))
+                duration_s = len(audio) / 1000
+
+                logger.info(f"📏 Duration: {duration_s:.1f}s ({duration_s/60:.1f}min)")
+
+                # Si > 60s, découper en chunks de 10s
+                if duration_s > 60:
+                    logger.info(f"✂️  Splitting into 10s chunks for processing...")
+
+                    chunk_duration_ms = 10000  # 10s
+                    chunks_created = []
+
+                    for i in range(0, len(audio), chunk_duration_ms):
+                        chunk = audio[i:i + chunk_duration_ms]
+                        if len(chunk) >= 4000:  # Au moins 4s
+                            chunk_path = voice_folder / f"youtube_{i//1000:03d}.wav"
+                            chunk.export(str(chunk_path), format="wav")
+                            chunks_created.append(chunk_path)
+
+                    logger.info(f"✅ Created {len(chunks_created)} chunks from {big_file.name}")
+
+                    # Supprimer le gros fichier original
+                    big_file.unlink()
+                    logger.info(f"🗑️  Removed original large file")
+
+                    # Mettre à jour source_candidates
+                    source_candidates = chunks_created
+                    logger.info(f"📂 Now have {len(source_candidates)} files to process")
+                else:
+                    # Fichier < 60s, utiliser tel quel en zero-shot
+                    logger.info(f"📁 File is short enough, using as single reference (zero-shot)")
+
             if len(source_candidates) >= 2:
                 logger.info(f"🎯 Few-shot mode: {len(source_candidates)} candidates found")
 
                 # Déterminer le répertoire source
-                if youtube_files:
+                if youtube_files or any("youtube_" in f.name for f in source_candidates):
                     source_dir = voice_folder
                 elif (self.audio_dir / source_candidates[0].name).exists():
                     source_dir = self.audio_dir
@@ -228,16 +267,24 @@ class ChatterboxVoiceCloner:
                 audio_source = str(reference_file)
                 logger.info(f"📁 Using existing reference.wav (zero-shot)")
             else:
-                # Chercher dans cleaned/
-                cleaned_dir = voice_folder / "cleaned"
-                if cleaned_dir.exists():
-                    cleaned_files = sorted(cleaned_dir.glob("*_cleaned.wav"))
+                # Chercher 1 seul fichier YouTube/audio
+                if len(source_candidates) == 1:
+                    single_file = source_candidates[0]
+                    logger.info(f"📁 Found single file: {single_file.name}")
+                    logger.info(f"   Using as zero-shot reference")
+                    audio_source = str(single_file)
 
-                    if cleaned_files:
-                        # Utiliser le fichier le plus gros (généralement meilleure qualité)
-                        best_file = max(cleaned_files, key=lambda f: f.stat().st_size)
-                        audio_source = str(best_file)
-                        logger.info(f"📁 Using best cleaned file: {best_file.name} (zero-shot)")
+                # Sinon chercher dans cleaned/
+                elif not source_candidates:
+                    cleaned_dir = voice_folder / "cleaned"
+                    if cleaned_dir.exists():
+                        cleaned_files = sorted(cleaned_dir.glob("*_cleaned.wav"))
+
+                        if cleaned_files:
+                            # Utiliser le fichier le plus gros (généralement meilleure qualité)
+                            best_file = max(cleaned_files, key=lambda f: f.stat().st_size)
+                            audio_source = str(best_file)
+                            logger.info(f"📁 Using best cleaned file: {best_file.name} (zero-shot)")
 
         if not audio_source:
             logger.error(f"❌ No audio files found for voice '{voice_name}'")
