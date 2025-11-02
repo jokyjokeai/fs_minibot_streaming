@@ -553,7 +553,7 @@ class YouTubeVoiceExtractor:
             self.diarization_mode = "resemblyzer"
 
         # 3. Fallback: SimpleDiarization (qualité basique)
-        elif not self.diarization_mode and SIMPLE_DIARIZATION_AVAILABLE:
+        if not self.diarization_mode and SIMPLE_DIARIZATION_AVAILABLE:
             logger.info("🎬 YouTubeVoiceExtractor initialized (SimpleDiarization fallback)")
             self.diarizer = SimpleDiarization(
                 min_segment_duration=0.5,
@@ -563,7 +563,8 @@ class YouTubeVoiceExtractor:
             )
             self.diarization_mode = "simple"
 
-        else:
+        # Check if any diarization system is available
+        if not self.diarization_mode:
             raise RuntimeError("❌ No diarization system available")
 
     def detect_available_voices(self) -> List[str]:
