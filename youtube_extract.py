@@ -310,6 +310,23 @@ class ResemblyzerDiarization:
         logger.info(f"🔗 Merged {len(segments)} → {len(merged)} segments")
         return merged
 
+    def get_speaker_durations(self, segments: List[SpeakerSegment]) -> Dict[str, float]:
+        """
+        Calcule la durée totale de parole par locuteur
+
+        Args:
+            segments: Liste de SpeakerSegment
+
+        Returns:
+            Dict {speaker_name: duration_seconds}
+        """
+        durations = {}
+        for seg in segments:
+            if seg.speaker not in durations:
+                durations[seg.speaker] = 0.0
+            durations[seg.speaker] += seg.duration
+        return durations
+
 
 class YouTubeVoiceExtractor:
     """Extracteur audio YouTube avec diarization et découpage intelligent"""
