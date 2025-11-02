@@ -59,11 +59,14 @@ pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.
 echo -e "${GREEN}4️⃣ Installation Transformers 4.52.1 (compromise)...${NC}"
 pip install "transformers==4.52.1"
 
-# 5. Chatterbox TTS (sans dépendances pour éviter downgrades)
-echo -e "${GREEN}5️⃣ Installation Chatterbox TTS (no-deps)...${NC}"
-pip install --no-deps chatterbox-tts
+# 5. Chatterbox TTS dependencies d'abord
+echo -e "${GREEN}5️⃣ Installation dépendances Chatterbox...${NC}"
 
-# Installer dépendances manquantes de Chatterbox
+# pkuseg (chinois) - installer avec --no-build-isolation si problème
+pip install --upgrade cython setuptools wheel
+pip install --no-build-isolation pkuseg==0.0.25 || pip install pkuseg || echo "pkuseg skipped (optional)"
+
+# Autres dépendances Chatterbox
 pip install \
     encodec \
     einops \
@@ -71,37 +74,36 @@ pip install \
     gradio==5.44.1 \
     librosa \
     soundfile \
-    pydub
+    pydub \
+    pykakasi \
+    s3tokenizer \
+    resemble-perth
 
-# 6. Coqui-TTS/XTTS (sans dépendances)
-echo -e "${GREEN}6️⃣ Installation Coqui-TTS (no-deps)...${NC}"
-pip install --no-deps TTS
+# Installer Chatterbox TTS (no-deps car déjà fait)
+echo -e "${GREEN}5️⃣b Installation Chatterbox TTS...${NC}"
+pip install --no-deps chatterbox-tts
 
-# Installer dépendances manquantes de TTS
+# 6. Coqui-TTS/XTTS (AVEC dépendances, mais version fixe)
+echo -e "${GREEN}6️⃣ Installation Coqui-TTS 0.22.0...${NC}"
+# Version 0.22.0 = plus stable, moins de dépendances problématiques que 0.27.2
+pip install "TTS==0.22.0"
+
+# Dépendances manquantes optionnelles (pour langues)
 pip install \
-    scipy \
-    inflect \
-    phonemizer \
-    pypinyin \
+    bangla \
     gruut[de,es,fr] \
-    pysbd \
-    dateparser \
-    anyascii
+    pypinyin 2>/dev/null || echo "Some language deps skipped (optional)"
 
-# 7. audio-separator version 0.12.0 (compatible numpy 1.25)
-echo -e "${GREEN}7️⃣ Installation audio-separator 0.12.0...${NC}"
-pip install --no-deps "audio-separator==0.12.0"
+# 7. Installer torchvision AVANT audio-separator (requis par onnx2torch)
+echo -e "${GREEN}7️⃣ Installation torchvision (requis UVR)...${NC}"
+pip install "torchvision==0.21.0"
 
-# Installer dépendances de audio-separator
-pip install \
-    onnx \
-    onnxruntime \
-    resampy \
-    requests \
-    tqdm
+# 8. audio-separator version 0.12.0 (compatible numpy 1.25)
+echo -e "${GREEN}8️⃣ Installation audio-separator 0.12.0...${NC}"
+pip install "audio-separator==0.12.0"
 
-# 8. Dépendances audio communes (si manquantes)
-echo -e "${GREEN}8️⃣ Vérification dépendances audio...${NC}"
+# 9. Dépendances audio communes (si manquantes)
+echo -e "${GREEN}9️⃣ Vérification dépendances audio...${NC}"
 pip install \
     noisereduce==3.0.2 \
     soundfile==0.12.1
