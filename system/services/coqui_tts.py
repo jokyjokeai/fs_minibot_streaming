@@ -216,15 +216,22 @@ class CoquiTTS:
             try:
                 embeddings_data = torch.load(embeddings_path, map_location=self.tts_config["device"])
 
-                # Vérifier format (doit être un tensor, pas un dict marqueur)
-                if isinstance(embeddings_data, dict):
-                    logger.error(f"❌ Old marker format detected for '{voice_name}'")
-                    logger.error(f"   Please re-clone the voice to extract real embeddings")
+                # Vérifier format (doit être un dict avec gpt_cond_latent et speaker_embedding)
+                if not isinstance(embeddings_data, dict):
+                    logger.error(f"❌ Invalid embeddings format for '{voice_name}'")
+                    logger.error(f"   Please re-clone the voice to extract embeddings")
+                    return False
+
+                if "gpt_cond_latent" not in embeddings_data or "speaker_embedding" not in embeddings_data:
+                    logger.error(f"❌ Incomplete embeddings for '{voice_name}'")
+                    logger.error(f"   Please re-clone the voice to extract embeddings")
                     return False
 
                 # Charger embeddings en cache
                 self.cached_embeddings[voice_name] = embeddings_data
-                logger.info(f"🚀 Voice '{voice_name}' embeddings loaded in cache ({embeddings_data.shape})")
+                logger.info(f"🚀 Voice '{voice_name}' embeddings loaded in cache")
+                logger.info(f"   - GPT latent: {embeddings_data['gpt_cond_latent'].shape}")
+                logger.info(f"   - Speaker emb: {embeddings_data['speaker_embedding'].shape}")
 
                 return True
 
@@ -322,13 +329,19 @@ class CoquiTTS:
             start_time = time.time()
 
             # Synthèse avec embeddings cachés (RAPIDE - plus de fallback speaker_wav)
-            embeddings = self.cached_embeddings[voice_name]
-            self.tts_model.tts_to_file(
+            embeddings_data = self.cached_embeddings[voice_name]
+
+            # Utiliser la méthode interne pour générer avec les embeddings pré-calculés
+            wav = self.tts_model.synthesizer.tts_model.inference(
                 text=text,
-                file_path=output_file,
-                speaker_embedding=embeddings,
-                language=self.tts_config["language"]
+                language=self.tts_config["language"],
+                gpt_cond_latent=embeddings_data["gpt_cond_latent"],
+                speaker_embedding=embeddings_data["speaker_embedding"]
             )
+
+            # Sauvegarder le WAV
+            import torchaudio
+            torchaudio.save(output_file, torch.tensor(wav["wav"]).unsqueeze(0).cpu(), 24000)
 
             generation_time = time.time() - start_time
 
@@ -408,12 +421,18 @@ class CoquiTTS:
                 if len(audio_files) > 1:
                     logger.info(f"📊 Averaged embeddings from {len(audio_files)} files")
 
-                # Sauvegarder embeddings
-                torch.save(speaker_embedding.cpu(), embeddings_path)
-                logger.info(f"💾 Speaker embeddings saved: {embeddings_path.name} ({speaker_embedding.shape})")
+                # Sauvegarder TOUS les embeddings nécessaires (gpt_cond + speaker)
+                embeddings_data = {
+                    "gpt_cond_latent": gpt_cond_latent.cpu(),
+                    "speaker_embedding": speaker_embedding.cpu()
+                }
+                torch.save(embeddings_data, embeddings_path)
+                logger.info(f"💾 Speaker embeddings saved: {embeddings_path.name}")
+                logger.info(f"   - GPT latent: {gpt_cond_latent.shape}")
+                logger.info(f"   - Speaker emb: {speaker_embedding.shape}")
 
                 # Mettre en cache immédiatement
-                self.cached_embeddings[voice_name] = speaker_embedding
+                self.cached_embeddings[voice_name] = embeddings_data
 
             except Exception as e:
                 logger.error(f"❌ Failed to extract embeddings: {e}", exc_info=True)
@@ -426,12 +445,17 @@ class CoquiTTS:
 
             start_time = time.time()
 
-            self.tts_model.tts_to_file(
+            # Utiliser la méthode interne pour générer avec les embeddings pré-calculés
+            wav = self.tts_model.synthesizer.tts_model.inference(
                 text=test_text,
-                file_path=str(test_output),
-                speaker_embedding=speaker_embedding,
-                language=self.tts_config["language"]
+                language=self.tts_config["language"],
+                gpt_cond_latent=embeddings_data["gpt_cond_latent"],
+                speaker_embedding=embeddings_data["speaker_embedding"]
             )
+
+            # Sauvegarder le WAV
+            import torchaudio
+            torchaudio.save(str(test_output), torch.tensor(wav["wav"]).unsqueeze(0).cpu(), 24000)
 
             clone_time = time.time() - start_time
 
@@ -448,7 +472,8 @@ class CoquiTTS:
                 "language": self.tts_config["language"],
                 "test_audio": str(test_output.name),
                 "clone_time": clone_time,
-                "embeddings_shape": str(speaker_embedding.shape),
+                "gpt_latent_shape": str(embeddings_data["gpt_cond_latent"].shape),
+                "speaker_emb_shape": str(embeddings_data["speaker_embedding"].shape),
                 "embeddings_averaged": len(audio_files) > 1
             }
 
