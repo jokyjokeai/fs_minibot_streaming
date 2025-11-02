@@ -164,19 +164,37 @@ async def diarize_audio(file: UploadFile = File(...)):
         segments = []
         speaker_stats = {}
 
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
-            segment = {
-                "start": float(turn.start),
-                "end": float(turn.end),
-                "speaker": speaker,
-                "duration": float(turn.end - turn.start)
-            }
-            segments.append(segment)
+        # Support both old and new pyannote API
+        try:
+            # Try new API (pyannote.audio 3.1+)
+            for segment, track, speaker in diarization.itertracks(yield_label=True):
+                seg_dict = {
+                    "start": float(segment.start),
+                    "end": float(segment.end),
+                    "speaker": speaker,
+                    "duration": float(segment.end - segment.start)
+                }
+                segments.append(seg_dict)
 
-            # Track speaker stats
-            if speaker not in speaker_stats:
-                speaker_stats[speaker] = 0.0
-            speaker_stats[speaker] += segment["duration"]
+                # Track speaker stats
+                if speaker not in speaker_stats:
+                    speaker_stats[speaker] = 0.0
+                speaker_stats[speaker] += seg_dict["duration"]
+        except AttributeError:
+            # Fallback for newer API where itertracks doesn't exist
+            for segment, track, speaker in diarization:
+                seg_dict = {
+                    "start": float(segment.start),
+                    "end": float(segment.end),
+                    "speaker": speaker,
+                    "duration": float(segment.end - segment.start)
+                }
+                segments.append(seg_dict)
+
+                # Track speaker stats
+                if speaker not in speaker_stats:
+                    speaker_stats[speaker] = 0.0
+                speaker_stats[speaker] += seg_dict["duration"]
 
         # Clean up temp file
         os.unlink(temp_path)
