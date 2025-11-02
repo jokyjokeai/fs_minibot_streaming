@@ -167,26 +167,46 @@ class ChatterboxVoiceCloner:
 
         # Stratégie 1: Si use_scoring ET fichiers disponibles → few-shot
         if use_scoring and AUDIO_PROCESSING_AVAILABLE:
-            # Chercher dans audio/ OU cleaned/
+            # Chercher dans audio/ OU voices/{voice_name}/ OU cleaned/
             cleaned_dir = voice_folder / "cleaned"
 
-            # Priorité 1: Chercher dans audio/ si voice_name correspond
+            # Priorité 1: Chercher dans voices/{voice_name}/ (fichiers YouTube originaux)
             source_candidates = []
-            if self.audio_dir.exists():
+            youtube_files = list(voice_folder.glob("youtube_*.wav"))
+            if youtube_files:
+                source_candidates = youtube_files
+                logger.info(f"📂 Found {len(youtube_files)} original YouTube files in voices/{voice_name}/")
+
+            # Priorité 2: Chercher dans audio/ si voice_name correspond
+            if not source_candidates and self.audio_dir.exists():
                 source_candidates = list(self.audio_dir.glob("*.wav"))
                 source_candidates.extend(self.audio_dir.glob("*.mp3"))
+                if source_candidates:
+                    logger.info(f"📂 Found {len(source_candidates)} files in audio/")
 
-            # Priorité 2: Sinon chercher dans cleaned/
+            # Priorité 3: Sinon chercher dans cleaned/
             if not source_candidates and cleaned_dir.exists():
                 source_candidates = list(cleaned_dir.glob("*.wav"))
+                if source_candidates:
+                    logger.info(f"📂 Found {len(source_candidates)} cleaned files in voices/{voice_name}/cleaned/")
 
             if len(source_candidates) >= 2:
                 logger.info(f"🎯 Few-shot mode: {len(source_candidates)} candidates found")
 
+                # Déterminer le répertoire source
+                if youtube_files:
+                    source_dir = voice_folder
+                elif (self.audio_dir / source_candidates[0].name).exists():
+                    source_dir = self.audio_dir
+                else:
+                    source_dir = cleaned_dir
+
+                logger.info(f"📁 Source directory: {source_dir}")
+
                 # Scorer et sélectionner meilleurs
                 selected_files = self.process_and_score_audio_files(
                     voice_name,
-                    source_dir=self.audio_dir if (self.audio_dir / source_candidates[0].name).exists() else cleaned_dir,
+                    source_dir=source_dir,
                     top_n=min(max_files, len(source_candidates)),
                     use_uvr=use_uvr
                 )
@@ -405,12 +425,15 @@ class ChatterboxVoiceCloner:
                 output_format="wav"
             )
 
-            # Charger modèle vocal (version 0.12.0 API différente)
-            # Pas de load_model(), utiliser directement separate()
-            # Le modèle sera téléchargé automatiquement
+            # Charger modèle vocal (version 0.12.0 API)
+            # Utiliser modèle MDX-Net pour vocals
+            # Le modèle sera téléchargé automatiquement au premier usage
 
-            # Séparer vocals
-            output_files = separator.separate(str(audio_path))
+            # Séparer vocals avec modèle MDX-Net
+            output_files = separator.separate(
+                str(audio_path),
+                model_filename="UVR-MDX-NET-Voc_FT.onnx"  # Modèle vocal MDX
+            )
 
             # UVR génère 2 fichiers: vocals et instrumental
             # On garde juste les vocals
