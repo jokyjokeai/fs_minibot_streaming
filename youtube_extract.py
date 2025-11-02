@@ -567,18 +567,21 @@ class YouTubeVoiceExtractor:
         self.diarization_mode = None
         self.pyannote_service = None
 
-        # 1. PRIORITÉ: Pyannote service (meilleur qualité)
-        pyannote_service_dir = Path("/root/pyannote_service")
-        if pyannote_service_dir.exists():
-            logger.info("🎬 YouTubeVoiceExtractor initialized (Pyannote service - BEST)")
-            self.pyannote_service = PyannoteService()
-            if self.pyannote_service.start():
-                self.diarization_mode = "pyannote"
-            else:
-                logger.warning("⚠️  Pyannote service failed to start, falling back...")
-                self.pyannote_service = None
+        # 1. PRIORITÉ: Resemblyzer (fast, good quality, single venv)
+        # Note: Pyannote service disabled (dependency conflicts with numpy)
+        # If you want Pyannote back, uncomment lines below and run install_pyannote_service.sh
 
-        # 2. Fallback: Resemblyzer (bonne qualité)
+        # pyannote_service_dir = Path("/root/pyannote_service")
+        # if pyannote_service_dir.exists():
+        #     logger.info("🎬 YouTubeVoiceExtractor initialized (Pyannote service - BEST)")
+        #     self.pyannote_service = PyannoteService()
+        #     if self.pyannote_service.start():
+        #         self.diarization_mode = "pyannote"
+        #     else:
+        #         logger.warning("⚠️  Pyannote service failed to start, falling back...")
+        #         self.pyannote_service = None
+
+        # 2. Use Resemblyzer (good quality, fast, single venv)
         if not self.diarization_mode and RESEMBLYZER_AVAILABLE:
             logger.info("🎬 YouTubeVoiceExtractor initialized (Resemblyzer diarization)")
             self.diarizer = ResemblyzerDiarization(
@@ -754,13 +757,14 @@ class YouTubeVoiceExtractor:
                         model_file_dir=str(models_dir)
                     )
 
-                # Use fastest model for speed: Inst_1 (fastest) > Inst_Main (balanced) > KARA_2 > HQ_3 (slowest)
-                separator.load_model("UVR-MDX-NET-Inst_1")
+                # Use Kim_vocal_2: fastest model with good quality for voice cloning
+                # Speed hierarchy: Kim_vocal_2 (fastest) > Inst_1 > htdemucs_ft > MDX23 (slowest)
+                separator.load_model("Kim_vocal_2")
 
                 # Get audio duration for progress estimation
                 from pydub import AudioSegment
                 audio_duration = len(AudioSegment.from_file(str(normalized_file))) / 1000
-                estimated_time = audio_duration * 0.4
+                estimated_time = audio_duration * 0.25  # Kim_vocal_2 is ~2x faster than Inst_1
                 logger.info(f"   Processing {audio_duration:.0f}s of audio (estimated: {estimated_time:.0f}s)...")
 
                 import time
