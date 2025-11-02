@@ -809,9 +809,46 @@ def main():
         if args.score_only:
             logger.error("❌ --score-only requires --voice parameter")
             return 1
-        # Utiliser première voix disponible
-        voice_name = available_voices[0]
-        logger.info(f"🎯 Using voice: {voice_name}")
+
+        # Demander quelle voix utiliser
+        if len(available_voices) == 1:
+            voice_name = available_voices[0]
+            logger.info(f"\n🎯 Voice found: {voice_name}")
+        else:
+            logger.info("\n🎤 Select a voice to clone:")
+            for i, v in enumerate(available_voices, 1):
+                logger.info(f"   {i}. {v}")
+
+            try:
+                choice = input("\nEnter number (or 'q' to quit): ").strip()
+                if choice.lower() == 'q':
+                    logger.info("Cancelled.")
+                    return 0
+
+                idx = int(choice) - 1
+                if 0 <= idx < len(available_voices):
+                    voice_name = available_voices[idx]
+                else:
+                    logger.error("❌ Invalid choice")
+                    return 1
+            except (ValueError, KeyboardInterrupt):
+                logger.error("\n❌ Cancelled")
+                return 1
+
+        # Confirmation avant de continuer
+        logger.info(f"\n{'='*60}")
+        logger.info(f"🎯 Voice selected: {voice_name}")
+        logger.info(f"📁 Location: voices/{voice_name}/")
+        logger.info(f"{'='*60}")
+
+        try:
+            confirm = input("\nProceed with cloning? (y/N): ").strip().lower()
+            if confirm not in ['y', 'yes', 'o', 'oui']:
+                logger.info("Cancelled.")
+                return 0
+        except KeyboardInterrupt:
+            logger.error("\n❌ Cancelled")
+            return 1
 
     # Mode score-only
     if args.score_only:
