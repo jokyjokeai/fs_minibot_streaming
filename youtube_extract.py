@@ -86,6 +86,155 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
+# PYANNOTE SERVICE - Auto-starting isolated service
+# ============================================================
+
+class PyannoteService:
+    """
+    Service pyannote auto-démarrant en subprocess isolé
+
+    - Lance automatiquement le service FastAPI au démarrage
+    - Utilise venv isolé (pas de conflits de dépendances)
+    - Arrête proprement le service à la fin
+    """
+
+    def __init__(self, service_dir: str = "/root/pyannote_service", port: int = 8001):
+        self.service_dir = Path(service_dir)
+        self.port = port
+        self.process = None
+        self.base_url = f"http://127.0.0.1:{port}"
+
+    def start(self):
+        """Démarre le service pyannote en background"""
+        logger.info("🚀 Starting Pyannote service...")
+
+        # Vérifier que le service existe
+        if not self.service_dir.exists():
+            logger.error(f"❌ Pyannote service not found: {self.service_dir}")
+            logger.error("   Run: bash install_pyannote_service.sh")
+            return False
+
+        # Vérifier si déjà running
+        try:
+            import requests
+            response = requests.get(f"{self.base_url}/health", timeout=1)
+            if response.status_code == 200:
+                logger.info("✅ Pyannote service already running")
+                return True
+        except:
+            pass
+
+        # Lancer le service
+        python_bin = self.service_dir / "venv_pyannote" / "bin" / "python"
+
+        if not python_bin.exists():
+            logger.error(f"❌ Python binary not found: {python_bin}")
+            logger.error("   Run: bash install_pyannote_service.sh")
+            return False
+
+        cmd = [
+            str(python_bin),
+            "-m", "uvicorn",
+            "server:app",
+            "--host", "127.0.0.1",
+            "--port", str(self.port),
+            "--log-level", "warning"
+        ]
+
+        try:
+            self.process = subprocess.Popen(
+                cmd,
+                cwd=str(self.service_dir),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+
+            # Attendre que le service soit prêt (max 30s)
+            import requests
+            import time
+
+            logger.info("   Waiting for service to start...")
+            for i in range(30):
+                try:
+                    response = requests.get(f"{self.base_url}/health", timeout=1)
+                    if response.status_code == 200:
+                        logger.info(f"✅ Pyannote service started on port {self.port}")
+                        return True
+                except:
+                    time.sleep(1)
+
+            logger.error("❌ Service failed to start (timeout)")
+            self.stop()
+            return False
+
+        except Exception as e:
+            logger.error(f"❌ Failed to start service: {e}")
+            return False
+
+    def stop(self):
+        """Arrête le service proprement"""
+        if self.process:
+            logger.info("🛑 Stopping Pyannote service...")
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except:
+                self.process.kill()
+            self.process = None
+
+    def diarize(self, audio_path: Path) -> Optional[List]:
+        """
+        Diarize audio file via HTTP API
+
+        Args:
+            audio_path: Path to audio file
+
+        Returns:
+            List of segments or None
+        """
+        import requests
+
+        try:
+            logger.info(f"📤 Sending audio to Pyannote service...")
+
+            with open(audio_path, 'rb') as f:
+                files = {'file': (audio_path.name, f, 'audio/wav')}
+                response = requests.post(
+                    f"{self.base_url}/diarize",
+                    files=files,
+                    timeout=300  # 5 minutes max
+                )
+
+            if response.status_code != 200:
+                logger.error(f"❌ Service returned error: {response.status_code}")
+                logger.error(f"   {response.text}")
+                return None
+
+            data = response.json()
+
+            logger.info(f"✅ Received {data['total_segments']} segments, {data['num_speakers']} speakers")
+
+            # Convert to SpeakerSegment objects
+            segments = []
+            for seg in data['segments']:
+                segments.append(SpeakerSegment(
+                    start=seg['start'],
+                    end=seg['end'],
+                    speaker=seg['speaker']
+                ))
+
+            return segments
+
+        except Exception as e:
+            logger.error(f"❌ Diarization request failed: {e}")
+            return None
+
+    def __del__(self):
+        """Cleanup on object destruction"""
+        self.stop()
+
+
+# ============================================================
 # RESEMBLYZER DIARIZATION - Custom Implementation
 # ============================================================
 
@@ -347,16 +496,33 @@ class YouTubeVoiceExtractor:
         self.voices_dir = Path(config.VOICES_DIR)
         self.voices_dir.mkdir(exist_ok=True)
 
-        # Initialiser système de diarization
-        if RESEMBLYZER_AVAILABLE:
+        # Initialiser système de diarization (ordre de priorité)
+        self.diarization_mode = None
+        self.pyannote_service = None
+
+        # 1. PRIORITÉ: Pyannote service (meilleur qualité)
+        pyannote_service_dir = Path("/root/pyannote_service")
+        if pyannote_service_dir.exists():
+            logger.info("🎬 YouTubeVoiceExtractor initialized (Pyannote service - BEST)")
+            self.pyannote_service = PyannoteService()
+            if self.pyannote_service.start():
+                self.diarization_mode = "pyannote"
+            else:
+                logger.warning("⚠️  Pyannote service failed to start, falling back...")
+                self.pyannote_service = None
+
+        # 2. Fallback: Resemblyzer (bonne qualité)
+        if not self.diarization_mode and RESEMBLYZER_AVAILABLE:
             logger.info("🎬 YouTubeVoiceExtractor initialized (Resemblyzer diarization)")
             self.diarizer = ResemblyzerDiarization(
                 min_segment_duration=0.5,
                 min_speakers=1,
-                max_speakers=8  # Plus de speakers possibles avec Resemblyzer
+                max_speakers=8
             )
-            self.use_resemblyzer = True
-        elif SIMPLE_DIARIZATION_AVAILABLE:
+            self.diarization_mode = "resemblyzer"
+
+        # 3. Fallback: SimpleDiarization (qualité basique)
+        elif not self.diarization_mode and SIMPLE_DIARIZATION_AVAILABLE:
             logger.info("🎬 YouTubeVoiceExtractor initialized (SimpleDiarization fallback)")
             self.diarizer = SimpleDiarization(
                 min_segment_duration=0.5,
@@ -364,7 +530,8 @@ class YouTubeVoiceExtractor:
                 min_speakers=1,
                 max_speakers=5
             )
-            self.use_resemblyzer = False
+            self.diarization_mode = "simple"
+
         else:
             raise RuntimeError("❌ No diarization system available")
 
@@ -672,23 +839,34 @@ class YouTubeVoiceExtractor:
         """
         logger.info(f"\n🎤 Performing speaker diarization...")
 
-        if self.use_resemblyzer:
+        # Log quel système est utilisé
+        if self.diarization_mode == "pyannote":
+            logger.info(f"   Using Pyannote service (BEST QUALITY)")
+        elif self.diarization_mode == "resemblyzer":
             logger.info(f"   Using Resemblyzer (voice embeddings + clustering)")
-        else:
+        elif self.diarization_mode == "simple":
             logger.info(f"   Using SimpleDiarization (MFCC+Clustering)")
 
         try:
-            # Resemblyzer: méthode simple sans paramètres avancés
-            if self.use_resemblyzer:
+            # 1. Pyannote service (priorité)
+            if self.diarization_mode == "pyannote":
+                segments = self.pyannote_service.diarize(audio_path)
+
+            # 2. Resemblyzer
+            elif self.diarization_mode == "resemblyzer":
                 segments = self.diarizer.diarize(audio_path)
-            # SimpleDiarization: méthode avec paramètres
-            else:
+
+            # 3. SimpleDiarization
+            elif self.diarization_mode == "simple":
                 segments = self.diarizer.diarize(
                     audio_path,
                     n_speakers=n_speakers,
                     vad_threshold_db=-30,
                     min_silence_duration=0.3
                 )
+            else:
+                logger.error("❌ No diarization mode selected")
+                return None
 
             if not segments:
                 logger.error("❌ No speakers detected")
@@ -699,6 +877,8 @@ class YouTubeVoiceExtractor:
 
         except Exception as e:
             logger.error(f"❌ Diarization failed: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def analyze_speakers(self, segments: List[SpeakerSegment]) -> Dict[str, float]:
