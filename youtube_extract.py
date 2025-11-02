@@ -692,13 +692,18 @@ class YouTubeVoiceExtractor:
                 models_dir.mkdir(parents=True, exist_ok=True)
 
                 # Optimize for speed: reduce segment_size and overlap
-                # Parameters must be passed to Separator() constructor with mdx_ prefix
+                # Parameters must be passed in mdx_params dict
                 logger.info("   ⚡ Using fast processing mode (KARA_2 model + optimized params)")
                 separator = Separator(
                     log_level=logging.WARNING,
                     model_file_dir=str(models_dir),
-                    mdx_segment_size=128,  # Reduced from 256 (faster, slightly lower quality)
-                    mdx_overlap=0.1        # Reduced from 0.25 (faster processing)
+                    mdx_params={
+                        "hop_length": 1024,
+                        "segment_size": 128,   # Reduced from 256 (faster, slightly lower quality)
+                        "overlap": 0.1,        # Reduced from 0.25 (faster processing)
+                        "batch_size": 1,
+                        "enable_denoise": False
+                    }
                 )
 
                 # Use faster model: UVR_MDXNET_KARA_2 is faster than Inst_HQ_3
