@@ -691,20 +691,29 @@ class YouTubeVoiceExtractor:
                 models_dir = Path("models/uvr")
                 models_dir.mkdir(parents=True, exist_ok=True)
 
-                # Optimize for speed: reduce segment_size and overlap
-                # Parameters must be passed in mdx_params dict
+                # Try with mdx_params (newer versions), fallback to basic init
                 logger.info("   ⚡ Using fast processing mode (KARA_2 model + optimized params)")
-                separator = Separator(
-                    log_level=logging.WARNING,
-                    model_file_dir=str(models_dir),
-                    mdx_params={
-                        "hop_length": 1024,
-                        "segment_size": 128,   # Reduced from 256 (faster, slightly lower quality)
-                        "overlap": 0.1,        # Reduced from 0.25 (faster processing)
-                        "batch_size": 1,
-                        "enable_denoise": False
-                    }
-                )
+
+                try:
+                    # Try newer API with mdx_params
+                    separator = Separator(
+                        log_level=logging.WARNING,
+                        model_file_dir=str(models_dir),
+                        mdx_params={
+                            "hop_length": 1024,
+                            "segment_size": 128,   # Reduced from 256 (faster)
+                            "overlap": 0.1,        # Reduced from 0.25 (faster)
+                            "batch_size": 1,
+                            "enable_denoise": False
+                        }
+                    )
+                except TypeError:
+                    # Fallback for older audio-separator versions
+                    logger.info("   ℹ️  Using basic config (older audio-separator version)")
+                    separator = Separator(
+                        log_level=logging.WARNING,
+                        model_file_dir=str(models_dir)
+                    )
 
                 # Use faster model: UVR_MDXNET_KARA_2 is faster than Inst_HQ_3
                 # Alternative: "UVR-MDX-NET-Inst_Main" (balanced) or "UVR-MDX-NET-Inst_HQ_3" (best quality, slowest)
