@@ -441,11 +441,13 @@ class ChatterboxVoiceCloner:
             output_files = separator.separate(str(audio_path))
 
             # UVR génère 2 fichiers: vocals et instrumental
-            # On garde juste les vocals
+            # output_files contient les noms de fichiers (pas chemins complets)
+            # Chercher le fichier vocals
             vocals_file = None
-            for f in output_files:
-                if "Vocals" in f or "vocals" in f:
-                    vocals_file = Path(f)
+            for filename in output_files:
+                if "Vocals" in filename or "vocals" in filename:
+                    # Construire le chemin complet
+                    vocals_file = temp_output / filename
                     break
 
             if vocals_file and vocals_file.exists():
