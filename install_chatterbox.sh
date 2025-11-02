@@ -48,25 +48,29 @@ fi
 echo -e "${GREEN}✅ Python $PYTHON_VERSION détecté${NC}"
 echo ""
 
-# 1. PyTorch (installer AVANT chatterbox-tts)
+# 1. NumPy (IMPORTANT: installer EN PREMIER pour éviter conflits)
+echo -e "${GREEN}1️⃣ Installation numpy<2.0 (compatible)...${NC}"
+pip install "numpy>=1.24.3,<2.0"
+
+# 2. PyTorch (installer AVANT chatterbox-tts)
 if $GPU_MODE; then
-    echo -e "${GREEN}1️⃣ Installation PyTorch (GPU CUDA 11.8)...${NC}"
+    echo -e "${GREEN}2️⃣ Installation PyTorch (GPU CUDA 11.8)...${NC}"
     pip install torch==2.1.2 torchaudio==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu118
 else
-    echo -e "${GREEN}1️⃣ Installation PyTorch (CPU-only)...${NC}"
+    echo -e "${GREEN}2️⃣ Installation PyTorch (CPU-only)...${NC}"
     pip install torch==2.1.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cpu
 fi
 
-# 2. Chatterbox TTS
-echo -e "${GREEN}2️⃣ Installation Chatterbox TTS...${NC}"
+# 3. Chatterbox TTS
+echo -e "${GREEN}3️⃣ Installation Chatterbox TTS...${NC}"
 pip install chatterbox-tts
 
-# 3. Dépendances audio (si pas déjà installées)
-echo -e "${GREEN}3️⃣ Installation dépendances audio...${NC}"
+# 4. Dépendances audio (si pas déjà installées)
+echo -e "${GREEN}4️⃣ Installation dépendances audio...${NC}"
 pip install noisereduce==3.0.2 pydub==0.25.1 soundfile==0.12.1
 
-# 4. Autres dépendances MiniBotPanel (si nécessaire)
-echo -e "${GREEN}4️⃣ Vérification dépendances MiniBotPanel...${NC}"
+# 5. Autres dépendances MiniBotPanel (si nécessaire)
+echo -e "${GREEN}5️⃣ Vérification dépendances MiniBotPanel...${NC}"
 pip install \
     fastapi==0.109.0 \
     uvicorn[standard]==0.27.0 \
