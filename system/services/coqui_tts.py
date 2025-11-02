@@ -429,7 +429,7 @@ class CoquiTTS:
             self.tts_model.tts_to_file(
                 text=test_text,
                 file_path=str(test_output),
-                speaker_embedding=embeddings,
+                speaker_embedding=speaker_embedding,
                 language=self.tts_config["language"]
             )
 
@@ -448,7 +448,7 @@ class CoquiTTS:
                 "language": self.tts_config["language"],
                 "test_audio": str(test_output.name),
                 "clone_time": clone_time,
-                "embeddings_shape": str(embeddings.shape),
+                "embeddings_shape": str(speaker_embedding.shape),
                 "embeddings_averaged": len(audio_files) > 1
             }
 
