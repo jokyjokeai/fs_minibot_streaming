@@ -195,7 +195,7 @@ class ChatterboxVoiceCloner:
                 if source_candidates:
                     logger.info(f"📂 Found {len(source_candidates)} cleaned files in voices/{voice_name}/cleaned/")
 
-            # Cas spécial: 1 seul gros fichier YouTube → découper automatiquement
+            # Cas spécial: 1 seul gros fichier YouTube → nettoyer PUIS découper
             if len(source_candidates) == 1 and youtube_files:
                 big_file = source_candidates[0]
                 logger.info(f"📂 Found 1 large YouTube file: {big_file.name}")
@@ -207,25 +207,39 @@ class ChatterboxVoiceCloner:
 
                 logger.info(f"📏 Duration: {duration_s:.1f}s ({duration_s/60:.1f}min)")
 
-                # Si > 60s, découper en chunks de 10s
+                # Si > 60s, nettoyer PUIS découper
                 if duration_s > 60:
-                    logger.info(f"✂️  Splitting into 10s chunks for processing...")
+                    # ÉTAPE 1: Nettoyer avec UVR si demandé (1 seul nettoyage au lieu de 80!)
+                    file_to_split = big_file
+                    if use_uvr and UVR_AVAILABLE:
+                        logger.info(f"🎵 UVR: Cleaning large file BEFORE splitting (much faster!)...")
+                        cleaned_file = self._clean_with_uvr(big_file, voice_folder)
+                        if cleaned_file and cleaned_file.exists():
+                            logger.info(f"   ✅ Cleaned: {cleaned_file.name}")
+                            file_to_split = cleaned_file
+                            # Supprimer fichier original non-nettoyé
+                            big_file.unlink()
+                        else:
+                            logger.warning(f"   ⚠️  UVR cleaning failed, using original file")
 
+                    # ÉTAPE 2: Découper le fichier (nettoyé ou original)
+                    logger.info(f"✂️  Splitting into 10s chunks...")
+                    audio_to_split = AudioSegment.from_wav(str(file_to_split))
                     chunk_duration_ms = 10000  # 10s
                     chunks_created = []
 
-                    for i in range(0, len(audio), chunk_duration_ms):
-                        chunk = audio[i:i + chunk_duration_ms]
+                    for i in range(0, len(audio_to_split), chunk_duration_ms):
+                        chunk = audio_to_split[i:i + chunk_duration_ms]
                         if len(chunk) >= 4000:  # Au moins 4s
                             chunk_path = voice_folder / f"youtube_{i//1000:03d}.wav"
                             chunk.export(str(chunk_path), format="wav")
                             chunks_created.append(chunk_path)
 
-                    logger.info(f"✅ Created {len(chunks_created)} chunks from {big_file.name}")
+                    logger.info(f"✅ Created {len(chunks_created)} chunks")
 
-                    # Supprimer le gros fichier original
-                    big_file.unlink()
-                    logger.info(f"🗑️  Removed original large file")
+                    # Supprimer le gros fichier (nettoyé ou original)
+                    file_to_split.unlink()
+                    logger.info(f"🗑️  Removed large file")
 
                     # Mettre à jour source_candidates
                     source_candidates = chunks_created
@@ -248,11 +262,13 @@ class ChatterboxVoiceCloner:
                 logger.info(f"📁 Source directory: {source_dir}")
 
                 # Scorer et sélectionner meilleurs
+                # Note: Si fichiers déjà nettoyés (cas gros fichier), ne pas re-nettoyer
+                already_cleaned = any("youtube_" in f.name for f in source_candidates) and use_uvr and youtube_files
                 selected_files = self.process_and_score_audio_files(
                     voice_name,
                     source_dir=source_dir,
                     top_n=min(max_files, len(source_candidates)),
-                    use_uvr=use_uvr
+                    use_uvr=(use_uvr and not already_cleaned)  # Skip UVR si déjà nettoyé
                 )
 
                 if selected_files:
