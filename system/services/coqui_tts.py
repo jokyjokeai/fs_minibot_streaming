@@ -404,19 +404,48 @@ class CoquiTTS:
             try:
                 logger.info(f"🔬 Extracting speaker embeddings from {len(audio_files)} file(s)...")
 
-                # Utiliser l'API native d'XTTS pour calculer les embeddings
-                # XTTS supporte nativement les listes et fait la moyenne automatiquement
-                speaker_wav_list = [str(f) for f in audio_files]
+                # IMPORTANT: Normaliser le volume de TOUS les fichiers avant extraction
+                # Ceci assure une cohérence entre les embeddings (comme ElevenLabs)
+                logger.info(f"📊 Normalizing volume across all files...")
+                normalized_files = []
 
-                # Extraire les embeddings via la méthode get_conditioning_latents
-                # qui gère automatiquement la moyenne de plusieurs fichiers
+                import torchaudio
+                import tempfile
+
+                for audio_file in audio_files:
+                    # Charger audio
+                    waveform, sr = torchaudio.load(str(audio_file))
+
+                    # Normaliser au pic à -3dB (évite la saturation)
+                    peak = waveform.abs().max()
+                    if peak > 0:
+                        target_peak = 10 ** (-3.0 / 20.0)  # -3dB en linéaire
+                        waveform = waveform * (target_peak / peak)
+
+                    # Sauvegarder temporairement
+                    temp_normalized = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                    torchaudio.save(temp_normalized.name, waveform, sr)
+                    normalized_files.append(temp_normalized.name)
+
+                logger.info(f"✅ Volume normalized for {len(normalized_files)} files")
+
+                # Utiliser l'API native d'XTTS pour calculer les embeddings
+                # avec les fichiers normalisés
                 gpt_cond_latent, speaker_embedding = self.tts_model.synthesizer.tts_model.get_conditioning_latents(
-                    audio_path=speaker_wav_list,
+                    audio_path=normalized_files,
                     gpt_cond_len=self.tts_config.get("gpt_cond_len", 30),
                     gpt_cond_chunk_len=self.tts_config.get("gpt_cond_chunk_len", 4),
                     max_ref_length=self.tts_config.get("max_ref_len", 60),
-                    sound_norm_refs=self.tts_config.get("sound_norm_refs", False)
+                    sound_norm_refs=False  # On a déjà normalisé manuellement
                 )
+
+                # Nettoyer les fichiers temporaires
+                import os
+                for temp_file in normalized_files:
+                    try:
+                        os.unlink(temp_file)
+                    except:
+                        pass
 
                 if len(audio_files) > 1:
                     logger.info(f"📊 Averaged embeddings from {len(audio_files)} files")
