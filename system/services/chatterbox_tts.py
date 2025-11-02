@@ -314,17 +314,14 @@ class ChatterboxTTSService:
             exag = exaggeration if exaggeration is not None else 0.4  # Voix naturelle française
             cfg = cfg_weight if cfg_weight is not None else 0.55  # Pacing légèrement ralenti
 
-            # Générer avec voice cloning + tous les paramètres
+            # Générer avec voice cloning
+            # Note: Chatterbox supporte seulement exaggeration et cfg_weight
             wav = self.mtl_model.generate(
                 text,
                 language_id=language,
                 audio_prompt_path=audio_prompt_path,
                 exaggeration=exag,
                 cfg_weight=cfg,
-                temperature=self.tts_config["temperature"],
-                top_p=self.tts_config["top_p"],
-                repetition_penalty=self.tts_config["repetition_penalty"],
-                n_timesteps=self.tts_config["n_timesteps"],
             )
 
             # Sauvegarder
