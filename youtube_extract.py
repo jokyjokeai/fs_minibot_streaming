@@ -1428,6 +1428,15 @@ class YouTubeVoiceExtractor:
         # Filtrer segments du locuteur (comparer directement les strings)
         speaker_segments = [seg for seg in segments if seg.speaker == speaker]
 
+        # Debug: afficher format des speakers
+        if len(speaker_segments) == 0:
+            logger.warning(f"⚠️  No segments found for speaker '{speaker}'")
+            logger.warning(f"   Available speakers in segments: {set(seg.speaker for seg in segments[:5])}")
+            logger.warning(f"   Total segments: {len(segments)}")
+            logger.warning(f"   Speaker type: {type(speaker)}, value: {repr(speaker)}")
+            if segments:
+                logger.warning(f"   First segment speaker type: {type(segments[0].speaker)}, value: {repr(segments[0].speaker)}")
+
         # Extraire tous les segments avec progression
         speaker_audio = None
 
