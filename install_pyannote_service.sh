@@ -166,32 +166,30 @@ async def diarize_audio(file: UploadFile = File(...)):
 
         # Support both old and new pyannote API
         try:
-            # Try new API (pyannote.audio 3.1+)
-            for segment, track, speaker in diarization.itertracks(yield_label=True):
+            # Try iterating directly (newer API)
+            for turn, track, speaker in diarization:
                 seg_dict = {
-                    "start": float(segment.start),
-                    "end": float(segment.end),
+                    "start": float(turn.start),
+                    "end": float(turn.end),
                     "speaker": speaker,
-                    "duration": float(segment.end - segment.start)
+                    "duration": float(turn.end - turn.start)
                 }
                 segments.append(seg_dict)
 
-                # Track speaker stats
                 if speaker not in speaker_stats:
                     speaker_stats[speaker] = 0.0
                 speaker_stats[speaker] += seg_dict["duration"]
-        except AttributeError:
-            # Fallback for newer API where itertracks doesn't exist
-            for segment, track, speaker in diarization:
+        except TypeError:
+            # Fallback: try .itertracks() for older API
+            for turn, track, speaker in diarization.itertracks(yield_label=True):
                 seg_dict = {
-                    "start": float(segment.start),
-                    "end": float(segment.end),
+                    "start": float(turn.start),
+                    "end": float(turn.end),
                     "speaker": speaker,
-                    "duration": float(segment.end - segment.start)
+                    "duration": float(turn.end - turn.start)
                 }
                 segments.append(seg_dict)
 
-                # Track speaker stats
                 if speaker not in speaker_stats:
                     speaker_stats[speaker] = 0.0
                 speaker_stats[speaker] += seg_dict["duration"]
