@@ -82,9 +82,14 @@ class ChatterboxVoiceCloner:
                 cleaned_dir = voice_dir / "cleaned"
                 has_audio = False
 
-                # Chercher reference.wav ou fichiers cleaned
+                # Chercher fichiers audio dans plusieurs emplacements:
+                # 1. reference.wav (fichier de référence)
                 if (voice_dir / "reference.wav").exists():
                     has_audio = True
+                # 2. Fichiers .wav directement dans le dossier (ex: youtube_*.wav)
+                elif list(voice_dir.glob("*.wav")):
+                    has_audio = True
+                # 3. Fichiers dans cleaned/ subdirectory
                 elif cleaned_dir.exists() and list(cleaned_dir.glob("*.wav")):
                     has_audio = True
 
