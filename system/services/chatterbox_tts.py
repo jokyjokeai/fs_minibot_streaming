@@ -417,12 +417,35 @@ class ChatterboxTTSService:
 
                 logger.info(f"✅ {len(normalized_files)} files normalized and ready")
 
-                # Copier premier fichier comme reference.wav (pour compatibilité)
-                reference_path = voice_folder / "reference.wav"
-                shutil.copy2(normalized_files[0], reference_path)
+                # Few-shot: CONCATÉNER tous les fichiers en un seul
+                logger.info(f"🔗 Concatenating {len(normalized_files)} files for few-shot...")
 
-                # Pour few-shot, on garde la liste de tous les fichiers normalisés
-                audio_prompt_path = normalized_files
+                combined_audio = []
+                combined_sr = None
+
+                for i, temp_file in enumerate(normalized_files, 1):
+                    waveform, sr = torchaudio.load(temp_file)
+                    if combined_sr is None:
+                        combined_sr = sr
+                    elif sr != combined_sr:
+                        # Resample si nécessaire
+                        resampler = torchaudio.transforms.Resample(sr, combined_sr)
+                        waveform = resampler(waveform)
+
+                    combined_audio.append(waveform)
+                    logger.info(f"   [{i}/{len(normalized_files)}] Added: {Path(temp_file).name}")
+
+                # Concaténer tous les audios
+                concatenated = torch.cat(combined_audio, dim=1)
+
+                # Sauvegarder comme reference.wav
+                reference_path = voice_folder / "reference.wav"
+                torchaudio.save(str(reference_path), concatenated, combined_sr)
+
+                logger.info(f"✅ Combined audio: {concatenated.shape[1] / combined_sr:.1f}s total")
+
+                # Utiliser le fichier combiné
+                audio_prompt_path = str(reference_path)
 
             else:
                 # Zero-shot: un seul fichier

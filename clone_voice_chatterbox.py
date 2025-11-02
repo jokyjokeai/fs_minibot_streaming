@@ -405,9 +405,9 @@ class ChatterboxVoiceCloner:
                 output_format="wav"
             )
 
-            # Charger modèle vocal (UVR-MDX-NET-Voc_FT)
-            # C'est le meilleur modèle pour extraire les vocals
-            separator.load_model(model_filename="UVR-MDX-NET-Voc_FT.onnx")
+            # Charger modèle vocal (version 0.12.0 API différente)
+            # Pas de load_model(), utiliser directement separate()
+            # Le modèle sera téléchargé automatiquement
 
             # Séparer vocals
             output_files = separator.separate(str(audio_path))
