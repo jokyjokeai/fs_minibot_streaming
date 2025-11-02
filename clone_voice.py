@@ -213,7 +213,7 @@ class ChatterboxVoiceCloner:
                     file_to_split = big_file
                     if use_uvr and UVR_AVAILABLE:
                         logger.info(f"🎵 UVR: Cleaning large file BEFORE splitting (much faster!)...")
-                        cleaned_file = self._clean_with_uvr(big_file, voice_folder)
+                        cleaned_file = self._clean_audio_with_uvr(big_file, voice_folder)
                         if cleaned_file and cleaned_file.exists():
                             logger.info(f"   ✅ Cleaned: {cleaned_file.name}")
                             file_to_split = cleaned_file

@@ -540,27 +540,27 @@ class YouTubeVoiceExtractor:
             if len(speaker_audio) == 0:
                 return False
 
-            # 6. Découpe intelligent
-            chunks = self.intelligent_split(speaker_audio)
-            if not chunks:
-                logger.error("❌ No chunks created")
-                return False
-
-            # 7. Sauvegarder
+            # 6. Sauvegarder en un seul fichier
+            # Note: Le découpage sera fait par clone_voice.py
             voice_dir = self.voices_dir / voice_name
-            saved_count = self.save_chunks(chunks, voice_dir, prefix="youtube")
+            voice_dir.mkdir(parents=True, exist_ok=True)
 
-            if saved_count == 0:
-                logger.error("❌ No files saved")
-                return False
+            output_path = voice_dir / "youtube_001.wav"
+            speaker_audio.export(str(output_path), format="wav")
+
+            logger.info(f"\n💾 Saving extracted audio...")
+            logger.info(f"   Format: {self.TARGET_SAMPLE_RATE}Hz mono WAV")
+            logger.info(f"   Duration: {len(speaker_audio)/1000:.1f}s")
+            logger.info(f"   File: {output_path.name}")
 
             logger.info(f"\n{'='*60}")
             logger.info(f"✅ YouTube extraction completed!")
             logger.info(f"   Speaker: {selected_speaker}")
-            logger.info(f"   Duration: {speaker_durations[selected_speaker]:.1f}s")
-            logger.info(f"   Chunks: {saved_count} files")
-            logger.info(f"   Location: {voice_dir}")
+            logger.info(f"   Duration: {len(speaker_audio)/1000:.1f}s")
+            logger.info(f"   File: {output_path}")
             logger.info(f"{'='*60}")
+            logger.info(f"\n💡 Next step:")
+            logger.info(f"   python3 clone_voice.py --voice {voice_name} --use-uvr")
 
             return True
 
