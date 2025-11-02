@@ -691,23 +691,21 @@ class YouTubeVoiceExtractor:
                 models_dir = Path("models/uvr")
                 models_dir.mkdir(parents=True, exist_ok=True)
 
+                # Optimize for speed: reduce segment_size and overlap
+                # Parameters must be passed to Separator() constructor with mdx_ prefix
+                logger.info("   ⚡ Using fast processing mode (KARA_2 model + optimized params)")
                 separator = Separator(
                     log_level=logging.WARNING,
-                    model_file_dir=str(models_dir)
+                    model_file_dir=str(models_dir),
+                    mdx_segment_size=128,  # Reduced from 256 (faster, slightly lower quality)
+                    mdx_overlap=0.1        # Reduced from 0.25 (faster processing)
                 )
 
                 # Use faster model: UVR_MDXNET_KARA_2 is faster than Inst_HQ_3
                 # Alternative: "UVR-MDX-NET-Inst_Main" (balanced) or "UVR-MDX-NET-Inst_HQ_3" (best quality, slowest)
                 separator.load_model("UVR_MDXNET_KARA_2")
 
-                # Optimize for speed: reduce segment_size and overlap
-                # Default segment_size=256, overlap=0.25 - we reduce both for faster processing
-                logger.info("   ⚡ Using fast processing mode (KARA_2 model + optimized params)")
-                output_files = separator.separate(
-                    str(normalized_file),
-                    segment_size=128,  # Reduced from 256 (faster, slightly lower quality)
-                    overlap=0.1        # Reduced from 0.25 (faster processing)
-                )
+                output_files = separator.separate(str(normalized_file))
 
                 # Trouver le fichier vocals
                 vocals_file = None
