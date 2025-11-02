@@ -157,6 +157,9 @@ class YouTubeVoiceExtractor:
                 logger.info("   Downloading...")
                 info = ydl.extract_info(url, download=True)
 
+                # Récupérer titre
+                self.video_title = info.get('title', 'Unknown')
+
                 # Le fichier sera nommé youtube_audio.wav après postprocessing
                 audio_file = output_dir / "youtube_audio.wav"
 
@@ -172,6 +175,211 @@ class YouTubeVoiceExtractor:
         except Exception as e:
             logger.error(f"❌ Download failed: {e}")
             return None
+
+    def download_subtitles(self, url: str, output_dir: Path) -> Optional[List[Dict]]:
+        """
+        Télécharge les sous-titres YouTube (auto-générés ou manuels)
+
+        Args:
+            url: URL YouTube
+            output_dir: Dossier de sortie
+
+        Returns:
+            Liste de dict {text, start, duration} ou None
+        """
+        logger.info(f"📝 Downloading YouTube subtitles...")
+
+        try:
+            ydl_opts = {
+                'skip_download': True,
+                'writesubtitles': True,
+                'writeautomaticsub': True,
+                'subtitleslangs': ['fr', 'en'],
+                'subtitlesformat': 'json3',
+                'quiet': True,
+            }
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+
+                # Récupérer sous-titres depuis info
+                subtitles = info.get('subtitles', {})
+                automatic_captions = info.get('automatic_captions', {})
+
+                # Priorité: sous-titres manuels FR > auto FR > EN
+                subs_data = None
+                if 'fr' in subtitles:
+                    subs_data = subtitles['fr']
+                    logger.info("   Using manual French subtitles")
+                elif 'fr' in automatic_captions:
+                    subs_data = automatic_captions['fr']
+                    logger.info("   Using auto-generated French subtitles")
+                elif 'en' in automatic_captions:
+                    subs_data = automatic_captions['en']
+                    logger.info("   Using auto-generated English subtitles")
+
+                if not subs_data:
+                    logger.warning("   ⚠️  No subtitles available")
+                    return None
+
+                # Trouver format json3
+                json3_sub = None
+                for sub in subs_data:
+                    if sub.get('ext') == 'json3':
+                        json3_sub = sub
+                        break
+
+                if not json3_sub:
+                    logger.warning("   ⚠️  json3 format not found")
+                    return None
+
+                # Télécharger et parser
+                import json
+                import urllib.request
+
+                response = urllib.request.urlopen(json3_sub['url'])
+                data = json.loads(response.read().decode('utf-8'))
+
+                # Extraire events avec timestamps
+                subtitles_list = []
+                for event in data.get('events', []):
+                    if 'segs' in event:
+                        text = ''.join([seg.get('utf8', '') for seg in event['segs']])
+                        subtitles_list.append({
+                            'text': text.strip(),
+                            'start': event.get('tStartMs', 0) / 1000.0,  # ms → s
+                            'duration': event.get('dDurationMs', 0) / 1000.0
+                        })
+
+                logger.info(f"   ✅ Downloaded {len(subtitles_list)} subtitle segments")
+                return subtitles_list
+
+        except Exception as e:
+            logger.warning(f"   ⚠️  Subtitle download failed: {e}")
+            return None
+
+    def validate_segments_with_vosk(
+        self,
+        audio_path: Path,
+        segments: List[SpeakerSegment],
+        subtitles: Optional[List[Dict]] = None
+    ) -> List[SpeakerSegment]:
+        """
+        Valide les segments de diarization avec Vosk STT
+        Filtre les segments avec voix mixtes en comparant avec sous-titres YouTube
+
+        Args:
+            audio_path: Fichier audio
+            segments: Segments de diarization
+            subtitles: Sous-titres YouTube (optionnel)
+
+        Returns:
+            Segments filtrés (segments purs uniquement)
+        """
+        if not subtitles:
+            logger.info("   ⚠️  No subtitles - skipping Vosk validation")
+            return segments
+
+        logger.info(f"\n🎤 Validating segments with Vosk STT...")
+        logger.info(f"   Filtering mixed-voice segments")
+
+        try:
+            # Importer Vosk
+            from system.services.vosk_stt import VoskSTT
+            vosk_stt = VoskSTT()
+
+            if not vosk_stt.is_available:
+                logger.warning("   ⚠️  Vosk not available - skipping validation")
+                return segments
+
+            # Charger audio
+            audio = AudioSegment.from_file(str(audio_path))
+
+            # Grouper segments par locuteur
+            speakers_segments = {}
+            for seg in segments:
+                if seg.speaker not in speakers_segments:
+                    speakers_segments[seg.speaker] = []
+                speakers_segments[seg.speaker].append(seg)
+
+            validated_segments = []
+            total_checked = 0
+            total_filtered = 0
+
+            # Pour chaque locuteur
+            for speaker_id, speaker_segs in speakers_segments.items():
+                logger.info(f"\n   🔍 Validating SPEAKER_{speaker_id} ({len(speaker_segs)} segments)...")
+
+                for seg in speaker_segs:
+                    total_checked += 1
+
+                    # Extraire audio du segment
+                    start_ms = int(seg.start * 1000)
+                    end_ms = int(seg.end * 1000)
+                    segment_audio = audio[start_ms:end_ms]
+
+                    # Sauvegarder temporairement
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                        segment_audio.export(temp_file.name, format='wav')
+                        temp_path = Path(temp_file.name)
+
+                        # Transcrire avec Vosk
+                        transcription = vosk_stt.transcribe_file(temp_path)
+                        temp_path.unlink()  # Supprimer fichier temp
+
+                    if not transcription:
+                        total_filtered += 1
+                        continue  # Skip segment vide
+
+                    # Trouver sous-titres correspondants
+                    matching_subs = []
+                    for sub in subtitles:
+                        sub_start = sub['start']
+                        sub_end = sub_start + sub['duration']
+
+                        # Chevauchement temporel
+                        if not (seg.end < sub_start or seg.start > sub_end):
+                            matching_subs.append(sub)
+
+                    if not matching_subs:
+                        # Pas de sous-titres correspondants - garder le segment
+                        validated_segments.append(seg)
+                        continue
+
+                    # Comparer transcription Vosk vs sous-titres
+                    sub_text = ' '.join([s['text'] for s in matching_subs]).lower()
+                    vosk_text = transcription.lower()
+
+                    # Simple similarité: compter mots communs
+                    sub_words = set(sub_text.split())
+                    vosk_words = set(vosk_text.split())
+
+                    if not sub_words or not vosk_words:
+                        validated_segments.append(seg)
+                        continue
+
+                    common_words = sub_words & vosk_words
+                    similarity = len(common_words) / max(len(sub_words), len(vosk_words))
+
+                    # Si similarité < 50%, probablement plusieurs voix
+                    if similarity < 0.5:
+                        total_filtered += 1
+                        continue
+
+                    # Segment validé
+                    validated_segments.append(seg)
+
+            logger.info(f"\n   ✅ Validation complete:")
+            logger.info(f"      Total segments: {total_checked}")
+            logger.info(f"      Filtered (mixed): {total_filtered}")
+            logger.info(f"      Kept (pure): {len(validated_segments)}")
+
+            return validated_segments
+
+        except Exception as e:
+            logger.warning(f"   ⚠️  Vosk validation failed: {e}")
+            return segments  # Retourner segments originaux
 
     def perform_speaker_diarization(self, audio_path: Path, n_speakers: Optional[int] = None) -> Optional[List[SpeakerSegment]]:
         """
@@ -466,12 +674,29 @@ class YouTubeVoiceExtractor:
             if not audio_file:
                 return False
 
-            # 2. Diarization
+            # 2. Télécharger sous-titres YouTube (pour validation Vosk)
+            logger.info(f"\n📝 Downloading YouTube subtitles for validation...")
+            subtitles = self.download_subtitles(url, temp_path)
+            if subtitles:
+                logger.info(f"   ✅ {len(subtitles)} subtitle entries downloaded")
+            else:
+                logger.warning(f"   ⚠️  No subtitles available - skipping Vosk validation")
+
+            # 3. Diarization
             segments = self.perform_speaker_diarization(audio_file)
             if not segments:
                 return False
 
-            # 3. Analyser locuteurs
+            # 4. Validation Vosk: filtrer segments avec voix mixtes
+            if subtitles:
+                logger.info(f"\n🎤 Validating segments with Vosk STT...")
+                segments = self.validate_segments_with_vosk(audio_file, segments, subtitles)
+                if not segments:
+                    logger.error("❌ No valid segments after Vosk filtering")
+                    return False
+                logger.info(f"   ✅ {len(segments)} segments validated")
+
+            # 5. Analyser locuteurs
             logger.info(f"\n📊 Speaker Analysis:")
             speaker_durations = self.analyze_speakers(segments)
 
