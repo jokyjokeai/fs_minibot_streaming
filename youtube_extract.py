@@ -1373,15 +1373,12 @@ class YouTubeVoiceExtractor:
         # Charger audio
         audio = AudioSegment.from_file(str(audio_path))
 
-        # Extraire ID du locuteur (SPEAKER_0 → 0)
-        speaker_id = int(speaker.split('_')[1])
-
-        # Trouver segments du locuteur
+        # Trouver segments du locuteur (comparer directement les strings)
         preview_audio = None
         accumulated_duration = 0
 
         for seg in segments:
-            if seg.speaker == speaker_id:
+            if seg.speaker == speaker:
                 start_ms = int(seg.start * 1000)
                 end_ms = int(seg.end * 1000)
 
@@ -1428,11 +1425,8 @@ class YouTubeVoiceExtractor:
         # Charger audio
         audio = AudioSegment.from_file(str(audio_path))
 
-        # Extraire ID du locuteur
-        speaker_id = int(speaker.split('_')[1])
-
-        # Filtrer segments du locuteur
-        speaker_segments = [seg for seg in segments if seg.speaker == speaker_id]
+        # Filtrer segments du locuteur (comparer directement les strings)
+        speaker_segments = [seg for seg in segments if seg.speaker == speaker]
 
         # Extraire tous les segments avec progression
         speaker_audio = None
