@@ -196,41 +196,40 @@ class ChatterboxVoiceCloner:
             logger.error(f"❌ Failed to load voice '{voice_name}'")
             return False
 
-        # Charger objections
-        objections_dir = Path("documentation/objections")
-        if not objections_dir.exists():
-            logger.error(f"❌ Objections directory not found: {objections_dir}")
+        # Importer objections database (comme clone_voice.py)
+        try:
+            from system import objections_database
+        except ImportError:
+            logger.error("❌ Could not import objections_database")
             return False
 
-        # Déterminer thèmes
-        if themes is None:
-            theme_files = list(objections_dir.glob("objections_*.json"))
+        # Collecter toutes les objections selon thématique
+        all_objections = {}
+
+        if themes:
+            # Thématiques spécifiques
+            for theme in themes:
+                objections_list = objections_database.get_objections_by_theme(theme)
+                if objections_list:
+                    all_objections[theme] = objections_list
+            logger.info(f"📋 Themes: {', '.join(themes)}")
         else:
-            theme_files = [objections_dir / f"objections_{theme}.json" for theme in themes]
+            # Toutes les thématiques
+            all_themes = objections_database.get_all_themes()
+            for theme_name in all_themes:
+                objections_list = objections_database.get_objections_by_theme(theme_name)
+                if objections_list:
+                    all_objections[theme_name] = objections_list
 
-        # Collecter toutes les objections
-        all_objections = []
-        for theme_file in theme_files:
-            if not theme_file.exists():
-                logger.warning(f"⚠️  Theme file not found: {theme_file}")
-                continue
+            logger.info(f"📋 Themes: {', '.join(all_objections.keys())}")
 
-            with open(theme_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                theme_name = theme_file.stem.replace("objections_", "")
+        # Compter total
+        total_count = sum(len(obj_list) for obj_list in all_objections.values())
+        logger.info(f"📊 Total objections: {total_count}")
 
-                for key, obj_data in data.items():
-                    all_objections.append({
-                        'theme': theme_name,
-                        'key': key,
-                        'text': obj_data.get('response', ''),
-                    })
-
-        if not all_objections:
+        if total_count == 0:
             logger.warning("⚠️  No objections found")
             return False
-
-        logger.info(f"📋 Found {len(all_objections)} objections across {len(theme_files)} themes")
 
         # Créer dossier de sortie
         output_dir = self.audio_dir / "tts" / voice_name
@@ -238,51 +237,80 @@ class ChatterboxVoiceCloner:
 
         # Générer TTS
         logger.info(f"📁 Output directory: {output_dir}")
-        logger.info(f"⏱️  Estimated time: {len(all_objections) * 2 / 60:.1f} minutes\n")
+
+        # Estimer temps (10s par objection avec Chatterbox)
+        estimated_time_minutes = (total_count * 10) / 60
+        logger.info(f"⏱️  Estimated time: {estimated_time_minutes:.1f} minutes\n")
 
         success_count = 0
         failed_count = 0
         total_time = 0
 
-        for i, obj in enumerate(all_objections, 1):
-            filename = f"{obj['theme']}_{obj['key']}.wav"
-            output_file = output_dir / filename
+        for theme_name, objections_list in all_objections.items():
+            logger.info(f"\n📂 Processing theme: {theme_name.upper()}")
+            logger.info(f"   {len(objections_list)} objections")
 
-            # Skip si existe déjà
-            if output_file.exists():
-                logger.info(f"[{i}/{len(all_objections)}] ⏭️  Skip (exists): {filename}")
-                success_count += 1
-                continue
+            for i, objection_entry in enumerate(objections_list, 1):
+                # Extraire la réponse (ObjectionEntry ou str)
+                if hasattr(objection_entry, 'response'):
+                    response_text = objection_entry.response
+                elif isinstance(objection_entry, str):
+                    response_text = objection_entry
+                else:
+                    logger.warning(f"   ⚠️  Skipping invalid entry type: {type(objection_entry)}")
+                    continue
 
-            start_time = time.time()
+                # Créer nom de fichier safe à partir des premiers mots de la réponse
+                response_preview = response_text[:30]
+                safe_name = self._sanitize_filename(response_preview)
+                filename = f"{theme_name}_{i:03d}_{safe_name}.wav"
+                output_file = output_dir / filename
 
-            # Générer TTS avec Chatterbox
-            result = self.tts.synthesize_with_voice(
-                obj['text'],
-                voice_name=voice_name,
-                output_file=str(output_file)
-            )
+                # Skip si existe déjà
+                if output_file.exists():
+                    logger.info(f"   [{i}/{len(objections_list)}] ⏭️  Skip (exists): {filename}")
+                    success_count += 1
+                    continue
 
-            gen_time = time.time() - start_time
-            total_time += gen_time
+                start_time = time.time()
 
-            if result:
-                logger.info(f"[{i}/{len(all_objections)}] ✅ Generated in {gen_time:.1f}s: {filename}")
-                success_count += 1
-            else:
-                logger.error(f"[{i}/{len(all_objections)}] ❌ Failed: {filename}")
-                failed_count += 1
+                # Générer TTS avec Chatterbox
+                result = self.tts.synthesize_with_voice(
+                    response_text,
+                    voice_name=voice_name,
+                    output_file=str(output_file)
+                )
+
+                gen_time = time.time() - start_time
+                total_time += gen_time
+
+                if result:
+                    logger.info(f"   [{i}/{len(objections_list)}] ✅ Generated in {gen_time:.1f}s: {filename}")
+                    success_count += 1
+                else:
+                    logger.error(f"   [{i}/{len(objections_list)}] ❌ Failed: {filename}")
+                    failed_count += 1
 
         # Statistiques
         logger.info(f"\n{'='*60}")
         logger.info(f"✅ TTS Generation complete!")
         logger.info(f"{'='*60}")
-        logger.info(f"📊 Success: {success_count}/{len(all_objections)}")
+        logger.info(f"📊 Success: {success_count}/{total_count}")
         logger.info(f"❌ Failed: {failed_count}")
         logger.info(f"⏱️  Total time: {total_time / 60:.1f} minutes")
         logger.info(f"⚡ Avg time per file: {total_time / max(success_count, 1):.1f}s")
 
         return failed_count == 0
+
+    def _sanitize_filename(self, text: str) -> str:
+        """Crée un nom de fichier safe depuis du texte"""
+        import re
+        # Garder seulement lettres, chiffres, espaces
+        safe = re.sub(r'[^\w\s-]', '', text)
+        # Remplacer espaces par underscores
+        safe = re.sub(r'\s+', '_', safe)
+        # Limiter longueur
+        return safe[:40].lower()
 
 
 def main():
