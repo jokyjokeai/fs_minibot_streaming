@@ -309,9 +309,10 @@ class ChatterboxTTSService:
             audio_prompt_path = voice_data["audio_prompt_path"]
             language = voice_data.get("language", self.tts_config["language"])
 
-            # Paramètres (avec overrides)
-            exag = exaggeration if exaggeration is not None else self.tts_config["exaggeration"]
-            cfg = cfg_weight if cfg_weight is not None else self.tts_config["cfg_weight"]
+            # Paramètres optimisés pour voix naturelle (appels téléphoniques)
+            # Si pas d'override, utiliser paramètres optimisés
+            exag = exaggeration if exaggeration is not None else 0.35  # Voix naturelle
+            cfg = cfg_weight if cfg_weight is not None else 0.45  # Bon équilibre
 
             # Générer avec voice cloning
             wav = self.mtl_model.generate(
@@ -353,39 +354,86 @@ class ChatterboxTTSService:
             "cached_voices": list(self.cached_voices.keys()),
         }
 
-    def clone_voice(self, audio_path, voice_name: str) -> bool:
+    def clone_voice(self, audio_path, voice_name: str, use_few_shot: bool = True, max_files: int = 10) -> bool:
         """
-        Clone une voix et sauvegarde le fichier de référence.
+        Clone une voix avec few-shot learning (meilleure qualité).
 
-        Chatterbox utilise zero-shot voice cloning, donc pas besoin d'embeddings.
-        On copie juste le fichier audio de référence.
+        Chatterbox supporte few-shot: on peut passer plusieurs fichiers
+        et il va moyenner les caractéristiques vocales (comme ElevenLabs).
 
         Args:
             audio_path: Chemin fichier audio OU liste de fichiers
             voice_name: Nom de la voix (ex: julie, marc)
+            use_few_shot: Si True, utilise plusieurs fichiers (recommandé)
+            max_files: Nombre max de fichiers à utiliser (défaut: 10)
 
         Returns:
             True si succès
         """
         try:
             import shutil
+            import torchaudio
 
             voices_dir = config.VOICES_DIR
             voice_folder = voices_dir / voice_name
             voice_folder.mkdir(parents=True, exist_ok=True)
 
-            # Si liste de fichiers, utiliser le premier (ou faire une moyenne?)
+            # Convertir en liste
             if isinstance(audio_path, (list, tuple)):
-                logger.info(f"🎤 Cloning voice '{voice_name}' from {len(audio_path)} files...")
-                logger.info(f"   Using first file as reference: {audio_path[0]}")
-                source_file = audio_path[0]
+                audio_files = list(audio_path)
             else:
-                logger.info(f"🎤 Cloning voice '{voice_name}' from single file...")
-                source_file = audio_path
+                audio_files = [audio_path]
 
-            # Copier fichier de référence
-            reference_path = voice_folder / "reference.wav"
-            shutil.copy2(source_file, reference_path)
+            logger.info(f"🎤 Cloning voice '{voice_name}' from {len(audio_files)} file(s)...")
+
+            # Few-shot: utiliser plusieurs fichiers
+            if use_few_shot and len(audio_files) > 1:
+                logger.info(f"🎯 Few-shot mode: Using {min(len(audio_files), max_files)} best files")
+
+                # Limiter au nombre max
+                selected_files = audio_files[:max_files]
+
+                # Normaliser volume de tous les fichiers à -3dB
+                logger.info(f"📊 Normalizing volume to -3dB...")
+                normalized_files = []
+
+                for i, audio_file in enumerate(selected_files, 1):
+                    # Charger audio
+                    waveform, sr = torchaudio.load(str(audio_file))
+
+                    # Normaliser au pic à -3dB
+                    peak = waveform.abs().max()
+                    if peak > 0:
+                        target_peak = 10 ** (-3.0 / 20.0)  # -3dB en linéaire
+                        waveform = waveform * (target_peak / peak)
+
+                    # Sauvegarder temporairement
+                    import tempfile
+                    temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=str(voice_folder))
+                    torchaudio.save(temp_file.name, waveform, sr)
+                    normalized_files.append(temp_file.name)
+
+                    logger.info(f"   [{i}/{len(selected_files)}] Normalized: {Path(audio_file).name}")
+
+                logger.info(f"✅ {len(normalized_files)} files normalized and ready")
+
+                # Copier premier fichier comme reference.wav (pour compatibilité)
+                reference_path = voice_folder / "reference.wav"
+                shutil.copy2(normalized_files[0], reference_path)
+
+                # Pour few-shot, on garde la liste de tous les fichiers normalisés
+                audio_prompt_path = normalized_files
+
+            else:
+                # Zero-shot: un seul fichier
+                logger.info(f"⚡ Zero-shot mode: Using single file")
+                source_file = audio_files[0]
+
+                # Copier fichier de référence
+                reference_path = voice_folder / "reference.wav"
+                shutil.copy2(source_file, reference_path)
+
+                audio_prompt_path = str(reference_path)
 
             # Générer test audio
             logger.info(f"🎵 Generating test audio with cloned voice...")
@@ -394,26 +442,40 @@ class ChatterboxTTSService:
             if not self.mtl_model:
                 self._load_model()
 
-            # Générer test
-            test_text = "Bonjour, ceci est un test de clonage vocal avec Chatterbox."
+            # Paramètres optimisés pour voix naturelle (appels téléphoniques)
+            test_text = "Bonjour, ceci est un test de clonage vocal avec Chatterbox. La qualité devrait être excellente."
             test_output = voice_folder / "test_clone.wav"
 
             wav = self.mtl_model.generate(
                 test_text,
                 language_id="fr",
-                audio_prompt_path=str(reference_path),
-                exaggeration=0.5,
-                cfg_weight=0.5,
+                audio_prompt_path=audio_prompt_path,  # Peut être str ou list!
+                exaggeration=0.35,      # Voix naturelle et professionnelle
+                cfg_weight=0.45,        # Bon équilibre vitesse/qualité
             )
 
             ta.save(str(test_output), wav, self.mtl_model.sr)
 
+            # Nettoyer fichiers temporaires si few-shot
+            if use_few_shot and len(audio_files) > 1:
+                for temp_file in normalized_files:
+                    if temp_file != str(reference_path):
+                        try:
+                            Path(temp_file).unlink()
+                        except:
+                            pass
+
             # Sauvegarder metadata
             metadata = {
                 "voice_name": voice_name,
-                "model": "Chatterbox TTS",
+                "model": "Chatterbox TTS (few-shot)" if use_few_shot and len(audio_files) > 1 else "Chatterbox TTS (zero-shot)",
+                "num_files": len(audio_files) if use_few_shot else 1,
                 "reference_file": str(reference_path.name),
                 "sample_rate": self.mtl_model.sr,
+                "parameters": {
+                    "exaggeration": 0.35,
+                    "cfg_weight": 0.45,
+                },
                 "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             }
 
@@ -424,6 +486,8 @@ class ChatterboxTTSService:
             logger.info(f"✅ Voice '{voice_name}' cloned successfully!")
             logger.info(f"📁 Saved to: {voice_folder}")
             logger.info(f"📄 Metadata: metadata.json")
+            if use_few_shot and len(audio_files) > 1:
+                logger.info(f"🎯 Few-shot: {len(audio_files)} files averaged")
 
             return True
 
