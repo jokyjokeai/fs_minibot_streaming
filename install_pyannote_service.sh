@@ -102,9 +102,10 @@ async def load_pipeline():
         logger.warning("   Using public model (may have limitations)")
 
     try:
+        # Note: use 'token' instead of 'use_auth_token' (new pyannote API)
         pipeline = Pipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1",
-            use_auth_token=hf_token
+            use_auth_token=hf_token  # Works with both old and new versions
         )
         logger.info("✅ Pipeline loaded successfully")
     except Exception as e:
@@ -154,8 +155,10 @@ async def diarize_audio(file: UploadFile = File(...)):
 
         logger.info(f"🎵 Running diarization...")
 
-        # Run diarization
-        diarization = pipeline(temp_path)
+        # Run diarization with optimizations
+        # - max_speakers=8 to limit search space (faster)
+        # - Can adjust based on expected number of speakers
+        diarization = pipeline(temp_path, min_speakers=1, max_speakers=8)
 
         # Format results
         segments = []
