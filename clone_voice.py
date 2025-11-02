@@ -1,46 +1,24 @@
 #!/usr/bin/env python3
 """
-Clone Voice with Chatterbox - MiniBotPanel v3
+Simple Voice Cloning with Chatterbox - MiniBotPanel v3
 
-Utilitaire pour cloner des voix avec Chatterbox TTS (meilleure qualité qu'XTTS).
+Utilise reference.wav (généré par youtube_extract.py) pour cloner une voix
+et générer les TTS d'objections/FAQ.
 
-Avantages Chatterbox vs XTTS:
-- Bat ElevenLabs en blind tests (63.8% préfèrent Chatterbox)
-- Zero-shot voice cloning (pas besoin d'embeddings)
-- Seulement 5-10 secondes d'audio requis
-- Contrôle des émotions intégré
-- MIT License (commercial OK)
-
-Utilisation:
-    python clone_voice_chatterbox.py --voice tt
-    python clone_voice_chatterbox.py --voice julie --skip-tts
+Usage:
+    python clone_voice_simple.py --voice ss
+    python clone_voice_simple.py --voice ss --skip-tts
 """
 
 import argparse
 import logging
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List
 import json
-import numpy as np
 
 from system.config import config
 from system.services.chatterbox_tts import ChatterboxTTSService
-
-# Import audio processing
-try:
-    import torchaudio
-    import noisereduce as nr
-    AUDIO_PROCESSING_AVAILABLE = True
-except ImportError:
-    AUDIO_PROCESSING_AVAILABLE = False
-
-# Import UVR (Ultimate Vocal Remover) - optionnel
-try:
-    from audio_separator.separator import Separator
-    UVR_AVAILABLE = True
-except ImportError:
-    UVR_AVAILABLE = False
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,8 +27,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class ChatterboxVoiceCloner:
-    """Gestionnaire de clonage de voix avec Chatterbox TTS"""
+class SimpleVoiceCloner:
+    """Cloner de voix simplifié - utilise reference.wav directement"""
 
     def __init__(self):
         """Initialise le cloner"""
@@ -58,18 +36,17 @@ class ChatterboxVoiceCloner:
         self.audio_dir = Path(config.AUDIO_DIR)
         self.tts = None
 
-        # Créer dossiers si n'existent pas
         self.voices_dir.mkdir(exist_ok=True)
         self.audio_dir.mkdir(exist_ok=True)
 
-        logger.info("🎤 ChatterboxVoiceCloner initialized")
+        logger.info("🎤 SimpleVoiceCloner initialized")
 
     def detect_available_voices(self) -> List[str]:
         """
-        Détecte les dossiers de voix disponibles dans voices/
+        Détecte les voix avec reference.wav disponible.
 
         Returns:
-            Liste des noms de voix disponibles
+            Liste des noms de voix
         """
         voices = []
 
@@ -78,56 +55,32 @@ class ChatterboxVoiceCloner:
 
         for voice_dir in self.voices_dir.iterdir():
             if voice_dir.is_dir():
-                # Vérifier si des fichiers audio existent
-                cleaned_dir = voice_dir / "cleaned"
-                has_audio = False
-
-                # Chercher fichiers audio dans plusieurs emplacements:
-                # 1. reference.wav (fichier de référence)
-                if (voice_dir / "reference.wav").exists():
-                    has_audio = True
-                # 2. Fichiers .wav directement dans le dossier (ex: youtube_*.wav)
-                elif list(voice_dir.glob("*.wav")):
-                    has_audio = True
-                # 3. Fichiers dans cleaned/ subdirectory
-                elif cleaned_dir.exists() and list(cleaned_dir.glob("*.wav")):
-                    has_audio = True
-
-                if has_audio:
+                reference_file = voice_dir / "reference.wav"
+                if reference_file.exists():
                     voices.append(voice_dir.name)
 
         return sorted(voices)
 
     def init_tts(self):
-        """Initialise le service TTS si pas déjà fait"""
+        """Initialise le service TTS"""
         if not self.tts:
             logger.info("🎙️ Initializing Chatterbox TTS service...")
             self.tts = ChatterboxTTSService()
 
             if not self.tts.is_available:
                 logger.error("❌ Chatterbox TTS not available")
-                logger.error("   Install with: pip install chatterbox-tts")
+                logger.error("   Install with: pip install git+https://github.com/resemble-ai/chatterbox.git")
                 return False
 
         return True
 
-    def clone_voice(
-        self,
-        voice_name: str,
-        force: bool = False,
-        use_scoring: bool = True,
-        max_files: int = 30,  # Max files limit (dynamic selection targets 60-150s)
-        use_uvr: bool = False
-    ) -> bool:
+    def clone_voice(self, voice_name: str, force: bool = False) -> bool:
         """
-        Clone une voix depuis les fichiers audio disponibles.
+        Clone une voix depuis reference.wav.
 
         Args:
             voice_name: Nom de la voix
-            force: Force le re-clonage même si déjà fait
-            use_scoring: Utilise scoring pour sélectionner meilleurs fichiers
-            max_files: Limite absolue de fichiers (sélection dynamique pour 60-150s total)
-            use_uvr: Utiliser UVR pour extraire vocals avant scoring
+            force: Force le re-clonage
 
         Returns:
             True si succès
@@ -137,28 +90,25 @@ class ChatterboxVoiceCloner:
         logger.info(f"{'='*60}")
 
         voice_folder = self.voices_dir / voice_name
+        reference_file = voice_folder / "reference.wav"
 
-        if not voice_folder.exists():
-            logger.error(f"❌ Voice folder not found: {voice_name}")
+        if not reference_file.exists():
+            logger.error(f"❌ reference.wav not found in voices/{voice_name}/")
+            logger.error(f"   Run: python youtube_extract.py")
             return False
 
         # Vérifier si déjà cloné
-        reference_file = voice_folder / "reference.wav"
         test_file = voice_folder / "test_clone.wav"
         metadata_file = voice_folder / "metadata.json"
 
-        if not force and reference_file.exists() and test_file.exists():
+        if not force and test_file.exists():
             logger.info(f"✅ Voice '{voice_name}' already cloned")
             logger.info(f"   Use --force to re-clone")
 
-            # Charger metadata
             if metadata_file.exists():
                 with open(metadata_file, 'r') as f:
                     metadata = json.load(f)
                     logger.info(f"📄 Cloned on: {metadata.get('created_at', 'Unknown')}")
-                    logger.info(f"📄 Mode: {metadata.get('mode', 'unknown')}")
-                    if 'files_used' in metadata:
-                        logger.info(f"📄 Files used: {metadata['files_used']}")
 
             return True
 
@@ -166,168 +116,20 @@ class ChatterboxVoiceCloner:
         if not self.init_tts():
             return False
 
-        # Déterminer source audio
-        audio_source = None
-        use_few_shot = False
-
-        # Stratégie 1: Si use_scoring ET fichiers disponibles → few-shot
-        if use_scoring and AUDIO_PROCESSING_AVAILABLE:
-            # Chercher dans audio/ OU voices/{voice_name}/ OU cleaned/
-            cleaned_dir = voice_folder / "cleaned"
-
-            # Priorité 1: Chercher dans voices/{voice_name}/ (fichiers YouTube originaux)
-            source_candidates = []
-            youtube_files = list(voice_folder.glob("youtube_*.wav"))
-            if youtube_files:
-                source_candidates = youtube_files
-                logger.info(f"📂 Found {len(youtube_files)} original YouTube files in voices/{voice_name}/")
-
-            # Priorité 2: Chercher dans audio/ si voice_name correspond
-            if not source_candidates and self.audio_dir.exists():
-                source_candidates = list(self.audio_dir.glob("*.wav"))
-                source_candidates.extend(self.audio_dir.glob("*.mp3"))
-                if source_candidates:
-                    logger.info(f"📂 Found {len(source_candidates)} files in audio/")
-
-            # Priorité 3: Sinon chercher dans cleaned/
-            if not source_candidates and cleaned_dir.exists():
-                source_candidates = list(cleaned_dir.glob("*.wav"))
-                if source_candidates:
-                    logger.info(f"📂 Found {len(source_candidates)} cleaned files in voices/{voice_name}/cleaned/")
-
-            # Cas spécial: 1 seul gros fichier YouTube → nettoyer PUIS découper
-            if len(source_candidates) == 1 and youtube_files:
-                big_file = source_candidates[0]
-                logger.info(f"📂 Found 1 large YouTube file: {big_file.name}")
-
-                # Vérifier durée
-                from pydub import AudioSegment
-                audio = AudioSegment.from_wav(str(big_file))
-                duration_s = len(audio) / 1000
-
-                logger.info(f"📏 Duration: {duration_s:.1f}s ({duration_s/60:.1f}min)")
-
-                # Si > 60s, nettoyer PUIS découper
-                if duration_s > 60:
-                    # ÉTAPE 1: Nettoyer avec UVR si demandé (1 seul nettoyage au lieu de 80!)
-                    file_to_split = big_file
-                    if use_uvr and UVR_AVAILABLE:
-                        logger.info(f"🎵 UVR: Cleaning large file BEFORE splitting (much faster!)...")
-                        cleaned_file = self._clean_audio_with_uvr(big_file, voice_folder)
-                        if cleaned_file and cleaned_file.exists():
-                            logger.info(f"   ✅ Cleaned: {cleaned_file.name}")
-                            file_to_split = cleaned_file
-                            # Supprimer fichier original non-nettoyé
-                            big_file.unlink()
-                        else:
-                            logger.warning(f"   ⚠️  UVR cleaning failed, using original file")
-
-                    # ÉTAPE 2: Découper le fichier (nettoyé ou original)
-                    logger.info(f"✂️  Splitting into 10s chunks...")
-                    audio_to_split = AudioSegment.from_wav(str(file_to_split))
-                    chunk_duration_ms = 10000  # 10s
-                    chunks_created = []
-
-                    for i in range(0, len(audio_to_split), chunk_duration_ms):
-                        chunk = audio_to_split[i:i + chunk_duration_ms]
-                        if len(chunk) >= 4000:  # Au moins 4s
-                            chunk_path = voice_folder / f"youtube_{i//1000:03d}.wav"
-                            chunk.export(str(chunk_path), format="wav")
-                            chunks_created.append(chunk_path)
-
-                    logger.info(f"✅ Created {len(chunks_created)} chunks")
-
-                    # Supprimer le gros fichier (nettoyé ou original)
-                    file_to_split.unlink()
-                    logger.info(f"🗑️  Removed large file")
-
-                    # Mettre à jour source_candidates
-                    source_candidates = chunks_created
-                    logger.info(f"📂 Now have {len(source_candidates)} files to process")
-                else:
-                    # Fichier < 60s, utiliser tel quel en zero-shot
-                    logger.info(f"📁 File is short enough, using as single reference (zero-shot)")
-
-            if len(source_candidates) >= 2:
-                logger.info(f"🎯 Few-shot mode: {len(source_candidates)} candidates found")
-
-                # Déterminer le répertoire source
-                if youtube_files or any("youtube_" in f.name for f in source_candidates):
-                    source_dir = voice_folder
-                elif (self.audio_dir / source_candidates[0].name).exists():
-                    source_dir = self.audio_dir
-                else:
-                    source_dir = cleaned_dir
-
-                logger.info(f"📁 Source directory: {source_dir}")
-
-                # Scorer et sélectionner meilleurs
-                # Note: Si fichiers déjà nettoyés (cas gros fichier), ne pas re-nettoyer
-                already_cleaned = any("youtube_" in f.name for f in source_candidates) and use_uvr and youtube_files
-                selected_files = self.process_and_score_audio_files(
-                    voice_name,
-                    source_dir=source_dir,
-                    top_n=min(max_files, len(source_candidates)),
-                    use_uvr=(use_uvr and not already_cleaned)  # Skip UVR si déjà nettoyé
-                )
-
-                if selected_files:
-                    # Passer liste pour few-shot
-                    audio_source = [str(f) for f in selected_files]
-                    use_few_shot = True
-                    logger.info(f"\n✅ Using {len(selected_files)} files for few-shot cloning")
-
-        # Stratégie 2: Fallback sur reference.wav ou meilleur fichier
-        if not audio_source:
-            if reference_file.exists() and not force:
-                audio_source = str(reference_file)
-                logger.info(f"📁 Using existing reference.wav (zero-shot)")
-            else:
-                # Chercher 1 seul fichier YouTube/audio
-                if len(source_candidates) == 1:
-                    single_file = source_candidates[0]
-                    logger.info(f"📁 Found single file: {single_file.name}")
-                    logger.info(f"   Using as zero-shot reference")
-                    audio_source = str(single_file)
-
-                # Sinon chercher dans cleaned/
-                elif not source_candidates:
-                    cleaned_dir = voice_folder / "cleaned"
-                    if cleaned_dir.exists():
-                        cleaned_files = sorted(cleaned_dir.glob("*_cleaned.wav"))
-
-                        if cleaned_files:
-                            # Utiliser le fichier le plus gros (généralement meilleure qualité)
-                            best_file = max(cleaned_files, key=lambda f: f.stat().st_size)
-                            audio_source = str(best_file)
-                            logger.info(f"📁 Using best cleaned file: {best_file.name} (zero-shot)")
-
-        if not audio_source:
-            logger.error(f"❌ No audio files found for voice '{voice_name}'")
-            logger.error(f"   Add files to: {voice_folder}/ or {voice_folder}/cleaned/")
-            return False
-
         # Cloner avec Chatterbox
         logger.info(f"\n🔬 Cloning voice with Chatterbox TTS...")
-        if use_few_shot:
-            logger.info(f"   Mode: Few-shot ({len(audio_source)} files)")
-            logger.info(f"   Files: {', '.join([Path(f).name for f in audio_source[:3]])}{'...' if len(audio_source) > 3 else ''}")
-        else:
-            logger.info(f"   Mode: Zero-shot")
-            logger.info(f"   Source: {Path(audio_source).name}")
+        logger.info(f"📁 Source: reference.wav")
 
         success = self.tts.clone_voice(
-            audio_source,
+            str(reference_file),
             voice_name,
-            use_few_shot=use_few_shot,
-            max_files=max_files
+            use_few_shot=False  # Zero-shot depuis reference.wav
         )
 
         if success:
             logger.info(f"\n✅ Voice '{voice_name}' cloned successfully!")
             logger.info(f"📁 Saved to: {voice_folder}")
             logger.info(f"📄 Files created:")
-            logger.info(f"   - reference.wav (source audio)")
             logger.info(f"   - test_clone.wav (quality test)")
             logger.info(f"   - metadata.json (voice info)")
         else:
@@ -357,34 +159,30 @@ class ChatterboxVoiceCloner:
             logger.error(f"❌ Failed to load voice '{voice_name}'")
             return False
 
-        # Importer objections database (comme clone_voice.py)
+        # Importer objections database
         try:
             from system import objections_database
         except ImportError:
             logger.error("❌ Could not import objections_database")
             return False
 
-        # Collecter toutes les objections selon thématique
+        # Collecter objections
         all_objections = {}
 
         if themes:
-            # Thématiques spécifiques
             for theme in themes:
                 objections_list = objections_database.get_objections_by_theme(theme)
                 if objections_list:
                     all_objections[theme] = objections_list
             logger.info(f"📋 Themes: {', '.join(themes)}")
         else:
-            # Toutes les thématiques
             all_themes = objections_database.get_all_themes()
             for theme_name in all_themes:
                 objections_list = objections_database.get_objections_by_theme(theme_name)
                 if objections_list:
                     all_objections[theme_name] = objections_list
-
             logger.info(f"📋 Themes: {', '.join(all_objections.keys())}")
 
-        # Compter total
         total_count = sum(len(obj_list) for obj_list in all_objections.values())
         logger.info(f"📊 Total objections: {total_count}")
 
@@ -396,10 +194,9 @@ class ChatterboxVoiceCloner:
         output_dir = self.audio_dir / "tts" / voice_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Générer TTS
         logger.info(f"📁 Output directory: {output_dir}")
 
-        # Estimer temps (10s par objection avec Chatterbox)
+        # Estimer temps
         estimated_time_minutes = (total_count * 10) / 60
         logger.info(f"⏱️  Estimated time: {estimated_time_minutes:.1f} minutes\n")
 
@@ -412,22 +209,22 @@ class ChatterboxVoiceCloner:
             logger.info(f"   {len(objections_list)} objections")
 
             for i, objection_entry in enumerate(objections_list, 1):
-                # Extraire la réponse (ObjectionEntry ou str)
+                # Extraire la réponse
                 if hasattr(objection_entry, 'response'):
                     response_text = objection_entry.response
                 elif isinstance(objection_entry, str):
                     response_text = objection_entry
                 else:
-                    logger.warning(f"   ⚠️  Skipping invalid entry type: {type(objection_entry)}")
+                    logger.warning(f"   ⚠️  Skipping invalid entry")
                     continue
 
-                # Créer nom de fichier safe à partir des premiers mots de la réponse
+                # Créer nom de fichier
                 response_preview = response_text[:30]
                 safe_name = self._sanitize_filename(response_preview)
                 filename = f"{theme_name}_{i:03d}_{safe_name}.wav"
                 output_file = output_dir / filename
 
-                # Skip si existe déjà
+                # Skip si existe
                 if output_file.exists():
                     logger.info(f"   [{i}/{len(objections_list)}] ⏭️  Skip (exists): {filename}")
                     success_count += 1
@@ -435,7 +232,7 @@ class ChatterboxVoiceCloner:
 
                 start_time = time.time()
 
-                # Générer TTS avec Chatterbox
+                # Générer TTS
                 result = self.tts.synthesize_with_voice(
                     response_text,
                     voice_name=voice_name,
@@ -463,450 +260,36 @@ class ChatterboxVoiceCloner:
 
         return failed_count == 0
 
-    def _clean_audio_with_uvr(self, audio_path: Path, output_dir: Path) -> Optional[Path]:
-        """
-        Nettoie un fichier audio avec UVR (Ultimate Vocal Remover).
-        Extrait uniquement les vocals, enlève musique/bruit de fond.
-
-        Args:
-            audio_path: Fichier audio source
-            output_dir: Dossier de sortie
-
-        Returns:
-            Path vers fichier nettoyé, ou None si échec
-        """
-        if not UVR_AVAILABLE:
-            logger.warning("⚠️  UVR not available, skipping vocal extraction")
-            return None
-
-        try:
-            logger.info(f"   🎵 UVR: Extracting vocals from {audio_path.name}...")
-
-            # Créer dossier temporaire pour UVR
-            temp_output = output_dir / "uvr_temp"
-            temp_output.mkdir(exist_ok=True)
-
-            # Initialiser UVR Separator avec modèle vocal
-            # Version 0.12.0: Le modèle se spécifie dans le constructeur
-            separator = Separator(
-                log_level=logging.WARNING,
-                output_dir=str(temp_output),
-                output_format="wav",
-                model_file_dir="/tmp/audio-separator-models/"  # Cache pour modèles
-            )
-
-            # Charger modèle MDX-Net pour extraction vocale
-            # Le modèle sera téléchargé automatiquement au premier usage
-            # Note: Ne PAS inclure .onnx, l'API l'ajoute automatiquement
-            separator.load_model("UVR-MDX-NET-Voc_FT")
-
-            # Séparer vocals
-            output_files = separator.separate(str(audio_path))
-
-            # UVR génère 2 fichiers: vocals et instrumental
-            # output_files contient les noms de fichiers (pas chemins complets)
-            # Chercher le fichier vocals
-            vocals_file = None
-            for filename in output_files:
-                if "Vocals" in filename or "vocals" in filename:
-                    # Construire le chemin complet
-                    vocals_file = temp_output / filename
-                    break
-
-            if vocals_file and vocals_file.exists():
-                # Déplacer vers output_dir avec nom propre
-                clean_name = f"{audio_path.stem}_vocals.wav"
-                final_path = output_dir / clean_name
-
-                import shutil
-                shutil.move(str(vocals_file), str(final_path))
-
-                # Nettoyer temp
-                shutil.rmtree(temp_output, ignore_errors=True)
-
-                logger.info(f"      ✅ Vocals extracted: {clean_name}")
-                return final_path
-            else:
-                logger.warning(f"      ⚠️  No vocals file generated")
-                return None
-
-        except Exception as e:
-            logger.warning(f"      ⚠️  UVR failed: {e}")
-            return None
-
     def _sanitize_filename(self, text: str) -> str:
-        """Crée un nom de fichier safe depuis du texte"""
+        """Crée un nom de fichier safe"""
         import re
-        # Garder seulement lettres, chiffres, espaces
         safe = re.sub(r'[^\w\s-]', '', text)
-        # Remplacer espaces par underscores
         safe = re.sub(r'\s+', '_', safe)
-        # Limiter longueur
         return safe[:40].lower()
-
-    def _calculate_snr(self, waveform: np.ndarray, sample_rate: int) -> float:
-        """
-        Calcule le Signal-to-Noise Ratio (SNR) d'un audio.
-
-        Args:
-            waveform: Audio waveform (numpy array)
-            sample_rate: Sample rate
-
-        Returns:
-            SNR en dB (plus élevé = meilleur)
-        """
-        try:
-            # Convertir en mono si stéréo
-            if len(waveform.shape) > 1:
-                waveform = np.mean(waveform, axis=0)
-
-            # Réduction de bruit pour estimer le signal propre
-            reduced_noise = nr.reduce_noise(
-                y=waveform,
-                sr=sample_rate,
-                stationary=True,
-                prop_decrease=0.8
-            )
-
-            # Signal = variance du signal nettoyé
-            signal_power = np.var(reduced_noise)
-
-            # Bruit = variance de la différence
-            noise = waveform - reduced_noise
-            noise_power = np.var(noise)
-
-            if noise_power == 0:
-                return 100.0  # Très bon SNR
-
-            snr = 10 * np.log10(signal_power / noise_power)
-            return float(snr)
-
-        except Exception as e:
-            logger.warning(f"   ⚠️  SNR calculation failed: {e}")
-            return 0.0
-
-    def _calculate_silence_ratio(self, waveform: np.ndarray, threshold: float = 0.01) -> float:
-        """
-        Calcule le ratio de silence dans l'audio.
-
-        Args:
-            waveform: Audio waveform
-            threshold: Seuil pour considérer comme silence
-
-        Returns:
-            Ratio de silence (0.0 = pas de silence, 1.0 = tout silence)
-        """
-        # Convertir en mono si stéréo
-        if len(waveform.shape) > 1:
-            waveform = np.mean(waveform, axis=0)
-
-        # Normaliser
-        if np.max(np.abs(waveform)) > 0:
-            waveform = waveform / np.max(np.abs(waveform))
-
-        # Compter samples sous le seuil
-        silent_samples = np.sum(np.abs(waveform) < threshold)
-        total_samples = len(waveform)
-
-        return silent_samples / total_samples
-
-    def _score_audio_file(self, audio_path: Path) -> Tuple[float, dict]:
-        """
-        Score un fichier audio basé sur qualité pour clonage.
-
-        Args:
-            audio_path: Chemin vers le fichier audio
-
-        Returns:
-            (score, metrics_dict)
-            score: Score total (0-100, plus élevé = meilleur)
-            metrics: Détails des métriques
-        """
-        if not AUDIO_PROCESSING_AVAILABLE:
-            logger.warning("⚠️  Audio processing not available, using file size")
-            size_mb = audio_path.stat().st_size / (1024 * 1024)
-            return size_mb * 10, {"size_mb": size_mb}
-
-        try:
-            # Charger audio
-            waveform, sample_rate = torchaudio.load(str(audio_path))
-            waveform_np = waveform.numpy()
-
-            # Durée
-            duration = waveform.shape[1] / sample_rate
-
-            # Métriques
-            metrics = {
-                "duration": duration,
-                "sample_rate": sample_rate,
-                "channels": waveform.shape[0]
-            }
-
-            # 1. Score durée (optimal: 3-15 secondes)
-            if duration < 2:
-                duration_score = 0
-            elif duration < 3:
-                duration_score = 50
-            elif duration <= 15:
-                duration_score = 100
-            elif duration <= 30:
-                duration_score = 80
-            else:
-                duration_score = 60
-
-            metrics["duration_score"] = duration_score
-
-            # 2. SNR (Signal-to-Noise Ratio)
-            snr = self._calculate_snr(waveform_np, sample_rate)
-            # SNR typique: 10-40 dB
-            snr_score = min(100, max(0, (snr - 10) * 3.33))  # 10dB=0, 40dB=100
-            metrics["snr"] = snr
-            metrics["snr_score"] = snr_score
-
-            # 3. Ratio de silence (moins = mieux)
-            silence_ratio = self._calculate_silence_ratio(waveform_np)
-            silence_score = max(0, 100 - (silence_ratio * 200))  # 0%=100, 50%=0
-            metrics["silence_ratio"] = silence_ratio
-            metrics["silence_score"] = silence_score
-
-            # 4. Stabilité du volume (variance normalisée)
-            if len(waveform_np.shape) > 1:
-                waveform_mono = np.mean(waveform_np, axis=0)
-            else:
-                waveform_mono = waveform_np
-
-            # Calculer RMS par fenêtres
-            window_size = sample_rate // 10  # 100ms windows
-            rms_values = []
-            for i in range(0, len(waveform_mono), window_size):
-                window = waveform_mono[i:i+window_size]
-                if len(window) > 0:
-                    rms = np.sqrt(np.mean(window**2))
-                    rms_values.append(rms)
-
-            if len(rms_values) > 0:
-                rms_std = np.std(rms_values)
-                rms_mean = np.mean(rms_values)
-                stability = 1 - min(1, rms_std / (rms_mean + 1e-8))
-                stability_score = stability * 100
-            else:
-                stability_score = 50
-
-            metrics["stability"] = stability_score / 100
-            metrics["stability_score"] = stability_score
-
-            # Score total pondéré
-            total_score = (
-                duration_score * 0.25 +    # 25% durée
-                snr_score * 0.35 +          # 35% qualité audio
-                silence_score * 0.20 +      # 20% pas trop de silence
-                stability_score * 0.20      # 20% stabilité
-            )
-
-            metrics["total_score"] = total_score
-
-            return total_score, metrics
-
-        except Exception as e:
-            logger.error(f"   ❌ Error scoring {audio_path.name}: {e}")
-            return 0.0, {"error": str(e)}
-
-    def process_and_score_audio_files(
-        self,
-        voice_name: str,
-        source_dir: Optional[Path] = None,
-        top_n: int = 10,
-        use_uvr: bool = False
-    ) -> List[Path]:
-        """
-        Process, score et sélectionne les meilleurs fichiers audio.
-
-        Args:
-            voice_name: Nom de la voix
-            source_dir: Dossier source (None = audio/ dir)
-            top_n: Nombre de meilleurs fichiers à garder
-            use_uvr: Utiliser UVR pour extraire vocals (enlève musique)
-
-        Returns:
-            Liste des meilleurs fichiers triés par score
-        """
-        logger.info(f"\n{'='*60}")
-        logger.info(f"🔍 AUDIO PROCESSING & SCORING")
-        logger.info(f"{'='*60}")
-
-        if not AUDIO_PROCESSING_AVAILABLE:
-            logger.error("❌ Audio processing not available")
-            logger.error("   Install: pip install torchaudio noisereduce")
-            return []
-
-        # Déterminer dossier source
-        if source_dir is None:
-            source_dir = self.audio_dir
-
-        if not source_dir.exists():
-            logger.error(f"❌ Source directory not found: {source_dir}")
-            return []
-
-        # Trouver tous les fichiers audio
-        audio_files = list(source_dir.glob("*.wav"))
-        audio_files.extend(source_dir.glob("*.mp3"))
-
-        if not audio_files:
-            logger.error(f"❌ No audio files found in {source_dir}")
-            return []
-
-        logger.info(f"📁 Source: {source_dir}")
-        logger.info(f"📊 Found {len(audio_files)} audio files")
-        logger.info(f"🎯 Selecting top {top_n} files")
-        if use_uvr and UVR_AVAILABLE:
-            logger.info(f"🎵 UVR: Vocal extraction enabled")
-        logger.info("")
-
-        # Créer dossier pour fichiers nettoyés
-        cleaned_dir = self.voices_dir / voice_name / "cleaned"
-        cleaned_dir.mkdir(parents=True, exist_ok=True)
-
-        # Phase 1: UVR si demandé
-        files_to_score = []
-
-        if use_uvr and UVR_AVAILABLE:
-            logger.info("🎵 Phase 1: UVR Vocal Extraction")
-            logger.info("="*60)
-
-            for i, audio_file in enumerate(audio_files, 1):
-                logger.info(f"[{i}/{len(audio_files)}] Processing: {audio_file.name}")
-
-                cleaned_file = self._clean_audio_with_uvr(audio_file, cleaned_dir)
-
-                if cleaned_file:
-                    files_to_score.append(cleaned_file)
-                else:
-                    # Fallback sur fichier original si UVR échoue
-                    logger.info(f"      ⚠️  Using original file as fallback")
-                    files_to_score.append(audio_file)
-
-            logger.info(f"\n✅ UVR processed {len(files_to_score)} files\n")
-        else:
-            if use_uvr:
-                logger.warning("⚠️  UVR requested but not available")
-                logger.warning("   Install: pip install audio-separator\n")
-            files_to_score = audio_files
-
-        # Phase 2: Scoring
-        logger.info("📊 Phase 2: Audio Quality Scoring")
-        logger.info("="*60)
-
-        scored_files = []
-
-        for i, audio_file in enumerate(files_to_score, 1):
-            logger.info(f"[{i}/{len(files_to_score)}] Scoring: {audio_file.name}")
-
-            score, metrics = self._score_audio_file(audio_file)
-
-            # Log métriques importantes
-            if "total_score" in metrics:
-                logger.info(f"   📊 Score: {score:.1f}/100")
-                logger.info(f"      Duration: {metrics.get('duration', 0):.1f}s (score: {metrics.get('duration_score', 0):.1f})")
-                logger.info(f"      SNR: {metrics.get('snr', 0):.1f}dB (score: {metrics.get('snr_score', 0):.1f})")
-                logger.info(f"      Silence: {metrics.get('silence_ratio', 0)*100:.1f}% (score: {metrics.get('silence_score', 0):.1f})")
-                logger.info(f"      Stability: {metrics.get('stability', 0)*100:.1f}% (score: {metrics.get('stability_score', 0):.1f})")
-            else:
-                logger.info(f"   📊 Score: {score:.1f}")
-
-            scored_files.append((audio_file, score, metrics))
-
-        # Trier par score (meilleur en premier)
-        scored_files.sort(key=lambda x: x[1], reverse=True)
-
-        # Sélection DYNAMIQUE pour atteindre 60-150 secondes total
-        # Au lieu de top_n fixe, on prend fichiers jusqu'à durée cible
-        logger.info(f"\n{'='*60}")
-        logger.info(f"🎯 DYNAMIC SELECTION: Target 60-150s total duration")
-        logger.info(f"{'='*60}")
-
-        MIN_TOTAL_DURATION = 60.0   # 1 minute minimum
-        MAX_TOTAL_DURATION = 150.0  # 2.5 minutes maximum
-
-        selected_files = []
-        selected_scores = []
-        total_duration = 0.0
-
-        for audio_file, score, metrics in scored_files:
-            duration = metrics.get('duration', 0)
-
-            # Si on dépasse le MAX, arrêter
-            if total_duration + duration > MAX_TOTAL_DURATION:
-                # Sauf si on n'a pas encore atteint le MIN
-                if total_duration >= MIN_TOTAL_DURATION:
-                    logger.info(f"\n⏸️  Stopped at {total_duration:.1f}s (max {MAX_TOTAL_DURATION}s)")
-                    break
-                # Sinon, prendre ce fichier même si on dépasse un peu
-                elif total_duration < MIN_TOTAL_DURATION and len(selected_files) < top_n:
-                    selected_files.append(audio_file)
-                    selected_scores.append((audio_file, score, metrics))
-                    total_duration += duration
-                    logger.info(f"✅ {len(selected_files):2d}. {audio_file.name:30s} | {score:5.1f} | {duration:.1f}s (total: {total_duration:.1f}s)")
-                    break
-            else:
-                selected_files.append(audio_file)
-                selected_scores.append((audio_file, score, metrics))
-                total_duration += duration
-                logger.info(f"✅ {len(selected_files):2d}. {audio_file.name:30s} | {score:5.1f} | {duration:.1f}s (total: {total_duration:.1f}s)")
-
-            # Sécurité: limite absolue au nombre de fichiers
-            if len(selected_files) >= top_n:
-                logger.info(f"\n⏸️  Reached max {top_n} files")
-                break
-
-        # Afficher résumé final
-        logger.info(f"\n{'='*60}")
-        logger.info(f"✅ FINAL SELECTION:")
-        logger.info(f"{'='*60}")
-        logger.info(f"   Files selected: {len(selected_files)}")
-        logger.info(f"   Total duration: {total_duration:.1f}s ({total_duration/60:.1f} min)")
-        logger.info(f"   Target range: {MIN_TOTAL_DURATION}-{MAX_TOTAL_DURATION}s")
-
-        if total_duration < MIN_TOTAL_DURATION:
-            logger.warning(f"⚠️  Total duration ({total_duration:.1f}s) below minimum ({MIN_TOTAL_DURATION}s)")
-            logger.warning(f"   Voice cloning quality may be reduced")
-        elif total_duration > MAX_TOTAL_DURATION:
-            logger.warning(f"⚠️  Total duration ({total_duration:.1f}s) above maximum ({MAX_TOTAL_DURATION}s)")
-        else:
-            logger.info(f"✅ Duration is optimal for voice cloning!")
-
-        if len(scored_files) > len(selected_files):
-            logger.info(f"\n⏭️  Skipped {len(scored_files) - len(selected_files)} lower-scored files")
-
-        return selected_files
 
 
 def main():
     """Point d'entrée principal"""
-    parser = argparse.ArgumentParser(description="Voice cloning with Chatterbox TTS")
+    parser = argparse.ArgumentParser(description="Simple voice cloning with Chatterbox")
     parser.add_argument("--voice", type=str, help="Nom de la voix à cloner")
     parser.add_argument("--skip-tts", action="store_true", help="Ne pas générer les fichiers TTS")
-    parser.add_argument("--theme", type=str, help="Thème spécifique pour TTS (crypto, energie, etc.)")
-    parser.add_argument("--force", action="store_true", help="Force le re-clonage même si déjà fait")
-    parser.add_argument("--no-scoring", action="store_true", help="Désactiver le scoring (utiliser un seul fichier)")
-    parser.add_argument("--max-files", type=int, default=30, help="Nombre max de fichiers (limite absolue, défaut: 30)")
-    parser.add_argument("--score-only", action="store_true", help="Juste scorer les fichiers sans cloner")
-    parser.add_argument("--uvr", action="store_true", default=True, help="Utiliser UVR pour extraire vocals (activé par défaut)")
-    parser.add_argument("--no-uvr", action="store_false", dest="uvr", help="Désactiver UVR (utiliser fichiers bruts)")
+    parser.add_argument("--force", action="store_true", help="Force le re-clonage")
+    parser.add_argument("--theme", type=str, help="Thème spécifique pour TTS")
 
     args = parser.parse_args()
 
     print("\n" + "="*60)
-    print("🎤  VOICE CLONER - Chatterbox TTS (MiniBotPanel v3)")
+    print("🎤  SIMPLE VOICE CLONER - Chatterbox TTS")
     print("="*60)
 
-    cloner = ChatterboxVoiceCloner()
+    cloner = SimpleVoiceCloner()
 
     # Détecter voix disponibles
     available_voices = cloner.detect_available_voices()
 
     if not available_voices:
-        logger.error("❌ No voices found in voices/")
-        logger.info("💡 Create a folder in voices/ and add audio files")
+        logger.error("❌ No voices with reference.wav found in voices/")
+        logger.info("💡 Run: python youtube_extract.py")
         return 1
 
     logger.info(f"📁 Available voices: {', '.join(available_voices)}")
@@ -914,31 +297,21 @@ def main():
     # Sélectionner voix
     if args.voice:
         voice_name = args.voice
-        # Si --score-only, pas besoin que la voix existe
-        if not args.score_only and voice_name not in available_voices:
-            logger.error(f"❌ Voice '{voice_name}' not found in voices/")
-            logger.info(f"💡 Available voices: {', '.join(available_voices)}")
+        if voice_name not in available_voices:
+            logger.error(f"❌ Voice '{voice_name}' not found")
+            logger.info(f"💡 Available: {', '.join(available_voices)}")
             return 1
     else:
-        if args.score_only:
-            logger.error("❌ --score-only requires --voice parameter")
-            return 1
-
-        # Demander quelle voix utiliser
         if len(available_voices) == 1:
             voice_name = available_voices[0]
-            logger.info(f"\n🎯 Voice found: {voice_name}")
+            logger.info(f"\n🎯 Using voice: {voice_name}")
         else:
-            logger.info("\n🎤 Select a voice to clone:")
+            logger.info("\n🎤 Select a voice:")
             for i, v in enumerate(available_voices, 1):
                 logger.info(f"   {i}. {v}")
 
             try:
-                choice = input("\nEnter number (or 'q' to quit): ").strip()
-                if choice.lower() == 'q':
-                    logger.info("Cancelled.")
-                    return 0
-
+                choice = input("\nEnter number: ").strip()
                 idx = int(choice) - 1
                 if 0 <= idx < len(available_voices):
                     voice_name = available_voices[idx]
@@ -949,47 +322,22 @@ def main():
                 logger.error("\n❌ Cancelled")
                 return 1
 
-        # Confirmation avant de continuer
-        logger.info(f"\n{'='*60}")
-        logger.info(f"🎯 Voice selected: {voice_name}")
-        logger.info(f"📁 Location: voices/{voice_name}/")
-        logger.info(f"{'='*60}")
-
-        try:
-            confirm = input("\nProceed with cloning? (y/N): ").strip().lower()
-            if confirm not in ['y', 'yes', 'o', 'oui']:
-                logger.info("Cancelled.")
-                return 0
-        except KeyboardInterrupt:
-            logger.error("\n❌ Cancelled")
-            return 1
-
-    # Mode score-only
-    if args.score_only:
-        logger.info(f"🎯 Score-only mode for voice: {voice_name}")
-        cloner.process_and_score_audio_files(
-            voice_name,
-            source_dir=cloner.audio_dir,
-            top_n=args.max_files,
-            use_uvr=args.uvr
-        )
-        logger.info("\n✅ Scoring complete!")
-        return 0
-
     # Cloner voix
-    if not cloner.clone_voice(
-        voice_name,
-        force=args.force,
-        use_scoring=not args.no_scoring,
-        max_files=args.max_files,
-        use_uvr=args.uvr
-    ):
+    if not cloner.clone_voice(voice_name, force=args.force):
         return 1
 
-    # Générer TTS
+    # Demander si générer TTS
     if not args.skip_tts:
-        themes = [args.theme] if args.theme else None
-        cloner.generate_tts_objections(voice_name, themes)
+        try:
+            logger.info("\n" + "="*60)
+            response = input("🔊 Generate TTS for objections/FAQ? (y/N): ").strip().lower()
+            if response in ['y', 'yes', 'o', 'oui']:
+                themes = [args.theme] if args.theme else None
+                cloner.generate_tts_objections(voice_name, themes)
+            else:
+                logger.info("⏭️  Skipped TTS generation")
+        except KeyboardInterrupt:
+            logger.info("\n⏭️  Skipped TTS generation")
 
     logger.info("\n✅ Done!")
     return 0
