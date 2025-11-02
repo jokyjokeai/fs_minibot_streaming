@@ -368,8 +368,14 @@ class YouTubeVoiceExtractor:
                     common_words = sub_words & vosk_words
                     similarity = len(common_words) / max(len(sub_words), len(vosk_words))
 
-                    # Si similarité < 50%, probablement plusieurs voix
-                    if similarity < 0.5:
+                    # Debug: log les 5 premières similarités
+                    if len(validated_segments) + total_filtered < 5:
+                        logger.info(f"      Segment {seg.speaker} {seg.start:.1f}s: similarity={similarity:.2f}")
+                        logger.info(f"         Vosk: {vosk_text[:80]}")
+                        logger.info(f"         Subs: {sub_text[:80]}")
+
+                    # Si similarité < 20%, probablement plusieurs voix (seuil plus permissif)
+                    if similarity < 0.2:
                         total_filtered += 1
                         continue
 
