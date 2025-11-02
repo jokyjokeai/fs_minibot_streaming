@@ -609,6 +609,126 @@ class YouTubeVoiceExtractor:
             logger.error(f"❌ Download failed: {e}")
             return None
 
+    def preprocess_audio(self, audio_file: Path, output_dir: Path) -> Optional[Path]:
+        """
+        Preprocessing pipeline complet:
+        1. Normalize volume (-20 LUFS)
+        2. Convert to mono 16kHz WAV
+        3. UVR vocal extraction
+        4. Noise reduction
+
+        Args:
+            audio_file: Fichier audio brut
+            output_dir: Dossier de sortie
+
+        Returns:
+            Path du fichier preprocessed ou None
+        """
+        logger.info(f"\n🔧 Audio Preprocessing Pipeline...")
+
+        try:
+            from pydub import AudioSegment
+            import noisereduce as nr
+
+            # 1. Load audio
+            logger.info("📂 Loading audio...")
+            audio = AudioSegment.from_file(str(audio_file))
+
+            # 2. Convert to mono 16kHz (optimal for diarization)
+            logger.info("🔄 Converting to mono 16kHz...")
+            audio = audio.set_channels(1)  # Mono
+            audio = audio.set_frame_rate(16000)  # 16kHz for pyannote/resemblyzer
+
+            # 3. Normalize volume to -20 LUFS (standard for speech)
+            logger.info("🔊 Normalizing volume...")
+            target_dBFS = -20.0
+            change_in_dBFS = target_dBFS - audio.dBFS
+            normalized_audio = audio.apply_gain(change_in_dBFS)
+
+            # Save intermediate file
+            normalized_file = output_dir / "normalized.wav"
+            normalized_audio.export(str(normalized_file), format="wav")
+            logger.info(f"   ✅ Normalized to {target_dBFS} dBFS")
+
+            # 4. UVR vocal extraction (if available)
+            try:
+                from audio_separator.separator import Separator
+                logger.info("🎵 UVR: Extracting vocals...")
+
+                separator = Separator(
+                    log_level=logging.WARNING,
+                    model_file_dir="models/uvr"
+                )
+                separator.load_model("UVR-MDX-NET-Inst_HQ_3.onnx")
+
+                output_files = separator.separate(str(normalized_file))
+
+                # Trouver le fichier vocals
+                vocals_file = None
+                for f in output_files:
+                    if "Vocals" in f or "vocals" in f:
+                        vocals_file = Path(f)
+                        break
+
+                if vocals_file and vocals_file.exists():
+                    logger.info(f"   ✅ Vocals extracted: {vocals_file.name}")
+                    # Reload cleaned audio
+                    audio = AudioSegment.from_file(str(vocals_file))
+                    # Clean up
+                    normalized_file.unlink()
+                    for f in output_files:
+                        if Path(f) != vocals_file:
+                            Path(f).unlink(missing_ok=True)
+                    cleaned_file = vocals_file
+                else:
+                    logger.warning("   ⚠️  Vocals file not found, using normalized")
+                    cleaned_file = normalized_file
+
+            except ImportError:
+                logger.warning("   ⚠️  UVR not available, skipping vocal extraction")
+                cleaned_file = normalized_file
+            except Exception as e:
+                logger.warning(f"   ⚠️  UVR failed: {e}, continuing...")
+                cleaned_file = normalized_file
+
+            # 5. Noise reduction
+            logger.info("🔇 Reducing background noise...")
+            import soundfile as sf
+            import numpy as np
+
+            # Load audio as numpy array
+            data, rate = sf.read(str(cleaned_file))
+
+            # Apply noise reduction
+            reduced_noise = nr.reduce_noise(
+                y=data,
+                sr=rate,
+                stationary=True,
+                prop_decrease=0.8  # Reduce 80% of noise
+            )
+
+            # Save final preprocessed file
+            preprocessed_file = output_dir / "preprocessed.wav"
+            sf.write(str(preprocessed_file), reduced_noise, rate)
+
+            logger.info(f"✅ Preprocessing complete: {preprocessed_file.name}")
+            logger.info(f"   - Mono 16kHz")
+            logger.info(f"   - Normalized volume")
+            logger.info(f"   - Vocals extracted (UVR)")
+            logger.info(f"   - Noise reduced")
+
+            # Clean up intermediate files
+            if cleaned_file != preprocessed_file:
+                cleaned_file.unlink(missing_ok=True)
+
+            return preprocessed_file
+
+        except Exception as e:
+            logger.error(f"❌ Preprocessing failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return audio_file  # Return original if preprocessing fails
+
     def download_subtitles(self, url: str, output_dir: Path) -> Optional[List[Dict]]:
         """
         Télécharge les sous-titres YouTube (auto-générés ou manuels)
@@ -1136,11 +1256,17 @@ class YouTubeVoiceExtractor:
             temp_path = Path(temp_dir)
 
             # 1. Télécharger audio
-            audio_file = self.download_audio_from_youtube(url, temp_path)
-            if not audio_file:
+            raw_audio_file = self.download_audio_from_youtube(url, temp_path)
+            if not raw_audio_file:
                 return False
 
-            # 2. Télécharger sous-titres YouTube (pour validation Vosk)
+            # 2. Preprocessing (UVR + noise reduction + normalization)
+            audio_file = self.preprocess_audio(raw_audio_file, temp_path)
+            if not audio_file:
+                logger.error("❌ Preprocessing failed")
+                return False
+
+            # 3. Télécharger sous-titres YouTube (pour validation Vosk)
             logger.info(f"\n📝 Downloading YouTube subtitles for validation...")
             subtitles = self.download_subtitles(url, temp_path)
             if subtitles:
@@ -1148,7 +1274,7 @@ class YouTubeVoiceExtractor:
             else:
                 logger.warning(f"   ⚠️  No subtitles available - skipping Vosk validation")
 
-            # 3. Diarization
+            # 4. Diarization (sur audio preprocessed)
             segments = self.perform_speaker_diarization(audio_file)
             if not segments:
                 return False
