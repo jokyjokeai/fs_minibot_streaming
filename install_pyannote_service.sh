@@ -102,10 +102,10 @@ async def load_pipeline():
         logger.warning("   Using public model (may have limitations)")
 
     try:
-        # Note: use 'token' parameter for new pyannote API (3.1+)
+        # Use 'token' parameter for pyannote API 3.1+
         pipeline = Pipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1",
-            token=hf_token  # Changed from use_auth_token
+            token=hf_token
         )
         logger.info("✅ Pipeline loaded successfully")
     except Exception as e:
