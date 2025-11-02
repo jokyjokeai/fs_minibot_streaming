@@ -657,6 +657,7 @@ class YouTubeVoiceExtractor:
             Path du fichier preprocessed ou None
         """
         logger.info(f"\n🔧 Audio Preprocessing Pipeline...")
+        logger.info(f"   [████░░░░░░] Step 1/5: Loading & Converting...")
 
         try:
             from pydub import AudioSegment
@@ -672,6 +673,7 @@ class YouTubeVoiceExtractor:
             audio = audio.set_frame_rate(16000)  # 16kHz for pyannote/resemblyzer
 
             # 3. Normalize volume to -20 LUFS (standard for speech)
+            logger.info(f"   [██████░░░░] Step 2/5: Normalizing...")
             logger.info("🔊 Normalizing volume...")
             target_dBFS = -20.0
             change_in_dBFS = target_dBFS - audio.dBFS
@@ -683,6 +685,7 @@ class YouTubeVoiceExtractor:
             logger.info(f"   ✅ Normalized to {target_dBFS} dBFS")
 
             # 4. UVR vocal extraction (if available)
+            logger.info(f"   [████████░░] Step 3/5: UVR Vocal Extraction...")
             try:
                 from audio_separator.separator import Separator
                 logger.info("🎵 UVR: Extracting vocals...")
@@ -718,7 +721,16 @@ class YouTubeVoiceExtractor:
                 # Use fastest model for speed: Inst_1 (fastest) > Inst_Main (balanced) > KARA_2 > HQ_3 (slowest)
                 separator.load_model("UVR-MDX-NET-Inst_1")
 
+                # Get audio duration for progress estimation
+                from pydub import AudioSegment
+                audio_duration = len(AudioSegment.from_file(str(normalized_file))) / 1000
+                logger.info(f"   Processing {audio_duration:.0f}s of audio (estimated: {audio_duration*0.4:.0f}s)...")
+
+                import time
+                start_time = time.time()
                 output_files = separator.separate(str(normalized_file))
+                elapsed = time.time() - start_time
+                logger.info(f"   Completed in {elapsed:.1f}s")
 
                 # Trouver le fichier vocals
                 vocals_file = None
@@ -749,9 +761,11 @@ class YouTubeVoiceExtractor:
                 cleaned_file = normalized_file
 
             # 5. Noise reduction (with safety check)
+            logger.info(f"   [█████████░] Step 4/5: Noise Reduction...")
             logger.info("🔇 Reducing background noise...")
             import soundfile as sf
             import numpy as np
+            from tqdm import tqdm
 
             try:
                 # Load audio as numpy array
@@ -763,13 +777,15 @@ class YouTubeVoiceExtractor:
                     preprocessed_file = cleaned_file
                 else:
                     # Apply noise reduction with chunk processing for safety
-                    reduced_noise = nr.reduce_noise(
-                        y=data,
-                        sr=rate,
-                        stationary=True,
-                        prop_decrease=0.8,  # Reduce 80% of noise
-                        chunk_size=60000    # Process in smaller chunks to avoid memory issues
-                    )
+                    with tqdm(total=100, desc="   Noise Reduction", unit="%", ncols=80) as pbar:
+                        reduced_noise = nr.reduce_noise(
+                            y=data,
+                            sr=rate,
+                            stationary=True,
+                            prop_decrease=0.8,  # Reduce 80% of noise
+                            chunk_size=60000    # Process in smaller chunks to avoid memory issues
+                        )
+                        pbar.update(100)
 
                     # Save final preprocessed file
                     preprocessed_file = output_dir / "preprocessed.wav"
@@ -779,6 +795,7 @@ class YouTubeVoiceExtractor:
                 logger.warning(f"   ⚠️  Noise reduction failed (memory issue), using UVR output directly")
                 preprocessed_file = cleaned_file
 
+            logger.info(f"   [██████████] Step 5/5: Complete!")
             logger.info(f"✅ Preprocessing complete: {preprocessed_file.name}")
             logger.info(f"   - Mono 16kHz")
             logger.info(f"   - Normalized volume")
