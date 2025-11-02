@@ -434,7 +434,8 @@ class ChatterboxVoiceCloner:
 
             # Charger modèle MDX-Net pour extraction vocale
             # Le modèle sera téléchargé automatiquement au premier usage
-            separator.load_model("UVR-MDX-NET-Voc_FT.onnx")
+            # Note: Ne PAS inclure .onnx, l'API l'ajoute automatiquement
+            separator.load_model("UVR-MDX-NET-Voc_FT")
 
             # Séparer vocals
             output_files = separator.separate(str(audio_path))
