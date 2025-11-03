@@ -2,7 +2,7 @@
 
 **Plateforme complète de prospection téléphonique intelligente avec IA conversationnelle**
 
-Système professionnel d'automatisation d'appels téléphoniques avec intelligence artificielle (STT, NLP, TTS), mode Freestyle AI, détection de répondeur, gestion de scénarios conversationnels, et matching intelligent d'objections.
+Système professionnel d'automatisation d'appels téléphoniques avec intelligence artificielle (STT, NLP), détection de répondeur, gestion de scénarios conversationnels, et matching intelligent d'objections avec audio pré-enregistré.
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![FreeSWITCH](https://img.shields.io/badge/FreeSWITCH-1.10+-green.svg)](https://freeswitch.org/)

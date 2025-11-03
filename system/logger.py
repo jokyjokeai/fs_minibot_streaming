@@ -43,7 +43,7 @@ LOG_DIRS = {
     "api": LOGS_DIR / "api",
     "errors": LOGS_DIR / "errors",
     "debug": LOGS_DIR / "debug",
-    "freestyle": LOGS_DIR / "freestyle",  # NOUVEAU v3
+    # "freestyle" removed in v3 (no longer using Freestyle AI)
     "objections": LOGS_DIR / "objections",  # NOUVEAU v3
     "ollama": LOGS_DIR / "ollama",  # NOUVEAU v3
     "amd": LOGS_DIR / "amd",  # Détection répondeur
@@ -304,21 +304,7 @@ def log_error(module: str, error: Exception, context: Dict[str, Any] = None):
 # Helpers spécialisés pour v3
 # ═══════════════════════════════════════════════════════════════════════════
 
-def log_freestyle_turn(call_uuid: str, turn_number: int, user_input: str, ai_response: str,
-                      generation_time: float, context: Dict[str, Any] = None):
-    """Log un tour de conversation Freestyle AI."""
-    logger = get_logger("freestyle", call_uuid=call_uuid)
-    logger.info(
-        f"Freestyle turn {turn_number}",
-        extra={
-            "turn_number": turn_number,
-            "user_input": user_input,
-            "ai_response": ai_response,
-            "generation_time": generation_time,
-            "response_length": len(ai_response),
-            **(context or {})
-        }
-    )
+# log_freestyle_turn() removed in v3 (Freestyle AI no longer used)
 
 
 def log_objection_match(call_uuid: str, user_input: str, matched_objection: str,

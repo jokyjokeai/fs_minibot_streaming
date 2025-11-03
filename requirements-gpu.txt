@@ -66,14 +66,12 @@ numpy>=1.24.3,<2.0
 pydub==0.25.1
 webrtcvad==2.0.10
 
-# Audio cleaning & voice extraction
-noisereduce==3.0.2  # Noise reduction
-
-# Speaker diarization (YouTube Extract)
-pyannote.audio==3.0.1
-
-# YouTube download
-yt-dlp>=2024.10.22
+# ============================================
+# REMOVED (v3 cleanup):
+# - noisereduce (audio cleanup no longer needed)
+# - pyannote.audio (speaker diarization no longer needed)
+# - yt-dlp (YouTube extraction no longer needed)
+# ============================================
 
 # ============================================
 # UTILITIES

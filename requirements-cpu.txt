@@ -65,16 +65,12 @@ numpy>=1.24.3,<2.0
 pydub==0.25.1
 webrtcvad==2.0.10
 
-# Audio cleaning & voice extraction
-noisereduce==3.0.2  # Noise reduction
-
-# Speaker diarization (YouTube Extract)
-pyannote.audio==3.0.1
-
-# YouTube download
-# IMPORTANT: Toujours garder à jour (pip install --upgrade yt-dlp)
-# YouTube change régulièrement son API, nécessite version récente
-yt-dlp>=2024.10.22  # YouTube audio extraction (pas de version fixe)
+# ============================================
+# REMOVED (v3 cleanup):
+# - noisereduce (audio cleanup no longer needed)
+# - pyannote.audio (speaker diarization no longer needed)
+# - yt-dlp (YouTube extraction no longer needed)
+# ============================================
 
 # ============================================
 # UTILITIES
@@ -130,11 +126,7 @@ isort==5.13.2
 #    https://ollama.ai/download
 #    ollama pull mistral:7b
 #
-# 4b. HuggingFace Token (pour pyannote.audio):
-#    1. Créer compte sur https://huggingface.co
-#    2. Générer token: https://huggingface.co/settings/tokens
-#    3. Ajouter dans .env: HUGGINGFACE_TOKEN=hf_...
-#    4. Accepter conditions: https://huggingface.co/pyannote/speaker-diarization-3.1
+# 4b. HuggingFace Token - REMOVED (no longer needed in v3)
 #
 # 5. FreeSWITCH ESL:
 #    - Linux: apt install freeswitch-python-esl

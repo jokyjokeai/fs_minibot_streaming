@@ -218,13 +218,13 @@ class ScenarioManager:
                     logger.error(f"Step '{step_name}' missing field: {field}")
                     return False
 
-            # message_text requis sauf pour freestyle (généré dynamiquement)
-            if step_config.get("audio_type") != "freestyle" and "message_text" not in step_config:
+            # message_text toujours requis (freestyle removed in v3)
+            if "message_text" not in step_config:
                 logger.error(f"Step '{step_name}' missing required field: message_text")
                 return False
 
-            # Valider audio_type
-            valid_audio_types = ["audio", "tts", "tts_cloned", "freestyle"]
+            # Valider audio_type (freestyle removed in v3)
+            valid_audio_types = ["audio", "tts", "tts_cloned"]
             if step_config["audio_type"] not in valid_audio_types:
                 logger.error(f"Step '{step_name}' has invalid audio_type")
                 return False
@@ -245,17 +245,7 @@ class ScenarioManager:
                     logger.error(f"Step '{step_name}' tts_cloned type but no voice")
                     return False
 
-            # Support pour freestyle AI mode
-            if step_config["audio_type"] == "freestyle":
-                # Voice optionnelle pour freestyle (utilise voix par défaut si absent)
-                # message_text non requis pour freestyle (généré par IA)
-                # Valider champs optionnels freestyle
-                if "max_turns" in step_config and not isinstance(step_config["max_turns"], int):
-                    logger.error(f"Step '{step_name}' max_turns must be integer")
-                    return False
-                if "context" in step_config and not isinstance(step_config["context"], dict):
-                    logger.error(f"Step '{step_name}' context must be dict")
-                    return False
+            # Freestyle AI mode removed in v3 (using pre-recorded audio only)
 
             # Validation champs agent autonome
             if agent_mode:

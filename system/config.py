@@ -50,6 +50,7 @@ LOGS_DIR = BASE_DIR / "logs"
 EXPORTS_DIR = BASE_DIR / "exports"
 RECORDINGS_DIR = BASE_DIR / "recordings"
 TRANSCRIPTIONS_DIR = BASE_DIR / "transcriptions"
+# VOICES_DIR removed (v3 cleanup - use AUDIO_DIR directly)
 
 # ============================================================================
 # BASE DE DONNÉES
@@ -86,8 +87,7 @@ OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "10"))
 
 # TTS removed - using pre-recorded audio only
 
-# HuggingFace (requis pour pyannote.audio speaker diarization)
-HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN", "")
+# HuggingFace REMOVED - pyannote.audio no longer needed (v3)
 
 # ============================================================================
 # AMD (Answering Machine Detection)
@@ -166,7 +166,7 @@ class Config:
     BASE_DIR = BASE_DIR
     AUDIO_DIR = AUDIO_DIR
     AUDIO_FILES_PATH = AUDIO_FILES_PATH
-    VOICES_DIR = VOICES_DIR
+    # VOICES_DIR removed (v3 cleanup - use AUDIO_DIR)
     LOGS_DIR = LOGS_DIR
     EXPORTS_DIR = EXPORTS_DIR
     RECORDINGS_DIR = RECORDINGS_DIR
@@ -188,10 +188,8 @@ class Config:
     OLLAMA_URL = OLLAMA_URL
     OLLAMA_MODEL = OLLAMA_MODEL
     OLLAMA_TIMEOUT = OLLAMA_TIMEOUT
-    COQUI_MODEL = COQUI_MODEL
-    COQUI_USE_GPU = COQUI_USE_GPU
-    COQUI_CACHE_ENABLED = COQUI_CACHE_ENABLED
-    HUGGINGFACE_TOKEN = HUGGINGFACE_TOKEN
+    # COQUI_MODEL, COQUI_USE_GPU, COQUI_CACHE_ENABLED removed (v3 cleanup - TTS not used)
+    # HUGGINGFACE_TOKEN removed (v3 cleanup)
 
     # AMD
     AMD_ENABLED = AMD_ENABLED

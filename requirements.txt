@@ -45,30 +45,23 @@ pydub==0.25.1
 scipy==1.11.4
 librosa==0.10.1
 webrtcvad==2.0.10
-noisereduce==3.0.2
 
 # ============================================================================
-# UVR (Ultimate Vocal Remover)
+# REMOVED (v3 cleanup):
+# - noisereduce (audio cleanup no longer needed)
+# - audio-separator (UVR no longer needed)
+# - resemblyzer + scikit-learn (diarization no longer needed)
+# - yt-dlp (YouTube extraction no longer needed)
 # ============================================================================
-audio-separator==0.12.0
 
-# ============================================================================
-# Speaker Diarization (Custom - pas pyannote)
-# ============================================================================
-resemblyzer==0.1.4  # Voice embeddings pour diarization
-scikit-learn>=1.3.2
-joblib
-threadpoolctl
-
-# ============================================================================
-# YouTube Extraction
-# ============================================================================
-yt-dlp>=2024.10.22
+# Utilities needed by other deps
 certifi
 mutagen
 pycryptodome
 websockets
 brotli
+joblib
+threadpoolctl
 
 # ============================================================================
 # Speech-to-Text (Vosk)
