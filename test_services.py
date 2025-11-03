@@ -23,7 +23,7 @@ from pathlib import Path
 from system.config import config
 from system.services.vosk_stt import VoskSTT
 from system.services.ollama_nlp import OllamaNLP
-from system.services.chatterbox_tts import ChatterboxTTSService
+# ChatterboxTTSService removed - TTS no longer used (v3)
 from system.services.amd_service import AMDService
 
 logging.basicConfig(

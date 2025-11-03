@@ -1,18 +1,6 @@
-# MiniBotPanel v3 - Requirements GPU (CUDA 11.8)
-# Python 3.11+ (recommandé: 3.11 ou 3.12)
+# MiniBotPanel v3 - Requirements GPU (CUDA 11.8+)
+# Python 3.11+ recommandé
 # Pour CPU-only, utilisez requirements-cpu.txt
-
-# ============================================
-# SYSTEM DEPENDENCIES (installer via apt/yum)
-# ============================================
-# IMPORTANT: Ces packages DOIVENT être installés avant pip install
-# Ubuntu/Debian: apt-get install -y ffmpeg postgresql-14 libpq-dev nvidia-cuda-toolkit
-# CentOS/RHEL:   yum install -y ffmpeg postgresql postgresql-devel cuda
-#
-# ffmpeg        - Requis pour yt-dlp, pydub, audio-separator (YouTube Extract Phase 7)
-# postgresql    - Base de données
-# libpq-dev     - Headers PostgreSQL pour psycopg2-binary
-# CUDA 11.8+    - NVIDIA CUDA Toolkit pour GPU
 
 # ============================================
 # WEB FRAMEWORK & API
@@ -20,72 +8,65 @@
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
 python-multipart==0.0.6
-pydantic>=2.9.0
-pydantic-settings>=2.1.0
+pydantic==2.12.0
+pydantic-settings==2.1.0
 
 # ============================================
 # DATABASE
 # ============================================
 sqlalchemy==2.0.25
-psycopg2-binary==2.9.9
+psycopg2-binary==2.9.11
 alembic==1.13.1
 
 # ============================================
-# FREESWITCH
+# AI SERVICES - PyTorch GPU (CUDA 11.8)
 # ============================================
-# ESL Python (Event Socket Library)
-# IMPORTANT: Doit être compilé manuellement depuis sources FreeSWITCH (voir install_fs_minbot.md section 10.5)
-#python-esl==1.4.18; platform_system != "Darwin"
+--index-url https://download.pytorch.org/whl/cu118
+torch==2.4.0
+torchaudio==2.4.0
+torchvision==0.19.0
+--index-url https://pypi.org/simple
+
+numpy==1.26.4
+transformers==4.46.3
+huggingface-hub
+safetensors
+tokenizers
 
 # ============================================
-# AI SERVICES
+# SPEECH-TO-TEXT (Vosk)
 # ============================================
-
-# Vosk STT (Speech-to-Text)
 vosk==0.3.45
 soundfile==0.12.1
-scipy>=1.11.2
+scipy==1.11.4
 
-# Ollama (NLP - Intent + Sentiment)
+# ============================================
+# NLP
+# ============================================
 ollama>=0.6.0
 requests==2.31.0
-
-# PyTorch - GPU (CUDA 11.8) - 1.3GB download
---index-url https://download.pytorch.org/whl/cu118
-torch==2.1.2
-torchaudio==2.1.2
-torchvision==0.16.2
---index-url https://pypi.org/simple
 
 # ============================================
 # AUDIO PROCESSING
 # ============================================
-numpy>=1.24.3,<2.0
-
-# TTS removed - using pre-recorded audio only
 pydub==0.25.1
 webrtcvad==2.0.10
-
-# ============================================
-# REMOVED (v3 cleanup):
-# - noisereduce (audio cleanup no longer needed)
-# - pyannote.audio (speaker diarization no longer needed)
-# - yt-dlp (YouTube extraction no longer needed)
-# ============================================
+librosa==0.10.1
 
 # ============================================
 # UTILITIES
 # ============================================
-python-dotenv==1.0.0
+python-dotenv==1.1.1
 python-json-logger==2.0.7
 colorama==0.4.6
 click==8.1.7
 tabulate==0.9.0
 openpyxl==3.1.2
 phonenumbers==8.13.27
+tqdm>=4.66.0
 
 # ============================================
-# MONITORING & LOGGING
+# MONITORING
 # ============================================
 prometheus-client==0.19.0
 
@@ -102,25 +83,35 @@ httpx>=0.27.0
 # ============================================
 black==24.1.1
 flake8==7.0.0
-mypy==1.8.0
 isort==5.13.2
 
 # ============================================
-# NOTES D'INSTALLATION GPU
+# NOTES INSTALLATION GPU
 # ============================================
+# PRÉREQUIS:
+# - NVIDIA GPU avec CUDA Compute Capability >= 3.5
+# - CUDA 11.8+ installé (https://developer.nvidia.com/cuda-toolkit)
+# - cuDNN 8.x (https://developer.nvidia.com/cudnn)
 #
-# PRÉREQUIS GPU:
-# 1. NVIDIA GPU avec CUDA Compute Capability >= 3.5
-# 2. CUDA 11.8 installé (https://developer.nvidia.com/cuda-toolkit)
-# 3. cuDNN 8.x (https://developer.nvidia.com/cudnn)
+# 1. Créer venv Python 3.11:
+#    python3.11 -m venv venv
+#    source venv/bin/activate
 #
-# INSTALLATION (Python 3.11+ requis):
-# 1. Créer environnement virtuel: python3.11 -m venv venv
-# 2. Utiliser install_dependencies.sh --gpu (RECOMMANDÉ)
-# 3. OU manuellement: pip install -r requirements-gpu.txt
+# 2. Installer dépendances:
+#    pip install --upgrade pip setuptools wheel
+#    pip install -r requirements-gpu.txt
 #
-# VÉRIFICATION GPU:
-#    python -c "import torch; print(f'GPU disponible: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')"
+# 3. Vérifier GPU:
+#    python -c "import torch; print(f'GPU: {torch.cuda.is_available()}')"
 #
-# CONFIGURATION .env:
-#    (TTS removed)
+# 4. ESL FreeSWITCH:
+#    sudo apt install freeswitch-python-esl
+#    ou compiler depuis sources FreeSWITCH
+#
+# 5. Modèle Vosk français:
+#    wget https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip
+#    unzip vosk-model-small-fr-0.22.zip -d models/
+#
+# 6. Ollama (installer séparément):
+#    https://ollama.ai/download
+#    ollama pull mistral:7b

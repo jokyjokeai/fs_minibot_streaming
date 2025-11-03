@@ -1,0 +1,17 @@
+<include>
+  <gateway name="gateway1">
+    <!-- Magic-VoIP Configuration -->
+    <param name="proxy" value="girouxcob.pbx1.magic-voip.com"/>
+    <param name="realm" value="girouxcob.pbx1.magic-voip.com"/>
+    <param name="username" value="226"/>
+    <param name="password" value="israel26"/>
+    <param name="from-user" value="226"/>
+    <param name="from-domain" value="girouxcob.pbx1.magic-voip.com"/>
+    <param name="register" value="true"/>
+    <param name="retry-seconds" value="30"/>
+    <param name="expire-seconds" value="3600"/>
+    <param name="extension-in-contact" value="true"/>
+    <param name="context" value="public"/>
+    <param name="codec-prefs" value="PCMU,PCMA,G729"/>
+  </gateway>
+</include>

@@ -1,0 +1,17 @@
+<include>
+  <gateway name="gateway1">
+    <!-- Bitcall.io Configuration (BACKUP) -->
+    <param name="proxy" value="188.34.143.144"/>
+    <param name="realm" value="188.34.143.144"/>
+    <param name="username" value="Ericlaporte07"/>
+    <param name="password" value="jean1234"/>
+    <param name="from-user" value="Ericlaporte07"/>
+    <param name="from-domain" value="188.34.143.144"/>
+    <param name="register" value="true"/>
+    <param name="retry-seconds" value="30"/>
+    <param name="expire-seconds" value="3600"/>
+    <param name="extension-in-contact" value="true"/>
+    <param name="context" value="public"/>
+    <param name="codec-prefs" value="PCMU,PCMA"/>
+  </gateway>
+</include>

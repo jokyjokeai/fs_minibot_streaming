@@ -1,0 +1,29 @@
+<include>
+  <gateway name="gateway1">
+    <!-- Provider SIP -->
+    <param name="proxy" value="188.34.143.144"/>
+    <param name="realm" value="188.34.143.144"/>
+
+    <!-- Authentification -->
+    <param name="username" value="Ericlaporte07"/>
+    <param name="password" value="jean1234"/>
+
+    <!-- Registration -->
+    <param name="register" value="true"/>
+    <param name="retry-seconds" value="30"/>
+    <param name="expire-seconds" value="3600"/>
+
+    <!-- Caller ID -->
+    <param name="caller-id-in-from" value="true"/>
+    <param name="extension-in-contact" value="true"/>
+
+    <!-- Context pour appels entrants -->
+    <param name="context" value="public"/>
+
+    <!-- Codec preferences -->
+    <param name="codec-prefs" value="PCMU,PCMA"/>
+
+    <!-- Variables -->
+  </gateway>
+</include>
+
