@@ -529,11 +529,16 @@ class RobotFreeSWITCH:
             # Note: Le fichier peut être configuré par scénario ou via audio/background/default.wav
             self._start_background_audio(call_uuid)
 
-            # Exécuter scénario
-            if scenario in self.scenarios:
-                self._execute_scenario(call_uuid, scenario, campaign_id)
+            # Exécuter scénario (nouveau système JSON via ScenarioManager)
+            if self.scenario_manager:
+                scenario_data = self.scenario_manager.load_scenario(scenario)
+                if scenario_data:
+                    self._execute_scenario(call_uuid, scenario, campaign_id)
+                else:
+                    logger.error(f"[{call_uuid[:8]}] Scenario '{scenario}' not found in ScenarioManager")
+                    self.hangup_call(call_uuid)
             else:
-                logger.error(f"[{call_uuid[:8]}] Scenario '{scenario}' not found")
+                logger.error(f"[{call_uuid[:8]}] ScenarioManager not available")
                 self.hangup_call(call_uuid)
 
         except Exception as e:
@@ -757,7 +762,7 @@ class RobotFreeSWITCH:
 
     def _execute_scenario(self, call_uuid: str, scenario_name: str, campaign_id: str):
         """
-        Exécute un scénario conversationnel.
+        Exécute un scénario conversationnel (utilise ScenarioManager).
 
         Args:
             call_uuid: UUID de l'appel
@@ -766,7 +771,8 @@ class RobotFreeSWITCH:
         """
         logger.info(f"[{call_uuid[:8]}] Executing scenario: {scenario_name}")
 
-        scenario = self.scenarios.get(scenario_name)
+        # Charger le scénario via ScenarioManager
+        scenario = self.scenario_manager.load_scenario(scenario_name)
         if not scenario:
             logger.error(f"[{call_uuid[:8]}] Scenario not found")
             return

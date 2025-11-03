@@ -108,7 +108,7 @@ class ScenarioManager:
         """Initialise le gestionnaire de scénarios."""
         logger.info("Initializing ScenarioManager...")
 
-        self.scenarios_dir = config.BASE_DIR / "documentation" / "scenarios"
+        self.scenarios_dir = config.BASE_DIR / "scenarios"
 
         # Phase 8: Utiliser CacheManager global au lieu de cache local
         self.cache = get_cache()

@@ -154,11 +154,51 @@ def load_contacts_from_csv(csv_file: str) -> list:
         logger.error(f"❌ Error loading contacts: {e}")
         return []
 
+def load_contacts_from_db(limit: int = None) -> list:
+    """
+    Charge les contacts disponibles depuis la base de données.
+
+    Critères: last_result IN ('new', 'no_answer') ET NOT blacklist
+
+    Args:
+        limit: Nombre maximum de contacts à charger (optionnel)
+
+    Returns:
+        Liste de contacts disponibles
+    """
+    from system.models import CallResult
+
+    db = SessionLocal()
+    contacts = []
+
+    try:
+        # Query contacts avec status 'new' ou 'no_answer', pas blacklistés
+        query = db.query(Contact).filter(
+            Contact.last_result.in_([CallResult.NEW, CallResult.NO_ANSWER]),
+            Contact.blacklist == False
+        ).order_by(Contact.created_at)
+
+        if limit:
+            query = query.limit(limit)
+
+        contacts = query.all()
+
+        logger.info(f"✅ Loaded {len(contacts)} available contacts from database")
+        return contacts
+
+    except Exception as e:
+        logger.error(f"❌ Error loading contacts from DB: {e}")
+        return []
+    finally:
+        db.close()
+
 def main():
     parser = argparse.ArgumentParser(description="Lancer une campagne d'appels")
     parser.add_argument("--campaign-id", type=int, help="ID campagne existante")
     parser.add_argument("--name", help="Nom nouvelle campagne")
-    parser.add_argument("--contacts", help="Fichier contacts CSV")
+    parser.add_argument("--contacts", help="Fichier contacts CSV (optionnel)")
+    parser.add_argument("--use-db-contacts", action="store_true", help="Utiliser contacts existants en DB (status new/no_answer)")
+    parser.add_argument("--limit", type=int, help="Limiter le nombre de contacts (optionnel)")
     parser.add_argument("--scenario", help="Scénario à utiliser (nom fichier sans .json)")
     parser.add_argument("--interactive", "-i", action="store_true", help="Mode interactif pour choisir scénario")
 
@@ -174,8 +214,13 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    if args.name and not args.contacts:
-        logger.error("❌ Must provide --contacts when creating new campaign with --name")
+    if args.name and not args.contacts and not args.use_db_contacts:
+        logger.error("❌ Must provide either --contacts (CSV) or --use-db-contacts when creating new campaign")
+        parser.print_help()
+        sys.exit(1)
+
+    if args.contacts and args.use_db_contacts:
+        logger.error("❌ Cannot use both --contacts and --use-db-contacts. Choose one.")
         parser.print_help()
         sys.exit(1)
 
@@ -203,18 +248,33 @@ def main():
         if args.name:
             logger.info(f"Creating new campaign: {args.name}")
 
-            # Charger contacts depuis CSV
-            contacts = load_contacts_from_csv(args.contacts)
-            if not contacts:
-                logger.error("❌ No contacts loaded, aborting")
-                sys.exit(1)
+            # Charger contacts selon la source (CSV ou DB)
+            if args.use_db_contacts:
+                # Charger contacts disponibles depuis la DB
+                logger.info("Loading available contacts from database...")
+                contacts = load_contacts_from_db(limit=args.limit)
+                if not contacts:
+                    logger.error("❌ No available contacts in database (status=new or no_answer)")
+                    logger.info("💡 Import contacts first with: python3 import_contacts.py --source contacts.csv")
+                    sys.exit(1)
 
-            # Sauvegarder contacts en DB
-            db.add_all(contacts)
-            db.commit()
+                # Contacts déjà en DB, récupérer juste les IDs
+                contact_ids = [c.id for c in contacts]
 
-            # Récupérer IDs
-            contact_ids = [c.id for c in contacts]
+            elif args.contacts:
+                # Charger contacts depuis CSV
+                logger.info(f"Loading contacts from CSV: {args.contacts}")
+                contacts = load_contacts_from_csv(args.contacts)
+                if not contacts:
+                    logger.error("❌ No contacts loaded from CSV, aborting")
+                    sys.exit(1)
+
+                # Sauvegarder nouveaux contacts en DB
+                db.add_all(contacts)
+                db.commit()
+
+                # Récupérer IDs
+                contact_ids = [c.id for c in contacts]
 
             # Créer campagne via CampaignManager
             manager = CampaignManager()
