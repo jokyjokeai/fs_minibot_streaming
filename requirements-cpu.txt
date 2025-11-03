@@ -44,14 +44,13 @@ alembic==1.13.1
 # Vosk STT (Speech-to-Text)
 vosk==0.3.45
 soundfile==0.12.1
-scipy>=1.11.2  # TTS needs >=1.11.2
+scipy>=1.11.2
 
 # Ollama (NLP - Intent + Sentiment)
 ollama>=0.6.0
 requests==2.31.0
 
 # PyTorch - CPU ONLY (200MB vs 1.3GB pour GPU)
-# IMPORTANT: Installer AVANT coqui-tts pour éviter upgrade vers torch 2.8+
 --index-url https://download.pytorch.org/whl/cpu
 torch==2.1.2
 torchaudio==2.1.2
@@ -60,25 +59,16 @@ torchaudio==2.1.2
 # ============================================
 # AUDIO PROCESSING
 # ============================================
-# IMPORTANT: Installer numpy AVANT coqui-tts pour éviter upgrade vers numpy 2.x
 numpy>=1.24.3,<2.0
 
-# Coqui TTS (Text-to-Speech) - Fork maintenu avec Python 3.11+ support
-# IMPORTANT: coqui-tts (fork Idiap) remplace TTS (abandonné)
-# Installer APRÈS torch et numpy pour éviter upgrades non désirés
-coqui-tts==0.27.2
-transformers>=4.52.1,<4.56  # Compatible coqui-tts 0.27.2
+# TTS removed - using pre-recorded audio only
 pydub==0.25.1
 webrtcvad==2.0.10
-librosa>=0.11.0  # Requis par coqui-tts 0.27.2
-networkx==2.8.8
 
 # Audio cleaning & voice extraction
 noisereduce==3.0.2  # Noise reduction
 
 # Speaker diarization (YouTube Extract)
-# IMPORTANT: pyannote.audio 3.1.1 requiert numpy>=2.0 (incompatible avec coqui-tts)
-# Downgrade à 3.0.1 pour compatibilité numpy<2.0
 pyannote.audio==3.0.1
 
 # YouTube download

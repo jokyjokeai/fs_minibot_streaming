@@ -431,9 +431,7 @@ class ScenarioBuilder:
         if ask_yes_no("\nNettoyer des audios pré-enregistrés avec UVR ?", default=False):
             self._clean_custom_audios()
 
-        # 11. Génération TTS objections
-        if self.objections_responses and ask_yes_no("\nGénérer les audios TTS pour les objections ?", default=True):
-            self._generate_objections_tts()
+        # 11. TTS removed - using pre-recorded audio only
 
         # 12. Sauvegarde
         self._save_scenario()
@@ -761,7 +759,7 @@ class ScenarioBuilder:
 
         self.scenario["steps"]["hello"] = {
             "message_text": hello_msg,
-            "audio_type": "tts_cloned",
+            "audio_type": "audio",
             "voice": voice,
             "barge_in": self.barge_in_default,
             "timeout": 15,
@@ -787,7 +785,7 @@ class ScenarioBuilder:
 
         self.scenario["steps"]["retry"] = {
             "message_text": retry_msg,
-            "audio_type": "tts_cloned",
+            "audio_type": "audio",
             "voice": voice,
             "barge_in": self.barge_in_default,
             "timeout": 15,
@@ -812,7 +810,7 @@ class ScenarioBuilder:
 
             self.scenario["steps"][f"Q{i}"] = {  # Phase 7: naming convention Q1, Q2, Q3
                 "message_text": q_msg,
-                "audio_type": "tts_cloned",  # Par défaut TTS, peut être changé
+                "audio_type": "audio",  # Pré-enregistré uniquement
                 "voice": voice,
                 "barge_in": self.barge_in_default,
                 "timeout": 12,
@@ -836,7 +834,7 @@ class ScenarioBuilder:
 
         self.scenario["steps"]["Is_Leads"] = {  # Phase 7: naming convention
             "message_text": is_leads_msg,
-            "audio_type": "tts_cloned",
+            "audio_type": "audio",
             "voice": voice,
             "barge_in": self.barge_in_default,
             "timeout": 15,
@@ -864,7 +862,7 @@ class ScenarioBuilder:
 
         self.scenario["steps"]["Confirm_Time"] = {  # Phase 7: naming
             "message_text": confirm_msg,
-            "audio_type": "tts_cloned",
+            "audio_type": "audio",
             "voice": voice,
             "barge_in": False,
             "timeout": 10,
@@ -880,7 +878,7 @@ class ScenarioBuilder:
         if self.freestyle_enabled:
             print_info("Création FREESTYLE_ANSWER...")
             self.scenario["steps"]["freestyle_answer"] = {
-                "audio_type": "freestyle",
+                "audio_type": "audio",  # Freestyle removed
                 "voice": voice,
                 "barge_in": True,
                 "timeout": 10,
@@ -904,7 +902,7 @@ class ScenarioBuilder:
 
         self.scenario["steps"]["Bye"] = {  # Phase 7: naming convention
             "message_text": bye_msg,
-            "audio_type": "tts_cloned",
+            "audio_type": "audio",
             "voice": voice,
             "barge_in": False,
             "timeout": 5,
@@ -1047,38 +1045,7 @@ class ScenarioBuilder:
         except Exception as e:
             print_error(f"Erreur UVR: {e}")
 
-    def _generate_objections_tts(self):
-        """Génère TTS pour objections"""
-        print_header("🎙️ Génération TTS objections")
-
-        try:
-            from system.services.chatterbox_tts import ChatterboxTTSService
-            tts = ChatterboxTTSService()
-
-            if not tts.is_available:
-                print_error("Service TTS non disponible")
-                return
-
-            audio_dir = Path("audio/objections")
-            audio_dir.mkdir(parents=True, exist_ok=True)
-
-            for i, (obj, resp) in enumerate(self.objections_responses.items(), 1):
-                print(f"[{i}/{len(self.objections_responses)}] {obj[:40]}...")
-
-                filename = re.sub(r'[^a-z0-9]', '_', obj.lower())[:40] + ".wav"
-                output_path = audio_dir / filename
-
-                result = tts.synthesize(resp, str(output_path))
-
-                if result:
-                    print_success(f"  → {filename}")
-                else:
-                    print_error(f"  → Échec")
-
-            print_success(f"\n{len(self.objections_responses)} fichiers générés dans {audio_dir}/")
-
-        except Exception as e:
-            print_error(f"Erreur TTS: {e}")
+    # _generate_objections_tts removed - using pre-recorded audio only
 
     def _save_scenario(self):
         """Sauvegarde finale"""

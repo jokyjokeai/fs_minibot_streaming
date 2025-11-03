@@ -7,7 +7,6 @@ Teste la disponibilité et le fonctionnement de tous les services IA.
 Services testés:
 - Vosk STT (Speech-to-Text)
 - Ollama NLP (Intent + Sentiment)
-- Coqui TTS (Text-to-Speech)
 - AMD Service (Answering Machine Detection)
 - FreeSWITCH ESL (Event Socket Library)
 
@@ -99,50 +98,7 @@ def test_ollama() -> bool:
         return False
 
 
-def test_coqui() -> bool:
-    """
-    Teste le service Coqui TTS.
-
-    Returns:
-        True si disponible, False sinon
-    """
-    logger.info("\n🗣️ TEST CHATTERBOX TTS")
-    logger.info("=" * 60)
-
-    try:
-        tts = ChatterboxTTSService()
-
-        if tts.is_available:
-            logger.info(f"✅ Chatterbox TTS disponible")
-            logger.info(f"🤖 Modèle: Chatterbox 0.5B (MIT)")
-            logger.info(f"🎮 Device: {tts.tts_config.get('device', 'cpu')}")
-
-            # Test génération
-            test_text = "Bonjour, ceci est un test de synthèse vocale."
-            logger.info(f"\n📝 Test génération: '{test_text}'")
-
-            output_path = config.BASE_DIR / "test_tts.wav"
-            audio_path = tts.generate(
-                text=test_text,
-                voice_name="test",
-                output_path=str(output_path)
-            )
-
-            if audio_path:
-                logger.info(f"✅ Audio généré: {audio_path}")
-                logger.info(f"💡 Écoutez le fichier pour valider la qualité")
-            else:
-                logger.warning("⚠️ Génération TTS échouée (mais service disponible)")
-
-            return True
-        else:
-            logger.error("❌ Coqui non disponible")
-            logger.info(f"💡 Installez Coqui: pip install TTS")
-            return False
-
-    except Exception as e:
-        logger.error(f"❌ Erreur Coqui: {e}")
-        return False
+# test_coqui removed - TTS no longer used (pre-recorded audio only)
 
 
 def test_amd() -> bool:
@@ -196,7 +152,7 @@ def main():
     parser = argparse.ArgumentParser(description="Tester les services IA")
     parser.add_argument(
         "--service",
-        choices=["vosk", "ollama", "coqui", "amd", "freeswitch"],
+        choices=["vosk", "ollama", "amd", "freeswitch"],
         help="Tester un service spécifique"
     )
     parser.add_argument(
@@ -222,8 +178,6 @@ def main():
             results["Vosk STT"] = test_vosk()
         elif args.service == "ollama":
             results["Ollama NLP"] = test_ollama()
-        elif args.service == "coqui":
-            results["Coqui TTS"] = test_coqui()
         elif args.service == "amd":
             results["AMD Service"] = test_amd()
         elif args.service == "freeswitch":
@@ -232,7 +186,6 @@ def main():
         # Tester tous les services
         results["Vosk STT"] = test_vosk()
         results["Ollama NLP"] = test_ollama()
-        results["Coqui TTS"] = test_coqui()
         results["AMD Service"] = test_amd()
         results["FreeSWITCH ESL"] = test_freeswitch()
 

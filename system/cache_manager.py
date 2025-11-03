@@ -7,7 +7,7 @@ Système de cache intelligent centralisé pour optimiser les performances.
 Fonctionnalités:
 - Cache scénarios en RAM (évite lecture disque répétée)
 - Cache objections filtrées par thématique
-- Pré-chargement modèles AI (Ollama, TTS, ASR)
+- Pré-chargement modèles AI (Ollama, ASR)
 - Cache TTL configurable
 - Statistiques temps réel
 - Invalidation sélective
@@ -315,10 +315,10 @@ class CacheManager:
 
     def register_model(self, model_name: str, model_instance: Any):
         """
-        Enregistre un modèle pré-chargé (Ollama, TTS, ASR, etc.).
+        Enregistre un modèle pré-chargé (Ollama, ASR, etc.).
 
         Args:
-            model_name: Nom du modèle (ex: "ollama_mistral", "coqui_tts", "vosk_asr")
+            model_name: Nom du modèle (ex: "ollama_mistral", "vosk_asr")
             model_instance: Instance du modèle
         """
         with self._models_lock:

@@ -4,7 +4,7 @@ Configuration Centrale - MiniBotPanel v3
 Ce module centralise TOUTE la configuration du système:
 - Paramètres base de données (PostgreSQL)
 - Configuration FreeSWITCH (ESL host, port, password)
-- Paramètres services IA (Vosk, Ollama, Coqui)
+- Paramètres services IA (Vosk, Ollama)
 - Chemins fichiers (audio, logs, exports)
 - Limites système (appels simultanés, timeouts)
 - Conformité légale (horaires légaux)
@@ -26,7 +26,26 @@ load_dotenv()
 BASE_DIR = Path(__file__).parent.parent
 AUDIO_DIR = BASE_DIR / "audio"
 AUDIO_FILES_PATH = AUDIO_DIR  # Alias pour compatibilité
-VOICES_DIR = BASE_DIR / "voices"
+
+# Structure audio par voix
+# audio/{voice_name}/base/        - Fichiers scénario de base
+# audio/{voice_name}/objections/  - Objections/questions de la DB
+DEFAULT_VOICE = os.getenv("DEFAULT_VOICE", "julie")
+
+def get_audio_path(voice: str, audio_type: str, filename: str) -> Path:
+    """
+    Retourne le chemin complet d'un fichier audio.
+
+    Args:
+        voice: Nom de la voix (julie, marie, etc.)
+        audio_type: Type audio ("base" ou "objections")
+        filename: Nom du fichier (avec .wav)
+
+    Returns:
+        Path complet vers le fichier audio
+    """
+    return AUDIO_DIR / voice / audio_type / filename
+
 LOGS_DIR = BASE_DIR / "logs"
 EXPORTS_DIR = BASE_DIR / "exports"
 RECORDINGS_DIR = BASE_DIR / "recordings"
@@ -65,10 +84,7 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral:7b")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "10"))
 
-# Coqui TTS (Text-to-Speech avec clonage vocal)
-COQUI_MODEL = os.getenv("COQUI_MODEL", "tts_models/multilingual/multi-dataset/xtts_v2")
-COQUI_USE_GPU = os.getenv("COQUI_USE_GPU", "true").lower() == "true"
-COQUI_CACHE_ENABLED = os.getenv("COQUI_CACHE_ENABLED", "true").lower() == "true"
+# TTS removed - using pre-recorded audio only
 
 # HuggingFace (requis pour pyannote.audio speaker diarization)
 HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN", "")

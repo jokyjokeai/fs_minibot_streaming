@@ -7,7 +7,7 @@ Adapté de robot_ari_hybrid.py pour FreeSWITCH.
 Architecture:
 - 1 thread principal pour connexion ESL
 - 1 thread par appel actif (simple et efficace)
-- Callbacks vers services IA (STT, NLP, TTS, AMD)
+- Callbacks vers services IA (STT, NLP, AMD)
 - Update stats temps réel en DB
 
 Fonctionnalités:
@@ -133,7 +133,7 @@ class RobotFreeSWITCH:
         logger.info("✅ RobotFreeSWITCH initialized")
 
     def _load_services(self):
-        """Charge les services IA (STT, TTS, NLP, AMD)"""
+        """Charge les services IA (STT, NLP, AMD)"""
         try:
             # Import conditionnel pour éviter erreurs si pas installés
             try:
@@ -144,13 +144,8 @@ class RobotFreeSWITCH:
                 logger.warning(f"⚠️ Vosk STT not available: {e}")
                 self.stt_service = None
 
-            try:
-                from system.services.chatterbox_tts import ChatterboxTTSService
-                self.tts_service = ChatterboxTTSService()
-                logger.info("✅ Chatterbox TTS loaded")
-            except Exception as e:
-                logger.warning(f"⚠️ Chatterbox TTS not available: {e}")
-                self.tts_service = None
+            # TTS removed - using pre-recorded audio only
+            self.tts_service = None
 
             try:
                 from system.services.ollama_nlp import OllamaNLP
@@ -168,17 +163,8 @@ class RobotFreeSWITCH:
                 logger.warning(f"⚠️ AMD Service not available: {e}")
                 self.amd_service = None
 
-            # FreestyleAI pour génération réponses hors-script
-            try:
-                from system.services.freestyle_ai import FreestyleAI
-                self.freestyle_service = FreestyleAI(
-                    ollama_service=self.nlp_service,
-                    tts_service=self.tts_service
-                )
-                logger.info("✅ FreestyleAI loaded")
-            except Exception as e:
-                logger.warning(f"⚠️ FreestyleAI not available: {e}")
-                self.freestyle_service = None
+            # FreestyleAI removed - using pre-recorded audio only
+            self.freestyle_service = None
 
             # StreamingASR pour transcription temps réel + barge-in
             try:
@@ -761,181 +747,13 @@ class RobotFreeSWITCH:
         except Exception as e:
             logger.error(f"[{call_uuid[:8]}] Stop audio error: {e}")
 
-    def _handle_freestyle_question(self, call_uuid: str, question: str):
-        """
-        Gère une question hors-script avec IA Freestyle (Ollama).
+    # _handle_freestyle_question removed - using pre-recorded audio only
 
-        Utilise le service FreestyleAI centralisé pour:
-        - Historique conversationnel (5 derniers échanges)
-        - Prompt engineering pour réponses courtes (~150 mots max)
-        - Cache des réponses fréquentes (LRU)
-        - Détection automatique du type de question (objection, prix, info)
-        - Génération TTS + playback
+    # _handle_freestyle_with_rail_return removed - using pre-recorded audio only
 
-        Args:
-            call_uuid: UUID de l'appel
-            question: Question du client
-        """
-        if not self.freestyle_service or not self.freestyle_service.is_available:
-            logger.warning(f"[{call_uuid[:8]}] IA Freestyle not available")
-            # Fallback simple
-            self._play_fallback_freestyle(call_uuid)
-            return
+    # _build_freestyle_context removed - using pre-recorded audio only
 
-        try:
-            logger.info(f"[{call_uuid[:8]}] 🤖 IA Freestyle: '{question}'")
-
-            # 1. Construire contexte campagne depuis session
-            context = self._build_freestyle_context(call_uuid)
-
-            # 2. Détecter automatiquement le type de prompt optimal
-            prompt_type = self.freestyle_service.detect_prompt_type(question)
-            logger.debug(f"[{call_uuid[:8]}] Prompt type detected: {prompt_type}")
-
-            # 3. Générer réponse avec FreestyleAI (gère cache, historique, validation)
-            ai_response = self.freestyle_service.generate_response(
-                call_uuid=call_uuid,
-                user_input=question,
-                context=context,
-                prompt_type=prompt_type
-            )
-
-            if not ai_response:
-                logger.warning(f"[{call_uuid[:8]}] Empty AI response")
-                self._play_fallback_freestyle(call_uuid)
-                return
-
-            logger.info(f"[{call_uuid[:8]}] 🤖 AI Response: '{ai_response[:80]}...'")
-
-            # 4. Générer audio TTS
-            audio_file = self.tts_service.synthesize(ai_response)
-
-            if not audio_file:
-                logger.error(f"[{call_uuid[:8]}] TTS generation failed")
-                return
-
-            # 5. Jouer réponse au client
-            success = self._play_audio(call_uuid, audio_file)
-
-            if success:
-                logger.info(f"[{call_uuid[:8]}] ✅ IA Freestyle response played successfully")
-
-                # Sauvegarder dans transcriptions pour contexte futur
-                if call_uuid in self.streaming_sessions:
-                    self.streaming_sessions[call_uuid]["transcriptions"].append(ai_response)
-            else:
-                logger.warning(f"[{call_uuid[:8]}] ⚠️ IA Freestyle playback interrupted")
-
-        except Exception as e:
-            logger.error(f"[{call_uuid[:8]}] ❌ IA Freestyle error: {e}", exc_info=True)
-            self._play_fallback_freestyle(call_uuid)
-
-    def _handle_freestyle_with_rail_return(self, call_uuid: str, question: str, intent: str):
-        """
-        Gère une question hors-script avec IA Freestyle + question de retour au rail (Phase 6+).
-
-        Cette méthode génère une réponse en 2 parties:
-        1. Réponse à l'objection/question (2-3s generation)
-        2. Question fermée variée pour retour au rail (oui/non)
-
-        Args:
-            call_uuid: UUID de l'appel
-            question: Question du client
-            intent: Intent détecté (objection, question, concern, etc.)
-        """
-        if not self.freestyle_service or not self.freestyle_service.is_available:
-            logger.warning(f"[{call_uuid[:8]}] IA Freestyle not available")
-            self._play_fallback_freestyle(call_uuid)
-            return
-
-        try:
-            logger.info(f"[{call_uuid[:8]}] 🤖 IA Freestyle with rail return: '{question}'")
-
-            # 1. Construire contexte campagne
-            context = self._build_freestyle_context(call_uuid)
-
-            # 2. Détecter type de prompt optimal
-            prompt_type = self.freestyle_service.detect_prompt_type(question)
-            logger.debug(f"[{call_uuid[:8]}] Prompt type: {prompt_type}")
-
-            # 3. Générer réponse AVEC question de retour au rail
-            ai_response = self.freestyle_service.generate_response_with_rail_return(
-                call_uuid=call_uuid,
-                user_input=question,
-                context=context,
-                prompt_type=prompt_type
-            )
-
-            if not ai_response:
-                logger.warning(f"[{call_uuid[:8]}] Empty AI response")
-                self._play_fallback_freestyle(call_uuid)
-                return
-
-            logger.info(f"[{call_uuid[:8]}] 🤖 AI Response (with rail return): '{ai_response[:80]}...'")
-
-            # 4. Générer audio TTS
-            audio_file = self.tts_service.synthesize(ai_response) if self.tts_service else None
-
-            if not audio_file:
-                logger.error(f"[{call_uuid[:8]}] TTS generation failed")
-                return
-
-            # 5. Jouer réponse au client
-            success = self._play_audio(call_uuid, audio_file)
-
-            if success:
-                logger.info(f"[{call_uuid[:8]}] ✅ IA Freestyle + rail return played successfully")
-
-                # Sauvegarder dans transcriptions pour contexte futur
-                if call_uuid in self.streaming_sessions:
-                    self.streaming_sessions[call_uuid]["transcriptions"].append(ai_response)
-            else:
-                logger.warning(f"[{call_uuid[:8]}] ⚠️ IA Freestyle playback interrupted")
-
-        except Exception as e:
-            logger.error(f"[{call_uuid[:8]}] ❌ IA Freestyle with rail return error: {e}", exc_info=True)
-            self._play_fallback_freestyle(call_uuid)
-
-    def _build_freestyle_context(self, call_uuid: str) -> Dict[str, Any]:
-        """
-        Construit le contexte campagne pour génération freestyle.
-
-        Args:
-            call_uuid: UUID de l'appel
-
-        Returns:
-            Dict avec contexte (agent_name, company, product, etc.)
-        """
-        context = {
-            "agent_name": "Julie",
-            "company": "notre entreprise",
-            "product": "nos solutions",
-            "campaign_context": "Appel de prospection commercial"
-        }
-
-        # Enrichir avec infos session si disponibles
-        if call_uuid in self.streaming_sessions:
-            session = self.streaming_sessions[call_uuid]
-            # TODO: Récupérer infos campagne depuis DB si campaign_id disponible
-            # Pour l'instant contexte générique
-
-        return context
-
-    def _play_fallback_freestyle(self, call_uuid: str):
-        """
-        Joue une réponse fallback générique en cas d'erreur freestyle.
-
-        Args:
-            call_uuid: UUID de l'appel
-        """
-        fallback_response = "Je n'ai pas toutes les informations pour répondre précisément. Puis-je vous proposer un rendez-vous avec un expert qui pourra vous renseigner en détail?"
-
-        try:
-            audio_file = self.tts_service.synthesize(fallback_response)
-            if audio_file:
-                self._play_audio(call_uuid, audio_file)
-        except Exception as e:
-            logger.error(f"[{call_uuid[:8]}] Fallback response failed: {e}")
+    # _play_fallback_freestyle removed - using pre-recorded audio only
 
     def _execute_scenario(self, call_uuid: str, scenario_name: str, campaign_id: str):
         """
@@ -1026,12 +844,11 @@ class RobotFreeSWITCH:
         Exécute une étape en mode agent autonome (Phase 6+).
 
         Logique:
-        1. Jouer message principal (audio/TTS)
+        1. Jouer message principal (audio pré-enregistré uniquement)
         2. Écouter réponse (avec barge-in support)
         3. Si objection/question détectée:
            a. Matcher objection (50ms) → jouer audio pré-enregistré si match
-           b. Sinon freestyle fallback (2-3s) → générer réponse IA
-           c. Retour au rail avec question fermée variée
+           b. Sinon jouer fallback audio générique ("Je n'ai pas bien compris")
         4. Max autonomous_turns=2 par étape (configurable)
         5. Gestion 2 silences consécutifs → hangup + NO_ANSWER
 
@@ -1089,7 +906,17 @@ class RobotFreeSWITCH:
                     self._update_call_status(call_uuid, "NO_ANSWER")
                     return None  # Terminera le scénario
 
-                # Premier silence: retry message
+                # Premier silence: jouer retry audio
+                logger.info(f"[{call_uuid[:8]}] 🔁 Premier silence → retry audio")
+                # Récupérer voix du scénario
+                voice = scenario.get("voice", config.DEFAULT_VOICE)
+                retry_audio = step_config.get("retry_audio", "retry_silence.wav")
+                retry_path = config.get_audio_path(voice, "base", retry_audio)
+                if retry_path.exists():
+                    self._play_audio(call_uuid, str(retry_path))
+                else:
+                    logger.error(f"[{call_uuid[:8]}]   ❌ Retry audio not found: {retry_path}")
+
                 session["autonomous_turns"] += 1
                 continue
 
@@ -1134,17 +961,11 @@ class RobotFreeSWITCH:
                                 logger.info(f"[{call_uuid[:8]}]   🔊 Playing pre-recorded answer (50ms path)")
                                 self._play_audio(call_uuid, audio_path)
                             else:
-                                # Fallback TTS avec réponse texte
-                                logger.info(f"[{call_uuid[:8]}]   🔊 Audio not found, TTS fallback")
-                                audio_file = self.tts_service.synthesize(match["response"]) if self.tts_service else None
-                                if audio_file:
-                                    self._play_audio(call_uuid, audio_file)
+                                # Audio manquant - warning seulement (no TTS fallback)
+                                logger.warning(f"[{call_uuid[:8]}]   ⚠️ Audio file not found: {match['audio_path']}")
                         else:
-                            # TTS avec réponse texte
-                            logger.info(f"[{call_uuid[:8]}]   🔊 TTS answer (no pre-recorded audio)")
-                            audio_file = self.tts_service.synthesize(match["response"]) if self.tts_service else None
-                            if audio_file:
-                                self._play_audio(call_uuid, audio_file)
+                            # Pas d'audio disponible
+                            logger.warning(f"[{call_uuid[:8]}]   ⚠️ No audio available for objection match")
 
                         # Sauvegarder réponse dans historique
                         session["transcriptions"].append(match["response"])
@@ -1152,10 +973,17 @@ class RobotFreeSWITCH:
                     else:
                         logger.info(f"[{call_uuid[:8]}]   ❌ No match ({match_latency_ms:.0f}ms) → Freestyle fallback")
 
-                # b. Si pas de match: Freestyle fallback (2-3s)
+                # b. Si pas de match: Jouer fallback audio générique
                 if not match:
-                    logger.info(f"[{call_uuid[:8]}] 🤖 Generating freestyle answer...")
-                    self._handle_freestyle_with_rail_return(call_uuid, transcription, intent)
+                    logger.info(f"[{call_uuid[:8]}] ⚠️ No match found → Playing fallback audio")
+                    # Jouer audio fallback "Je n'ai pas bien compris"
+                    voice = scenario.get("voice", config.DEFAULT_VOICE)
+                    fallback_audio = step_config.get("fallback_audio", "not_understood.wav")
+                    fallback_path = config.get_audio_path(voice, "base", fallback_audio)
+                    if fallback_path.exists():
+                        self._play_audio(call_uuid, str(fallback_path))
+                    else:
+                        logger.error(f"[{call_uuid[:8]}]   ❌ Fallback audio not found: {fallback_path}")
 
                 # c. Retour au rail avec question fermée (intégré dans freestyle)
                 logger.info(f"[{call_uuid[:8]}]   └─ Rail return question asked")
@@ -1205,10 +1033,10 @@ class RobotFreeSWITCH:
         """
         try:
             # Récupérer voice depuis scénario
-            voice = scenario.get("voice", "default")
+            voice = scenario.get("voice", config.DEFAULT_VOICE)
 
-            # Construire chemin complet: audio/tts/{voice}/{audio_path}
-            full_path = config.AUDIO_FILES_PATH / "tts" / voice / audio_path
+            # Construire chemin complet: audio/{voice}/objections/{audio_path}
+            full_path = config.get_audio_path(voice, "objections", audio_path)
 
             if full_path.exists():
                 return str(full_path)
@@ -1248,7 +1076,7 @@ class RobotFreeSWITCH:
         Exécute un scénario JSON (nouveau format avec ScenarioManager).
 
         Support complet pour:
-        - audio_type: audio, tts, tts_cloned, freestyle
+        - audio_type: audio (pre-recorded only)
         - intent_mapping dynamique
         - Variables dans message_text ({{first_name}}, etc.)
         - Qualification lead/not_interested
@@ -1273,28 +1101,7 @@ class RobotFreeSWITCH:
             self.hangup_call(call_uuid)
             return
 
-        # Charger voix en cache pour performance TTS (CRITIQUE pour appels temps réel)
-        # Chercher voix au niveau global ou dans le premier step
-        voice_name = scenario.get("voice")
-        if not voice_name and "steps" in scenario:
-            # Trouver la première voix définie dans un step
-            for step_name, step_config in scenario.get("steps", {}).items():
-                if "voice" in step_config:
-                    voice_name = step_config["voice"]
-                    break
-
-        voice_name = voice_name or "julie"  # Fallback par défaut
-
-        if self.tts_service and hasattr(self.tts_service, 'load_voice'):
-            logger.info(f"[{call_uuid[:8]}] 🎙️ Loading voice '{voice_name}' in cache...")
-            if self.tts_service.load_voice(voice_name):
-                logger.info(f"[{call_uuid[:8]}] ✅ Voice '{voice_name}' loaded (embeddings cached)")
-            else:
-                logger.warning(f"[{call_uuid[:8]}] ⚠️ Voice '{voice_name}' not loaded (will use on-the-fly)")
-
-        # Stocker voix du scénario dans session pour accès rapide
-        if call_uuid in self.streaming_sessions:
-            self.streaming_sessions[call_uuid]["scenario_voice"] = voice_name
+        # Voice loading removed - using pre-recorded audio only
 
         # Vérifier mode agent autonome (Phase 6+)
         is_agent_mode = self.scenario_manager.is_agent_mode(scenario) if self.scenario_manager else False
@@ -1390,10 +1197,11 @@ class RobotFreeSWITCH:
 
                 # 1. Traiter selon le type d'audio
                 if audio_type == "freestyle":
-                    # Mode Freestyle AI - pas de message_text prédéfini
-                    self._handle_freestyle_step(call_uuid, step_config, variables)
+                    # Freestyle removed - log error
+                    logger.error(f"[{call_uuid[:8]}] ❌ Freestyle audio_type no longer supported")
+                    break
                 else:
-                    # Modes normaux: audio, tts, tts_cloned
+                    # Audio pré-enregistré uniquement
                     self._handle_normal_step(call_uuid, step_config, variables)
 
                 # 2. Écouter réponse si nécessaire
@@ -1430,7 +1238,7 @@ class RobotFreeSWITCH:
 
     def _handle_normal_step(self, call_uuid: str, step_config: Dict[str, Any], variables: Dict[str, Any]):
         """
-        Traite une étape normale (audio, tts, tts_cloned).
+        Traite une étape normale (audio pré-enregistré uniquement).
 
         Args:
             call_uuid: UUID de l'appel
@@ -1450,79 +1258,27 @@ class RobotFreeSWITCH:
             # Audio pré-enregistré
             audio_filename = step_config.get("audio_file")
             if audio_filename:
-                audio_file = str(config.AUDIO_DIR / audio_filename)
+                # Récupérer voix du scénario
+                if call_uuid in self.streaming_sessions:
+                    scenario = self.streaming_sessions[call_uuid].get("scenario", {})
+                    voice = scenario.get("voice", config.DEFAULT_VOICE)
+                else:
+                    voice = config.DEFAULT_VOICE
 
-        elif audio_type == "tts":
-            # TTS simple
-            if self.tts_service and message_text:
-                audio_file = self.tts_service.synthesize(message_text)
-
-        elif audio_type == "tts_cloned":
-            # TTS avec voix clonée
-            if self.tts_service and message_text:
-                # Utiliser voix du step, sinon voix du scénario, sinon julie par défaut
-                voice_name = step_config.get("voice")
-                if not voice_name and call_uuid in self.streaming_sessions:
-                    voice_name = self.streaming_sessions[call_uuid].get("scenario_voice", "julie")
-                voice_name = voice_name or "julie"
-                audio_file = self.tts_service.generate(message_text, voice_name)
+                # Fichiers de base dans audio/{voice}/base/
+                audio_file = str(config.get_audio_path(voice, "base", audio_filename))
+        elif audio_type == "tts" or audio_type == "tts_cloned":
+            # TTS removed - log error
+            logger.error(f"[{call_uuid[:8]}] ❌ TTS audio_type no longer supported. Use 'audio' type with pre-recorded files.")
+            return
 
         # Jouer audio
         if audio_file:
             self._play_audio(call_uuid, audio_file)
         else:
-            logger.warning(f"[{call_uuid[:8]}] No audio generated for step")
+            logger.warning(f"[{call_uuid[:8]}] No audio file specified for step")
 
-    def _handle_freestyle_step(self, call_uuid: str, step_config: Dict[str, Any], variables: Dict[str, Any]):
-        """
-        Traite une étape freestyle (génération IA dynamique).
-
-        Args:
-            call_uuid: UUID de l'appel
-            step_config: Configuration de l'étape
-            variables: Variables pour contexte
-        """
-        # Le client a déjà parlé (transcription dans session)
-        # On récupère sa dernière question
-        if call_uuid not in self.streaming_sessions:
-            logger.warning(f"[{call_uuid[:8]}] No streaming session for freestyle")
-            return
-
-        transcriptions = self.streaming_sessions[call_uuid].get("transcriptions", [])
-        if not transcriptions:
-            # Pas encore de question, on attend
-            logger.debug(f"[{call_uuid[:8]}] Waiting for user input in freestyle mode...")
-            return
-
-        # Dernière transcription = question du client
-        last_question = transcriptions[-1]
-
-        # Construire contexte depuis step_config
-        context = step_config.get("context", {})
-        context.update(variables)  # Ajouter variables contact
-
-        # Générer et jouer réponse freestyle
-        if self.freestyle_service and self.freestyle_service.is_available:
-            prompt_type = self.freestyle_service.detect_prompt_type(last_question)
-            ai_response = self.freestyle_service.generate_response(
-                call_uuid=call_uuid,
-                user_input=last_question,
-                context=context,
-                prompt_type=prompt_type
-            )
-
-            if ai_response and self.tts_service:
-                # Générer audio - utiliser voix du step, sinon voix du scénario
-                voice_name = step_config.get("voice")
-                if not voice_name and call_uuid in self.streaming_sessions:
-                    voice_name = self.streaming_sessions[call_uuid].get("scenario_voice", "julie")
-                voice_name = voice_name or "julie"
-                audio_file = self.tts_service.generate(ai_response, voice_name)
-
-                if audio_file:
-                    self._play_audio(call_uuid, audio_file)
-                    # Sauvegarder réponse
-                    self.streaming_sessions[call_uuid]["transcriptions"].append(ai_response)
+    # _handle_freestyle_step removed - using pre-recorded audio only
 
     def _play_audio(self, call_uuid: str, audio_file: str) -> bool:
         """
@@ -1773,7 +1529,7 @@ class RobotFreeSWITCH:
                 "streaming_sessions": len(self.streaming_sessions),
                 "services": {
                     "stt": self.stt_service is not None and getattr(self.stt_service, 'is_available', False),
-                    "tts": self.tts_service is not None and getattr(self.tts_service, 'is_available', False),
+                    "tts": False,  # TTS removed - using pre-recorded audio only
                     "nlp": self.nlp_service is not None,
                     "amd": self.amd_service is not None
                 }

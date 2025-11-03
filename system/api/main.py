@@ -63,7 +63,6 @@ async def lifespan(app: FastAPI):
         try:
             from system.services.vosk_stt import VoskSTT
             from system.services.ollama_nlp import OllamaNLP
-            from system.services.chatterbox_tts import ChatterboxTTSService
 
             # Initialiser services pour préchargement
             vosk_stt = VoskSTT()
@@ -76,9 +75,7 @@ async def lifespan(app: FastAPI):
             else:
                 logger.warning("⚠️ Ollama prewarm failed (will use on-demand)")
 
-            # Chatterbox TTS (remplace Coqui)
-            tts = ChatterboxTTSService()
-            logger.info("✅ Chatterbox TTS loaded")
+            # TTS removed - using pre-recorded audio only
 
             logger.info("✅ AI models preloaded")
         except Exception as e:

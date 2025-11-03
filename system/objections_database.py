@@ -48,7 +48,7 @@ class ObjectionEntry:
         Args:
             keywords: Liste de mots-clés pour matching
             response: Réponse textuelle
-            audio_path: Chemin fichier audio (relatif à audio/tts/{voice}/)
+            audio_path: Nom fichier audio (ex: "objection_001.wav" → audio/{voice}/objections/{audio_path})
             entry_type: "objection" ou "faq"
         """
         self.keywords = keywords

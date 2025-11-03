@@ -34,27 +34,8 @@ tokenizers
 regex
 
 # ============================================================================
-# Chatterbox TTS Dependencies (avant Chatterbox)
+# TTS REMOVED - Using pre-recorded audio only
 # ============================================================================
-resemble-perth
-s3tokenizer
-onnxruntime
-gradio==5.44.1
-pykakasi
-spacy-pkuseg
-diffusers==0.29.0
-
-# Chatterbox stress (depuis GitHub)
-# pip install git+https://github.com/Vuizur/add-stress-to-epub
-
-# ============================================================================
-# Chatterbox TTS (SEUL moteur TTS)
-# ============================================================================
-# Installation manuelle APRÈS les dépendances ci-dessus:
-#   pip install git+https://github.com/resemble-ai/chatterbox.git --no-deps
-#
-# ❌ Coqui TTS RETIRÉ (remplacé par Chatterbox uniquement)
-# ❌ networkx RETIRÉ (était seulement pour Coqui TTS)
 
 # ============================================================================
 # Audio Processing Stack
@@ -158,15 +139,9 @@ prometheus-client==0.19.0
 # 6. Transformers:
 #    pip install transformers==4.46.3
 #
-# 7. Chatterbox dependencies:
-#    pip install resemble-perth s3tokenizer onnxruntime gradio==5.44.1
-#    pip install pykakasi spacy-pkuseg diffusers==0.29.0
-#    pip install git+https://github.com/Vuizur/add-stress-to-epub
+# 7. TTS removed - using pre-recorded audio only
 #
-# 8. Chatterbox (--no-deps IMPORTANT):
-#    pip install git+https://github.com/resemble-ai/chatterbox.git --no-deps
-#
-# 9. Reste des requirements:
+# 8. Reste des requirements:
 #    pip install -r requirements.txt
 #
 # ============================================================================
