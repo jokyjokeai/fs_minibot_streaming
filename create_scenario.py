@@ -1,22 +1,17 @@
 #!/usr/bin/env python3
 """
-Create Scenario - MiniBotPanel v3
+Create Scenario - MiniBotPanel v3 (SIMPLIFIED)
 
-Script interactif ultra-complet pour créer des scénarios conversationnels.
+Script interactif simplifié pour créer des scénarios conversationnels.
 
-Respecte la logique de base : HELLO → RETRY → Q1...Qn → IS_LEADS → CONFIRM → BYE
-
-Fonctionnalités:
-- Thématiques métier pré-configurées (finance, crypto, énergie, etc.)
-- Structure de base flexible (hello/retry/bye + questions configurable
-
-s)
-- Objections pré-enregistrées + fallback Freestyle AI
-- Qualification cumulative configurable
-- Variables dynamiques ({{first_name}}, {{company}}, etc.)
-- Génération TTS automatique des objections
-- Mode Freestyle AI intelligent avec contexte thématique
-- Barge-in configurable par étape
+Workflow:
+1. Infos de base (nom, description, objectif)
+2. Configuration voix (auto-détection depuis audio/)
+3. Configuration questions (nombre + déterminants)
+4. Thème objections
+5. Configuration barge-in
+6. Enregistrement + transcription audio pour chaque étape
+7. Génération structure finale
 
 Usage:
     python3 create_scenario.py
@@ -30,12 +25,12 @@ from typing import Dict, List, Any, Optional
 
 # Import objections database
 try:
-    from system.objections_database import get_objections_for_thematique
+    from system.objections_db.objections_database import get_objections_by_theme
 except ImportError:
     import warnings
-    warnings.warn("objections_database not found, using embedded objections", UserWarning)
-    def get_objections_for_thematique(key):
-        return {}
+    warnings.warn("objections_database not found", UserWarning)
+    def get_objections_by_theme(key):
+        return []
 
 # Couleurs terminal
 class Colors:
@@ -48,6 +43,7 @@ class Colors:
     BOLD = '\033[1m'
     END = '\033[0m'
 
+
 def print_header(title: str, char: str = "═"):
     """Affiche un header stylisé"""
     width = 70
@@ -55,17 +51,22 @@ def print_header(title: str, char: str = "═"):
     print(f"{title:^{width}}")
     print(f"{char * width}{Colors.END}\n")
 
+
 def print_success(msg: str):
     print(f"{Colors.GREEN}✅ {msg}{Colors.END}")
+
 
 def print_error(msg: str):
     print(f"{Colors.RED}❌ {msg}{Colors.END}")
 
+
 def print_info(msg: str):
     print(f"{Colors.BLUE}ℹ️  {msg}{Colors.END}")
 
+
 def print_warning(msg: str):
     print(f"{Colors.YELLOW}⚠️  {msg}{Colors.END}")
+
 
 def ask_yes_no(question: str, default: bool = True) -> bool:
     """Pose une question oui/non"""
@@ -80,6 +81,7 @@ def ask_yes_no(question: str, default: bool = True) -> bool:
             return False
         print_error("Réponse invalide. Utilisez O (oui) ou N (non)")
 
+
 def ask_text(question: str, default: str = "", required: bool = True) -> str:
     """Pose une question texte"""
     while True:
@@ -93,6 +95,7 @@ def ask_text(question: str, default: str = "", required: bool = True) -> str:
         if result or not required:
             return result
         print_error("Ce champ est requis")
+
 
 def ask_int(question: str, default: int = None, min_val: int = None, max_val: int = None) -> int:
     """Pose une question numérique"""
@@ -116,6 +119,7 @@ def ask_int(question: str, default: int = None, min_val: int = None, max_val: in
         except ValueError:
             print_error("Entrez un nombre valide")
 
+
 def ask_choice(question: str, choices: List[str], default: int = 1) -> int:
     """Pose une question à choix multiples"""
     print(f"\n{question}")
@@ -135,1033 +139,618 @@ def ask_choice(question: str, choices: List[str], default: int = 1) -> int:
             pass
         print_error(f"Choix invalide. Entrez un nombre entre 1 et {len(choices)}")
 
-# Personnalités d'agent pour prompt system Freestyle
-AGENT_PERSONALITIES = {
-    "professionnel": {
-        "name": "Professionnel",
-        "description": "Ton neutre, courtois, expert sans être froid",
-        "tone": "professionnel, courtois, posé, crédible",
-        "style": "Phrases claires et structurées. Vouvoiement. Arguments factuels et chiffrés. Pas de familiarité.",
-        "example": "Je comprends votre questionnement. Nos solutions ont fait leurs preuves auprès de 500+ clients."
-    },
-    "doux": {
-        "name": "Doux / Empathique",
-        "description": "Ton chaleureux, à l'écoute, rassurant",
-        "tone": "doux, empathique, rassurant, bienveillant",
-        "style": "Écoute active. Reformule les préoccupations. Rassure avant d'argumenter. Ton chaleureux.",
-        "example": "Je comprends tout à fait votre hésitation, c'est normal. Prenons le temps d'en discuter ensemble."
-    },
-    "dynamique": {
-        "name": "Dynamique / Énergique",
-        "description": "Ton enjoué, rythmé, enthousiaste",
-        "tone": "dynamique, énergique, enthousiaste, rythmé",
-        "style": "Phrases courtes et percutantes. Enthousiasme communicatif. Rythme soutenu. Vocabulaire actif.",
-        "example": "Excellente question ! Justement, on a LA solution qui va vous faire gagner un temps fou !"
-    },
-    "assertif": {
-        "name": "Assertif / Directif",
-        "description": "Ton franc, direct, factuel sans détour",
-        "tone": "assertif, direct, factuel, confiant",
-        "style": "Va droit au but. Affirmatif sans être agressif. Oriente la conversation. Factuel et pragmatique.",
-        "example": "Soyons clairs : vous perdez de l'argent actuellement. On peut y remédier en 48h."
-    },
-    "expert": {
-        "name": "Expert technique",
-        "description": "Ton pédagogue, maîtrise sujet, vulgarise",
-        "tone": "expert, pédagogue, technique mais accessible",
-        "style": "Explications claires. Vulgarise concepts complexes. Références techniques dosées. Posture d'expertise.",
-        "example": "Le principe est simple : cette technologie optimise votre ROI via l'automatisation des flux."
-    },
-    "commercial": {
-        "name": "Commercial / Persuasif",
-        "description": "Ton vendeur, orienté bénéfices, closing",
-        "tone": "commercial, persuasif, orienté résultats",
-        "style": "Focus sur bénéfices client. Urgence légère. Techniques de closing. Arguments ROI et gains concrets.",
-        "example": "Et si je vous disais que vous pouviez économiser 3000€ par an ? Ça change la donne non ?"
-    },
-    "consultative": {
-        "name": "Consultatif / Conseil",
-        "description": "Ton conseiller, pose questions, co-construit",
-        "tone": "consultatif, questionnement, co-construction",
-        "style": "Pose des questions ouvertes. Découverte besoins. Position de conseiller. Approche partenariale.",
-        "example": "Pour vous orienter au mieux, puis-je vous poser quelques questions sur vos besoins actuels ?"
-    }
-}
 
-# Thématiques métier avec contexte + objections
-THEMATIQUES = {
-    "finance": {
-        "name": "Finance / Banque",
-        "context": {
-            "agent_name": "Sophie",
-            "company": "notre banque",
-            "product": "solutions de crédit et d'épargne",
-            "campaign_context": "Prospection clients particuliers pour produits bancaires",
-            "key_benefits": "taux attractifs, conseiller dédié, gestion simplifiée",
-            "target_audience": "particuliers 25-60 ans avec revenus stables",
-            "tone": "professionnel, rassurant, expert financier"
-        },
-        "objections": {
-            "J'ai déjà une banque": "Je comprends que vous ayez déjà une banque. Justement, beaucoup de nos clients gardent leur banque principale et profitent de nos taux avantageux en complément. Puis-je vous en dire plus ?",
-            "Les frais sont trop élevés": "C'est une bonne question sur les frais. Chez nous, pas de frais cachés et des tarifs jusqu'à 30% moins chers que les banques traditionnelles. Souhaitez-vous une comparaison personnalisée ?",
-            "Je ne veux pas changer": "Pas de souci, pas besoin de tout changer. On peut simplement optimiser certains produits pour vous faire économiser. Est-ce que 5 minutes pour voir les économies possibles vous intéressent ?",
-            "Pas intéressé par un crédit": "Aucun problème. Au-delà du crédit, on a aussi des solutions d'épargne et d'investissement. Êtes-vous intéressé par faire travailler votre argent ?",
-            "Je dois réfléchir": "Bien sûr, c'est normal de prendre le temps. Je vous envoie une brochure par email et on peut en rediscuter quand vous voulez. Ça vous va ?"
-        }
-    },
-    "trading_crypto": {
-        "name": "Trading / Crypto",
-        "context": {
-            "agent_name": "Marc",
-            "company": "CryptoTrade Pro",
-            "product": "plateforme de trading crypto régulée",
-            "campaign_context": "Prospection traders pour nouvelle plateforme crypto",
-            "key_benefits": "frais réduits 0.1%, sécurité maximale AMF, 200+ cryptos",
-            "target_audience": "traders actifs 18-45 ans",
-            "tone": "dynamique, tech-savvy, moderne"
-        },
-        "objections": {
-            "C'est trop risqué": "Je comprends votre prudence. C'est pour ça qu'on est régulé AMF et que vos fonds sont sécurisés. On propose aussi un mode démo pour tester sans risque. Ça vous intéresse ?",
-            "J'ai déjà Binance/Coinbase": "Super, vous connaissez déjà ! Notre avantage c'est des frais 10x moins chers et le support francophone 24/7. Vous faites beaucoup de trades ?",
-            "Je ne connais pas la crypto": "Pas de problème, on a justement un accompagnement pour débutants avec formation gratuite. Vous êtes curieux d'en savoir plus ?",
-            "Les frais sont élevés": "Justement, nos frais sont les plus bas du marché : 0.1% contre 0.5-1% ailleurs. Sur 10000€ de trades, ça fait 900€ d'économies par an. Intéressant non ?",
-            "C'est une arnaque": "Je comprends la méfiance, il y a eu des abus. Nous on est régulé AMF, société française, et vos fonds sont garantis. Vous voulez voir nos certifications ?"
-        }
-    },
-    "energie_renouvelable": {
-        "name": "Énergie Renouvelable",
-        "context": {
-            "agent_name": "Julie",
-            "company": "GreenEnergy Solutions",
-            "product": "panneaux solaires et pompes à chaleur",
-            "campaign_context": "Prospection propriétaires pour transition énergétique",
-            "key_benefits": "économies jusqu'à 70%, aides d'État jusqu'à 10000€, ROI 8-10 ans",
-            "target_audience": "propriétaires maison individuelle",
-            "tone": "écologique, pédagogue, orienté économies"
-        },
-        "objections": {
-            "C'est trop cher": "C'est vrai que c'est un investissement. Mais avec les aides de l'État jusqu'à 10000€ et les économies de 70% sur vos factures, le retour sur investissement est de 8 ans. On peut calculer ensemble ?",
-            "Ma maison n'est pas adaptée": "C'est une bonne question. On fait justement une étude gratuite pour voir ce qui est possible chez vous. Même sans toit idéal, il y a souvent des solutions. Je peux envoyer un technicien ?",
-            "Je suis locataire": "Ah effectivement, en tant que locataire c'est compliqué. Par contre, vous connaissez peut-être des propriétaires qui seraient intéressés ? On a un programme de parrainage.",
-            "Les aides sont compliquées": "Je vous comprends, c'est un vrai labyrinthe. Justement on s'occupe de TOUT : dossier de subvention, installation, démarches. Vous n'avez rien à faire. Ça change la donne non ?",
-            "J'ai déjà isolé": "Parfait, l'isolation c'est la base ! Maintenant l'étape suivante c'est de produire votre propre énergie. Avec vos combles isolés, vous allez économiser encore plus. On regarde ?"
-        }
-    },
-    "immobilier": {
-        "name": "Immobilier",
-        "context": {
-            "agent_name": "Pierre",
-            "company": "ImmoExpert",
-            "product": "estimation et vente de biens immobiliers",
-            "campaign_context": "Prospection propriétaires pour vente ou estimation gratuite",
-            "key_benefits": "estimation gratuite en 48h, vente en 45 jours moyenne, 0% frais si pas vendu",
-            "target_audience": "propriétaires envisageant une vente dans 6-12 mois",
-            "tone": "expert local, valorisation, rassurant"
-        },
-        "objections": {
-            "Je ne vends pas actuellement": "Pas de souci, beaucoup de nos clients ne vendent pas tout de suite. Une estimation gratuite vous donne une idée de la valeur actuelle. C'est toujours bon à savoir, non ?",
-            "J'ai déjà une agence": "Ok, vous avez mandaté quelqu'un. Est-ce que vous avez déjà eu des visites ? On a des techniques de vente rapide qui fonctionnent très bien en complément.",
-            "Vos frais sont trop élevés": "Je comprends, les frais c'est important. On a une formule 0% si on ne vend pas, et nos frais sont parmi les plus bas du secteur. Je vous montre le comparatif ?",
-            "Le marché est mauvais": "C'est une idée reçue. En réalité, le marché local est dynamique et on vend en moyenne en 45 jours. Le bon prix et la bonne stratégie font tout. On en discute ?",
-            "Je veux vendre seul": "Je respecte ça. Mais saviez-vous que les biens vendus en agence se vendent 8% plus cher en moyenne ? Notre expertise vous fait gagner du temps ET de l'argent. On fait un point rapide ?"
-        }
-    },
-    "assurance": {
-        "name": "Assurance",
-        "context": {
-            "agent_name": "Caroline",
-            "company": "AssurPlus",
-            "product": "assurances habitation et auto",
-            "campaign_context": "Prospection pour optimisation contrats d'assurance",
-            "key_benefits": "économies jusqu'à 40%, même couverture, changement gratuit sans frais",
-            "target_audience": "particuliers assurés cherchant à réduire leurs cotisations",
-            "tone": "rassurant, économique, transparent"
-        },
-        "objections": {
-            "Je suis déjà assuré": "Parfait, c'est justement pour ça que je vous appelle. On compare votre contrat actuel avec nos tarifs pour voir si vous payez trop cher. 2 minutes pour potentiellement économiser 40%, ça vaut le coup non ?",
-            "Mon contrat est récent": "Pas de problème, même récent on peut optimiser. Et la loi Hamon vous permet de changer quand vous voulez après 1 an, sans frais. On regarde ensemble ?",
-            "Pas le temps de comparer": "Je comprends, c'est chronophage. Justement on s'occupe de tout : comparaison, résiliation ancien contrat, souscription. Vous donnez juste votre numéro de contrat. 5 minutes max.",
-            "Trop compliqué de changer": "C'est ce qu'on pense tous, mais depuis la loi Hamon c'est devenu ultra simple. On s'occupe de résilier votre ancien contrat, zéro démarche pour vous. Juste des économies. Tenté ?",
-            "Pas intéressé": "Ok, juste une dernière question : vous payez combien par mois actuellement ? ... Vous savez que vous pourriez payer 200€ de moins par an pour la même couverture ? On fait une simulation gratuite ?"
-        }
-    },
-    "saas_b2b": {
-        "name": "SaaS B2B",
-        "context": {
-            "agent_name": "Thomas",
-            "company": "notre entreprise",
-            "product": "solution SaaS de gestion",
-            "campaign_context": "Prospection B2B PME pour optimiser leurs processus",
-            "key_benefits": "gain de temps 40%, automatisation complète, ROI sous 6 mois",
-            "target_audience": "PME et ETI 10-500 employés, directeurs ops",
-            "tone": "tech, orienté ROI, professionnel B2B"
-        },
-        "objections": {
-            "On a déjà une solution": "Super, vous êtes déjà équipés. Est-ce qu'elle répond à 100% de vos besoins ? Beaucoup de nos clients utilisent notre solution en complément pour combler les gaps. Vous avez des points de friction actuels ?",
-            "C'est trop cher": "Je comprends la question budget. Nos clients voient un ROI en 6 mois grâce aux gains de productivité. Pour une équipe de 10 personnes, ça représente 2 ETP économisés. Vous voulez voir le calcul ?",
-            "Pas le temps de changer": "Excellente remarque. C'est pour ça qu'on a un processus de migration assisté : formation, import de données, support dédié. Déploiement complet en 2 semaines. Et si je vous montre en 15 minutes ?",
-            "Pas le budget": "Ok, je comprends les contraintes budget. On a justement une offre Start pour les PME à partir de 99€/mois. Et vu que ça économise 40% du temps admin, ça se rentabilise vite. On regarde ?",
-            "Pas le bon moment": "C'est vrai qu'il n'y a jamais de 'bon moment'. Par contre, chaque mois sans optimisation, c'est du temps et de l'argent perdus. Une démo de 15 min pour voir si ça vaut le coup de prioriser ?"
-        }
-    },
-    "or": {
-        "name": "Investissement Or (Gold)",
-        "context": {
-            "agent_name": "Alexandre",
-            "company": "GoldInvest France",
-            "product": "or physique d'investissement (lingots, pièces)",
-            "campaign_context": "Prospection patrimoine pour diversification or physique",
-            "key_benefits": "valeur refuge, +110% depuis 2020, protection inflation, liquidité 24-48h",
-            "target_audience": "particuliers patrimoine >50k€, 35-70 ans, recherche sécurité",
-            "tone": "expert patrimoine, rassurant, anti-crise, long-terme"
-        },
-        "objections": {
-            "C'est trop cher": "Je comprends que 10 000€ en or ça paraît beaucoup. MAIS regardez : l'or a pris +110% depuis 2020. Sur 10k€, c'est +1500€ de gain potentiel. + c'est une ASSURANCE contre l'inflation. Vous avez combien en actifs tangibles actuellement ?",
-            "C'est risqué": "Risqué ? L'or existe depuis 5000 ans et n'a JAMAIS valu zéro ! C'est l'actif le MOINS risqué au monde. Le vrai risque c'est de garder 100% en cash qui perd 5% par an avec l'inflation.",
-            "Pas assez liquide": "Faux ! On vous rachète votre or sous 24-48h au cours du jour. Vous êtes plus liquide qu'avec un bien immobilier (6 mois) ou une assurance-vie (frais). L'or c'est liquide instantanément.",
-            "Frais de stockage": "Nos frais sont de 0,5% par an dans des coffres ultra-sécurisés. Sur 10 000€ c'est 50€/an. Votre banque vous prend 150-300€/an pour un coffre ! Nous c'est 5x moins cher.",
-            "Je préfère l'immobilier": "L'immobilier c'est excellent ! L'or c'est un COMPLÉMENT : 5-10% de votre patrimoine en or sécurise le reste. Les pros diversifient : immo 60%, actions 25%, or 10%, cash 5%."
-        }
-    },
-    "vin_investissement": {
-        "name": "Investissement Vin (Wine)",
-        "context": {
-            "agent_name": "Vincent",
-            "company": "WineCapital Premium",
-            "product": "grands crus classés Bordeaux et Bourgogne en primeur",
-            "campaign_context": "Prospection investisseurs pour placement vin de garde",
-            "key_benefits": "+8-15%/an historique, fiscalité avantageuse (6.5%), actif tangible décorrélé bourse",
-            "target_audience": "investisseurs patrimoine >100k€, 40-70 ans, recherche diversification",
-            "tone": "expert vin et finance, luxe accessible, patrimoine alternatif"
-        },
-        "objections": {
-            "C'est trop cher": "Les Grands Crus Classés prennent 8-15% par an. Sur 10 000€ investis, c'est +1500€/an. En 8 ans votre investissement double ! + c'est tangible, pas du papier. Combien avez-vous en épargne à 3% ?",
-            "Je ne connais rien au vin": "C'est justement notre métier ! On sélectionne pour vous : Château Margaux, Pétrus, Romanée-Conti. Vous n'avez pas besoin d'être œnologue. 70% de nos clients ne connaissaient rien au vin. On vous guide.",
-            "Risque de contrefaçon": "On achète UNIQUEMENT en primeurs au château OU négociants agréés avec certificats. Chaque bouteille a sa traçabilité. + stockage sans sortie = garantie authenticité. Zéro contrefaçon possible.",
-            "Frais de stockage": "Nos caves sont à 12°C constant, 70% humidité, assurance tous risques. Coût : 3-5% par an. Sur 10 000€ c'est 400€/an. Un vin mal stocké perd 50% de valeur. Bien stocké il prend +10%/an.",
-            "Trop long pour vendre": "Horizon recommandé : 8-10 ans. MAIS vous pouvez revendre avant ! Réseau de collectionneurs et restaurants. Revente sous 2-3 mois via nos partenaires (iDealwine). Liquidité assurée."
-        }
-    },
-    "custom": {
-        "name": "Personnalisé (vous configurez tout)",
-        "context": {},
-        "objections": {}
-    }
-}
-
-class ScenarioBuilder:
-    """Constructeur de scénario interactif - Logique MiniBotPanel (Phase 7: Agent Autonome)"""
+class ScenarioBuilderV3:
+    """Constructeur de scénario simplifié - MiniBotPanel v3"""
 
     def __init__(self):
         self.scenario = {
-            "name": "",
-            "description": "",
-            "agent_mode": True,  # Phase 7: mode agent autonome par défaut
-            "theme": "",  # Phase 7: thématique pour objection matcher
-            "voice": "",  # Phase 7: voix clonée à utiliser
-            "background_audio": "",  # Phase 7: fichier background audio
-            "rail": [],  # Phase 7: navigation rail
+            "metadata": {
+                "name": "",
+                "description": "",
+                "version": "3.0",
+                "thematique": "",
+                "voice": "",
+                "barge_in_default": True
+            },
+            "variables": {
+                "first_name": "{{first_name}}",
+                "company_name": "",
+                "agent_name": ""
+            },
             "steps": {},
-            "qualification_rules": {}
+            "flow_summary": {}
         }
-        self.thematique = None
-        self.campaign_objective = None  # Type objectif campagne
-        self.agent_personality = None  # Personnalité agent
-        self.objections_responses = {}  # {objection_text: response_text}
-        self.variables = ["first_name", "last_name", "company"]
-        self.qualifying_steps = []  # Étapes déterminantes
-        self.num_questions = 3  # Nombre de questions Q1, Q2, Q3...
-        self.barge_in_config = {}  # {step_name: bool}
-
-        # Phase 7: Workflow agent autonome
-        self.voice_name = ""  # Nom de la voix (dossier voices/)
-        self.telemarketer_name = ""  # Nom du téléprospecteur
-        self.company_name = ""  # Société
-        self.use_audio_files = {}  # Phase 7: {step: bool} audio pré-enregistré vs TTS
-        self.freestyle_context = {}  # Phase 7: contexte Freestyle (thématique)
-        self.freestyle_enabled = False  # Phase 7: Freestyle AI activé ou non
+        self.num_questions = 3
+        self.determinant_questions = []  # Indices des questions déterminantes (ex: [1, 3])
+        self.voice_name = ""
+        self.theme = ""
+        self.audio_files = {}  # {step_name: {"audio_path": "...", "transcription": "..."}}
 
     def run(self):
         """Lance le processus interactif complet"""
         print(f"{Colors.BOLD}")
         print("╔══════════════════════════════════════════════════════════════════╗")
-        print("║       🤖 MiniBotPanel v3 - Scenario Creator Pro                 ║")
+        print("║       🤖 MiniBotPanel v3 - Scenario Creator (Simplified)        ║")
         print("╚══════════════════════════════════════════════════════════════════╝")
         print(Colors.END)
 
-        print_info("Création de scénario selon la logique HELLO → RETRY → Q1...Qn → IS_LEADS → CONFIRM → BYE\n")
+        print_info("Création de scénario: HELLO → Q1...Qn → IS_LEADS → CONFIRM → BYE\n")
 
         # 1. Informations de base
         self._ask_basic_info()
 
-        # 2. Phase 7: Infos agent autonome (voix, téléprospecteur, société)
-        self._ask_autonomous_agent_info()
+        # 2. Configuration voix
+        self._ask_voice_config()
 
-        # 3. Objectif de campagne
-        self._ask_campaign_objective()
-
-        # 3. Choix thématique
-        self._ask_thematique()
-
-        # 4. Personnalité de l'agent
-        self._ask_agent_personality()
-
-        # 5. Variables dynamiques
-        self._ask_variables()
-
-        # 6. Configuration des questions
+        # 3. Configuration questions
         self._ask_questions_config()
 
-        # 6. Configuration objections
-        self._ask_objections_config()
+        # 4. Thème pour objections
+        self._ask_theme_for_objections()
 
-        # 7. Configuration barge-in
+        # 5. Configuration barge-in
         self._ask_barge_in_config()
 
-        # 8. Génération des étapes
+        # 6. Enregistrement audio pour chaque étape
+        print_header("📹 ENREGISTREMENT AUDIO DES ÉTAPES")
+        print_warning("Pour chaque étape, vous devrez enregistrer un fichier audio.")
+        print_info("Le système utilisera Vosk pour transcrire l'audio automatiquement.\n")
+
+        self._record_all_audio_files()
+
+        # 7. Construction de la structure
         self._build_all_steps()
 
-        # 9. Configuration qualification
+        # 8. Configuration qualification
         self._ask_qualification_rules()
 
-        # 10. Nettoyage audios custom avec UVR (optionnel)
-        if ask_yes_no("\nNettoyer des audios pré-enregistrés avec UVR ?", default=False):
-            self._clean_custom_audios()
-
-        # 11. TTS removed - using pre-recorded audio only
-
-        # 12. Sauvegarde
+        # 9. Sauvegarder
         self._save_scenario()
 
+        print_success(f"\n🎉 Scénario créé avec succès!")
+        print_info(f"   Fichier: scenarios/{self.scenario['metadata']['name']}.json")
+
     def _ask_basic_info(self):
-        """Informations de base"""
-        print_header("📋 Informations générales")
-        self.scenario["name"] = ask_text("Nom du scénario")
-        self.scenario["description"] = ask_text("Description courte", required=False)
-        print_success(f"Scénario: {self.scenario['name']}")
+        """Demande les informations de base"""
+        print_header("📋 INFORMATIONS DE BASE")
 
-    def _ask_autonomous_agent_info(self):
-        """Phase 7: Collecte infos agent autonome (voix, téléprospecteur, société)"""
-        print_header("🤖 Configuration Agent Autonome (Phase 7)")
+        # Nom du scénario
+        self.scenario["metadata"]["name"] = ask_text(
+            "Nom du scénario (ex: rdv_energie, demo_saas)",
+            required=True
+        )
 
-        print_info("Le mode agent autonome nécessite:")
-        print_info("  • Une voix clonée (dossier dans voices/)")
-        print_info("  • Nom du téléprospecteur (personnalité)")
-        print_info("  • Nom de la société\n")
+        # Description
+        self.scenario["metadata"]["description"] = ask_text(
+            "Description courte",
+            default="Scénario de prospection téléphonique",
+            required=False
+        )
 
-        # 1. Choix voix clonée (vérifier embeddings.pth)
-        print(f"{Colors.CYAN}Voix clonées disponibles:{Colors.END}")
-        voices_dir = Path("voices")
-        available_voices = []
+        # Objectif
+        objective = ask_text(
+            "Objectif de la campagne (ex: prise de RDV, qualification, vente)",
+            default="Prise de rendez-vous",
+            required=False
+        )
+        self.scenario["metadata"]["objective"] = objective
 
-        if voices_dir.exists():
-            # Vérifier présence de embeddings.pth (voix réellement clonée)
-            for d in voices_dir.iterdir():
-                if d.is_dir() and not d.name.startswith('.'):
-                    embeddings_file = d / "embeddings.pth"
-                    if embeddings_file.exists():
-                        available_voices.append(d.name)
+        # Variables
+        self.scenario["variables"]["company_name"] = ask_text(
+            "Nom de l'entreprise",
+            default="Entreprise Example"
+        )
 
-        if available_voices:
-            print_info(f"Détectées: {', '.join(available_voices)}")
-            self.voice_name = ask_text("Nom de la voix à utiliser", default=available_voices[0])
+        self.scenario["variables"]["agent_name"] = ask_text(
+            "Nom de l'agent virtuel",
+            default="Julie"
+        )
+
+        print_success("Informations de base enregistrées")
+
+    def _ask_voice_config(self):
+        """Détection automatique des voix disponibles depuis audio/"""
+        print_header("🎙️ CONFIGURATION VOIX")
+
+        # Chercher dossiers dans audio/
+        audio_dir = Path("audio")
+        if not audio_dir.exists():
+            print_warning("Dossier audio/ introuvable. Création...")
+            audio_dir.mkdir(parents=True, exist_ok=True)
+            print_error("Veuillez créer un dossier audio/{voice_name}/ avec les fichiers audio")
+            sys.exit(1)
+
+        # Lister voix disponibles
+        voices = [d.name for d in audio_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
+
+        if not voices:
+            print_error("Aucune voix trouvée dans audio/")
+            print_info("Créez un dossier audio/{voice_name}/ avec les sous-dossiers base/ et objections/")
+            sys.exit(1)
+
+        print_info(f"Voix disponibles: {', '.join(voices)}")
+
+        if len(voices) == 1:
+            self.voice_name = voices[0]
+            print_success(f"Voix sélectionnée automatiquement: {self.voice_name}")
         else:
-            print_warning("Aucune voix clonée détectée (pas de embeddings.pth)")
-            print_info("💡 Utilisez youtube_extract.py puis clone_voice.py pour créer des voix")
-            self.voice_name = ask_text("Nom de la voix à utiliser", default="julie")
+            choice = ask_choice(
+                "Quelle voix utiliser ?",
+                voices,
+                default=1
+            )
+            self.voice_name = voices[choice - 1]
+            print_success(f"Voix sélectionnée: {self.voice_name}")
 
-        self.scenario["voice"] = self.voice_name
-        print_success(f"Voix: {self.voice_name}")
-
-        # 2. Nom téléprospecteur
-        self.telemarketer_name = ask_text("Nom du téléprospecteur (prénom)", default="Julie")
-        print_success(f"Téléprospecteur: {self.telemarketer_name}")
-
-        # 3. Nom société
-        self.company_name = ask_text("Nom de la société", default="notre entreprise")
-        print_success(f"Société: {self.company_name}")
-
-        # 4. Background audio (optionnel)
-        print(f"\n{Colors.CYAN}Background audio (optionnel):{Colors.END}")
-        print_info("Fichier audio joué en boucle en fond d'appel (-8dB automatique)")
-
-        backgrounds_dir = Path("audio/background")
-        available_backgrounds = []
-
-        if backgrounds_dir.exists():
-            available_backgrounds = [f.name for f in backgrounds_dir.glob("*.wav")]
-
-        if available_backgrounds:
-            print_info(f"Disponibles: {', '.join(available_backgrounds)}")
-            if ask_yes_no("Utiliser un background audio ?", default=False):
-                bg_choice = ask_choice("Quel fichier ?", available_backgrounds, default=1)
-                self.scenario["background_audio"] = available_backgrounds[bg_choice - 1]
-                print_success(f"Background: {self.scenario['background_audio']}")
-        else:
-            print_warning("Aucun background disponible dans audio/background/")
-            if ask_yes_no("Spécifier manuellement ?", default=False):
-                self.scenario["background_audio"] = ask_text("Nom fichier background (ex: office.wav)")
-
-    def _ask_campaign_objective(self):
-        """Choix de l'objectif de campagne"""
-        print_header("🎯 Objectif de campagne")
-
-        print_info("L'objectif définit le but final de votre campagne:")
-        print_info("  • Prise de RDV : Qualifier et fixer un rendez-vous avec un expert")
-        print_info("  • Génération de lead : Collecter intérêt et coordonnées pour callback")
-        print_info("  • Transfert d'appel : Transférer directement sur un conseiller disponible\n")
-
-        objectives = [
-            "Prise de RDV (rendez-vous avec expert/commercial)",
-            "Génération de lead (être rappelé par conseiller)",
-            "Transfert d'appel (transfert immédiat si intéressé)"
-        ]
-
-        choice = ask_choice("Quel est l'objectif principal ?", objectives, default=1)
-
-        objective_keys = ["appointment", "lead_generation", "call_transfer"]
-        self.campaign_objective = objective_keys[choice - 1]
-
-        objective_names = {
-            "appointment": "Prise de RDV",
-            "lead_generation": "Génération de lead",
-            "call_transfer": "Transfert d'appel"
-        }
-
-        self.scenario["campaign_objective"] = self.campaign_objective
-        print_success(f"Objectif: {objective_names[self.campaign_objective]}")
-
-        # Info pour contexte Freestyle
-        if self.campaign_objective == "appointment":
-            print_info("\n💡 Le système privilégiera les arguments pour obtenir un RDV")
-        elif self.campaign_objective == "lead_generation":
-            print_info("\n💡 Le système se concentrera sur la collecte d'intérêt et callback")
-        else:
-            print_info("\n💡 Le système préparera un transfert vers un conseiller disponible")
-
-    def _ask_thematique(self):
-        """Choix thématique"""
-        print_header("🎯 Thématique métier")
-        choices = [info["name"] for info in THEMATIQUES.values()]
-        choice = ask_choice("Choisissez votre thématique:", choices, default=1)
-
-        thematique_key = list(THEMATIQUES.keys())[choice - 1]
-        self.thematique = THEMATIQUES[thematique_key]
-
-        # Phase 7: Configurer theme pour objection matcher
-        if thematique_key != "custom":
-            self.scenario["theme"] = thematique_key  # finance, crypto, energie, etc.
-            self.freestyle_context = self.thematique.get("context", {})
-            print_success(f"Thématique: {self.thematique['name']}")
-            print_info(f"Theme code: {thematique_key} (pour objection matcher)")
-        else:
-            self.scenario["theme"] = "general"  # custom = general
-            self.freestyle_context = {}
-            print_info("Theme: general (aucune thématique spécifique)")
-
-    def _ask_agent_personality(self):
-        """Choix de la personnalité de l'agent"""
-        print_header("🎭 Personnalité de l'agent")
-
-        print_info("Choisissez la personnalité qui guidera les réponses Freestyle AI:")
-        print_info("(Cela influence le ton, le style et l'approche commerciale)\n")
-
-        # Afficher exemples de personnalités
-        for key, personality in AGENT_PERSONALITIES.items():
-            print(f"{Colors.CYAN}• {personality['name']}{Colors.END}: {personality['description']}")
-            print(f"  {Colors.YELLOW}Exemple :{Colors.END} \"{personality['example']}\"\n")
-
-        choices = [info["name"] for info in AGENT_PERSONALITIES.values()]
-        choice = ask_choice("Quelle personnalité pour votre agent ?", choices, default=1)
-
-        personality_key = list(AGENT_PERSONALITIES.keys())[choice - 1]
-        self.agent_personality = AGENT_PERSONALITIES[personality_key]
-
-        print_success(f"Personnalité: {self.agent_personality['name']}")
-        print_info(f"Ton: {self.agent_personality['tone']}")
-
-    def _ask_variables(self):
-        """Variables dynamiques"""
-        print_header("🔤 Variables dynamiques")
-        print_info("Variables par défaut: {{first_name}}, {{last_name}}, {{company}}\n")
-
-        if ask_yes_no("Ajouter des variables personnalisées ?", default=False):
-            while True:
-                var_name = ask_text("Nom variable (vide pour terminer)", required=False)
-                if not var_name:
-                    break
-                var_name = re.sub(r'[^a-z0-9_]', '_', var_name.lower())
-                if var_name not in self.variables:
-                    self.variables.append(var_name)
-                    print_success(f"Variable ajoutée: {{{{" + var_name + "}}}}")
+        self.scenario["metadata"]["voice"] = self.voice_name
 
     def _ask_questions_config(self):
-        """Configuration questions Q1, Q2, Q3..."""
-        print_header("❓ Questions qualifiantes")
-        print_info("Logique: Q1 → Q2 → Q3 → ... → IS_LEADS\n")
+        """Configuration du nombre de questions et déterminants"""
+        print_header("❓ CONFIGURATION QUESTIONS")
 
-        self.num_questions = ask_int("Nombre de questions (Q1, Q2, Q3...)", default=3, min_val=1, max_val=10)
+        # Nombre de questions
+        self.num_questions = ask_int(
+            "Combien de questions voulez-vous poser au prospect ?",
+            default=3,
+            min_val=1,
+            max_val=10
+        )
 
-        print_info(f"\n{self.num_questions} questions seront créées (Q1 à Q{self.num_questions})\n")
+        print_success(f"Le scénario aura {self.num_questions} questions (Q1 à Q{self.num_questions})")
 
-        # Demander quelles questions sont déterminantes
-        print_info("Quelles questions sont déterminantes pour qualifier un lead ?")
-        print_info("(Les questions non-déterminantes sont informatives seulement)\n")
+        # Questions déterminantes
+        print_info("\n💡 Questions déterminantes = questions importantes pour qualifier le lead")
+        print_info("   Ex: 'Êtes-vous propriétaire ?' pourrait être déterminante pour un scénario énergie")
 
-        for i in range(1, self.num_questions + 1):
-            is_qualifying = ask_yes_no(f"  Q{i} est déterminante ?", default=(i == self.num_questions))
-            if is_qualifying:
-                self.qualifying_steps.append(f"question{i}")
+        if ask_yes_no("\nCertaines questions sont-elles déterminantes pour qualifier le lead ?", default=True):
+            print_info(f"Indiquez les numéros des questions déterminantes (séparés par des virgules)")
+            print_info(f"Ex: 1,3 pour Q1 et Q3 déterminantes")
 
-        print_success(f"Questions déterminantes: {', '.join(self.qualifying_steps) if self.qualifying_steps else 'Aucune'}")
+            while True:
+                response = input(f"Questions déterminantes [1-{self.num_questions}]: ").strip()
+                if not response:
+                    print_warning("Aucune question déterminante définie")
+                    break
 
-    def _ask_objections_config(self):
-        """Configuration objections pré-enregistrées"""
-        print_header("🛡️ Objections pré-enregistrées + Fallback Freestyle")
-
-        print_info("Système hybride intelligent:")
-        print_info("  1. Objection détectée → Cherche audio pré-enregistré")
-        print_info("  2. Si trouvé → Play immédiat (barge-in ultra-rapide)")
-        print_info("  3. Sinon → Fallback Freestyle AI (génération dynamique)\n")
-
-        if not self.thematique.get("objections"):
-            print_warning("Pas d'objections pré-configurées pour cette thématique")
-            return
-
-        objections = self.thematique["objections"]
-        print(f"Objections disponibles ({self.thematique['name']}):")
-        for i, (obj, resp) in enumerate(objections.items(), 1):
-            print(f"  {i}. {obj}")
-            print(f"     → {resp[:60]}...")
-        print()
-
-        if ask_yes_no("Utiliser ces objections pré-enregistrées ?", default=True):
-            self.objections_responses = objections.copy()
-            print_success(f"{len(self.objections_responses)} objections chargées")
-
-            if ask_yes_no("Ajouter des objections personnalisées ?", default=False):
-                while True:
-                    obj = ask_text("Objection (vide pour terminer)", required=False)
-                    if not obj:
+                try:
+                    indices = [int(x.strip()) for x in response.split(',')]
+                    # Valider indices
+                    if all(1 <= i <= self.num_questions for i in indices):
+                        self.determinant_questions = indices
+                        print_success(f"Questions déterminantes: Q{', Q'.join(map(str, indices))}")
                         break
-                    resp = ask_text(f"Réponse à '{obj}'")
-                    self.objections_responses[obj] = resp
-                    print_success("Objection ajoutée")
+                    else:
+                        print_error(f"Les numéros doivent être entre 1 et {self.num_questions}")
+                except ValueError:
+                    print_error("Format invalide. Utilisez des nombres séparés par des virgules (ex: 1,3)")
+
+    def _ask_theme_for_objections(self):
+        """Sélection du thème pour la base d'objections"""
+        print_header("🎯 THÈME POUR OBJECTIONS")
+
+        themes = ["finance", "crypto", "energie", "immobilier", "assurance", "generic"]
+
+        print_info("Thèmes disponibles:")
+        for i, theme in enumerate(themes, 1):
+            print(f"  {i}) {theme}")
+
+        choice = ask_choice(
+            "Quel thème pour la base d'objections ?",
+            themes,
+            default=len(themes)  # generic par défaut
+        )
+
+        self.theme = themes[choice - 1]
+        self.scenario["metadata"]["thematique"] = self.theme
+
+        print_success(f"Thème sélectionné: {self.theme}")
+
+        # Vérifier nombre d'objections disponibles
+        objections = get_objections_by_theme(self.theme)
+        print_info(f"   {len(objections)} objections disponibles dans cette thématique")
 
     def _ask_barge_in_config(self):
-        """Configuration barge-in par étape"""
-        print_header("🔊 Configuration Barge-In")
+        """Configuration barge-in (une seule question globale)"""
+        print_header("🔇 CONFIGURATION BARGE-IN")
 
-        print_info("Le barge-in permet au client d'interrompre le robot\n")
+        print_info("Le barge-in permet au client d'interrompre le robot pendant qu'il parle.")
 
-        mode = ask_choice(
-            "Configuration barge-in:",
-            [
-                "Activé partout (recommandé)",
-                "Désactivé partout",
-                "Personnalisé par étape"
-            ],
-            default=1
+        barge_in_enabled = ask_yes_no(
+            "Activer le barge-in pour toutes les étapes ?",
+            default=True
         )
 
-        if mode == 1:
-            # Tout activé
-            self.barge_in_default = True
-            print_success("Barge-in activé sur toutes les étapes")
-        elif mode == 2:
-            # Tout désactivé
-            self.barge_in_default = False
-            print_warning("Barge-in désactivé (peut frustrer les clients)")
+        self.scenario["metadata"]["barge_in_default"] = barge_in_enabled
+
+        if barge_in_enabled:
+            print_success("Barge-in activé globalement")
         else:
-            # Custom
-            self.barge_in_default = True
-            print_info("Barge-in activé par défaut, vous pourrez personnaliser par étape")
+            print_warning("Barge-in désactivé (le client devra attendre que le robot finisse)")
+
+    def _record_all_audio_files(self):
+        """Enregistre et transcrit les fichiers audio pour toutes les étapes"""
+        print_header("🎤 ENREGISTREMENT AUDIO")
+
+        # Liste des étapes de base nécessaires
+        base_steps = [
+            ("hello", "Introduction initiale"),
+            ("retry_hello", "Retry après refus initial"),
+            ("retry_silence", "Retry après silence"),
+        ]
+
+        # Ajouter questions dynamiques
+        for i in range(1, self.num_questions + 1):
+            base_steps.append((f"q{i}", f"Question {i}"))
+
+        # Ajouter étapes finales
+        base_steps.extend([
+            ("is_leads", "Proposition finale / qualification"),
+            ("retry_is_leads", "Retry si hésitation sur proposition"),
+            ("confirm_time", "Confirmation horaire RDV"),
+            ("bye", "Clôture succès"),
+            ("bye_failed", "Clôture échec"),
+            ("not_understood", "Fallback incompréhension")
+        ])
+
+        print_info(f"Vous devez enregistrer {len(base_steps)} fichiers audio.\n")
+
+        for step_name, step_desc in base_steps:
+            print(f"\n{Colors.BOLD}Étape: {step_name}{Colors.END} - {step_desc}")
+
+            # Demander chemin fichier audio
+            audio_path = ask_text(
+                f"  Chemin du fichier audio (ex: audio/{self.voice_name}/base/{step_name}.wav)",
+                default=f"audio/{self.voice_name}/base/{step_name}.wav"
+            )
+
+            # Vérifier existence fichier
+            if not Path(audio_path).exists():
+                print_warning(f"  ⚠️  Fichier introuvable: {audio_path}")
+                if not ask_yes_no("  Continuer quand même ?", default=True):
+                    sys.exit(1)
+
+            # TODO: Transcription automatique avec Vosk
+            # Pour l'instant, demander saisie manuelle
+            print_info("  Transcription du fichier audio:")
+            transcription = ask_text(
+                f"  Texte de '{step_name}'",
+                required=True
+            )
+
+            # Enregistrer
+            self.audio_files[step_name] = {
+                "audio_path": audio_path,
+                "transcription": transcription
+            }
+
+            print_success(f"  ✅ {step_name} enregistré")
+
+        print_success(f"\n🎉 {len(base_steps)} fichiers audio configurés")
 
     def _build_all_steps(self):
-        """Génère toutes les étapes selon la logique MiniBotPanel (Phase 7: Agent Autonome)"""
-        print_header("🔨 Génération des étapes (Rail Agent Autonome)")
+        """Construit la structure complète des steps"""
+        print_header("🏗️  CONSTRUCTION STRUCTURE")
 
-        voice = self.voice_name  # Phase 7: utilise voice_name configuré
-        agent_name = self.telemarketer_name  # Phase 7
-        company = self.company_name  # Phase 7
+        steps = {}
 
-        # Phase 7: Construire le rail
-        rail = ["Hello"]
-        for i in range(1, self.num_questions + 1):
-            rail.append(f"Q{i}")
-        rail.extend(["Is_Leads", "Confirm_Time", "Bye"])
-
-        self.scenario["rail"] = rail
-        print_info(f"Rail configuré: {' → '.join(rail)}\n")
-
-        # Étape HELLO
-        print_info("Création étape HELLO...")
-        agent_name = self.freestyle_context.get("agent_name", "Julie")
-        company = self.freestyle_context.get("company", "notre entreprise")
-
-        hello_msg = ask_text(
-            "Message HELLO",
-            default=f"Allô, bonjour {{{{first_name}}}}. Je suis {agent_name} de {company}."
-        )
-
-        self.scenario["steps"]["hello"] = {
-            "message_text": hello_msg,
+        # ─────────────────────────────────────────────────────────────────
+        # HELLO
+        # ─────────────────────────────────────────────────────────────────
+        steps["hello"] = {
+            "message_text": self.audio_files["hello"]["transcription"],
+            "audio_file": self.audio_files["hello"]["audio_path"],
             "audio_type": "audio",
-            "voice": voice,
-            "barge_in": self.barge_in_default,
+            "voice": self.voice_name,
+            "barge_in": self.scenario["metadata"]["barge_in_default"],
             "timeout": 15,
+            "max_autonomous_turns": 2,
             "intent_mapping": {
-                "affirm": "Q1",              # Oui → next step
-                "interested": "Q1",
-                "deny": "retry_hello",       # Non → retry
+                "affirm": "q1",
+                "interested": "q1",
+                "deny": "retry_hello",
                 "not_interested": "retry_hello",
-                "callback": "retry_hello",   # Callback → retry (même logique que deny)
-                "unsure": "Q1",              # Hésitation → continue (comme affirm)
-                "question": "Q1",            # Après max_turns questions → continue
-                "objection": "Q1",           # Après max_turns objections → continue
-                "silence": "retry_silence",  # 1er silence → demande si toujours là
+                "callback": "retry_hello",
+                "unsure": "q1",
+                "question": "q1",
+                "objection": "q1",
+                "silence": "retry_silence",
                 "*": "retry_hello"
             }
         }
 
-        # Étape RETRY
-        print_info("Création étape RETRY...")
-        retry_msg = ask_text(
-            "Message RETRY",
-            default="Je comprends. C'est vraiment très rapide, juste 2 minutes. Puis-je vous poser quelques questions ?"
-        )
-
-        self.scenario["steps"]["retry"] = {
-            "message_text": retry_msg,
+        # ─────────────────────────────────────────────────────────────────
+        # RETRY_HELLO
+        # ─────────────────────────────────────────────────────────────────
+        steps["retry_hello"] = {
+            "message_text": self.audio_files["retry_hello"]["transcription"],
+            "audio_file": self.audio_files["retry_hello"]["audio_path"],
             "audio_type": "audio",
-            "voice": voice,
-            "barge_in": self.barge_in_default,
+            "voice": self.voice_name,
+            "barge_in": self.scenario["metadata"]["barge_in_default"],
             "timeout": 15,
+            "max_autonomous_turns": 2,
             "intent_mapping": {
-                "affirm": "Q1",
-                "interested": "Q1",
-                "question": "not_understood",
+                "affirm": "q1",
+                "interested": "q1",
                 "deny": "bye_failed",
                 "not_interested": "bye_failed",
-                "unsure": "Q1",
-                "callback": "retry_hello",
+                "callback": "bye_failed",
+                "unsure": "q1",
+                "question": "q1",
+                "objection": "q1",
                 "silence": "bye_failed",
                 "*": "bye_failed"
             }
         }
 
-        # Étape RETRY_HELLO (Phase 7: relance spécifique après Hello)
-        print_info("Création étape RETRY_HELLO...")
-        retry_hello_msg = ask_text(
-            "Message RETRY_HELLO (relance après Hello)",
-            default="On a presque fini, il reste quelques questions. Ça vous va ?"
-        )
-
-        self.scenario["steps"]["retry_hello"] = {
-            "message_text": retry_hello_msg,
+        # ─────────────────────────────────────────────────────────────────
+        # RETRY_SILENCE
+        # ─────────────────────────────────────────────────────────────────
+        steps["retry_silence"] = {
+            "message_text": self.audio_files["retry_silence"]["transcription"],
+            "audio_file": self.audio_files["retry_silence"]["audio_path"],
             "audio_type": "audio",
-            "voice": voice,
-            "barge_in": self.barge_in_default,
-            "timeout": 15,
-            "intent_mapping": {
-                "affirm": "Q1",              # Oui → accepte relance, continue
-                "interested": "Q1",
-                "deny": "bye_failed",        # Non → 2ème refus, échec
-                "not_interested": "bye_failed",
-                "callback": "bye_failed",    # 2ème callback → échec
-                "unsure": "Q1",              # Hésitation → continue (comme affirm)
-                "question": "Q1",            # Après max_turns → continue
-                "objection": "Q1",           # Après max_turns → continue
-                "silence": "bye_failed",     # Silence géré par compteur dans robot_freeswitch
-                "*": "bye_failed"
-            }
-        }
-
-        # Étape RETRY_SILENCE (Phase 7: gestion silences consécutifs)
-        print_info("Création RETRY_SILENCE...")
-        retry_silence_msg = ask_text(
-            "Message RETRY_SILENCE (silence détecté)",
-            default="Allô ? Vous êtes toujours là {{first_name}} ?"
-        )
-
-        self.scenario["steps"]["retry_silence"] = {
-            "message_text": retry_silence_msg,
-            "audio_type": "audio",
-            "voice": voice,
-            "barge_in": self.barge_in_default,
+            "voice": self.voice_name,
+            "barge_in": self.scenario["metadata"]["barge_in_default"],
             "timeout": 10,
+            "max_autonomous_turns": 2,
             "intent_mapping": {
-                "affirm": "Q1",              # Oui → client toujours là, continue
-                "interested": "Q1",
-                "deny": "bye_failed",        # Non → refus, échec
+                "affirm": "q1",
+                "interested": "q1",
+                "deny": "bye_failed",
                 "not_interested": "bye_failed",
-                "callback": "retry_hello",   # Demande rappel → retour retry_hello
-                "unsure": "Q1",              # Hésitation → continue
-                "question": "Q1",            # Après max_turns → continue
-                "objection": "Q1",           # Après max_turns → continue
-                "silence": "bye_no_answer",  # 2ème silence consécutif → raccroche direct
-                "*": "Q1"
+                "callback": "retry_hello",
+                "unsure": "q1",
+                "question": "q1",
+                "objection": "q1",
+                "silence": "bye_no_answer",
+                "*": "q1"
             }
         }
 
-        # Étapes Q1, Q2, Q3... (Phase 7: avec max_autonomous_turns et is_determinant)
+        # ─────────────────────────────────────────────────────────────────
+        # Q1, Q2, Q3... Qn (QUESTIONS DYNAMIQUES)
+        # ─────────────────────────────────────────────────────────────────
         for i in range(1, self.num_questions + 1):
-            print_info(f"Création Q{i}...")
-            q_msg = ask_text(f"Question Q{i}")
-            next_step = f"Q{i+1}" if i < self.num_questions else "Is_Leads"  # Phase 7: rail naming
-            is_determinant = f"question{i}" in self.qualifying_steps
+            step_name = f"q{i}"
+            next_step = f"q{i+1}" if i < self.num_questions else "is_leads"
 
-            self.scenario["steps"][f"Q{i}"] = {  # Phase 7: naming convention Q1, Q2, Q3
-                "message_text": q_msg,
-                "audio_type": "audio",  # Pré-enregistré uniquement
-                "voice": voice,
-                "barge_in": self.barge_in_default,
-                "timeout": 12,
-                "max_autonomous_turns": 2,  # Phase 7: configurable
-                "is_determinant": is_determinant,  # Phase 7: pour qualification
-                "qualification_weight": 30 if is_determinant else 10,  # Phase 7: poids cumulatif
+            is_determinant = i in self.determinant_questions
+
+            steps[step_name] = {
+                "message_text": self.audio_files[step_name]["transcription"],
+                "audio_file": self.audio_files[step_name]["audio_path"],
+                "audio_type": "audio",
+                "voice": self.voice_name,
+                "barge_in": self.scenario["metadata"]["barge_in_default"],
+                "timeout": 15,
+                "max_autonomous_turns": 2,
+                "is_determinant": is_determinant,
+                "qualification_weight": 20 if is_determinant else 10,
                 "intent_mapping": {
-                    "question": next_step,           # Après max_turns questions → continue
-                    "objection": next_step,          # Après max_turns objections → continue
-                    "unsure": next_step,             # Hésitation → continue (comme affirm)
-                    "callback": next_step,           # Callback → continue
-                    "silence": next_step,            # Silence → continue (pas critique en Q1-Q3)
+                    "question": next_step,
+                    "objection": next_step,
+                    "unsure": next_step,
+                    "callback": next_step,
+                    "silence": next_step,
                     "*": next_step
                 }
             }
 
-        # Étape IS_LEADS (question qualifiante finale - Phase 7)
-        print_info("Création IS_LEADS...")
-        product = self.freestyle_context.get("product", "notre solution")
-        is_leads_msg = ask_text(
-            "Question IS_LEADS (déterminante)",
-            default=f"Seriez-vous intéressé par {product} ?"
-        )
-
-        self.scenario["steps"]["Is_Leads"] = {  # Phase 7: naming convention
-            "message_text": is_leads_msg,
+        # ─────────────────────────────────────────────────────────────────
+        # IS_LEADS
+        # ─────────────────────────────────────────────────────────────────
+        steps["is_leads"] = {
+            "message_text": self.audio_files["is_leads"]["transcription"],
+            "audio_file": self.audio_files["is_leads"]["audio_path"],
             "audio_type": "audio",
-            "voice": voice,
-            "barge_in": self.barge_in_default,
+            "voice": self.voice_name,
+            "barge_in": self.scenario["metadata"]["barge_in_default"],
             "timeout": 15,
-            "max_autonomous_turns": 2,  # Phase 7
-            "is_determinant": True,  # Phase 7: toujours déterminant
-            "qualification_weight": 40,  # Phase 7: poids élevé (40% du score)
+            "max_autonomous_turns": 2,
+            "is_determinant": True,
+            "qualification_weight": 40,
             "intent_mapping": {
-                "affirm": "Confirm_Time",       # Oui → client intéressé, confirme RDV
-                "interested": "Confirm_Time",
-                "deny": "retry_is_leads",       # Non → 1ère objection, tente relance
+                "affirm": "confirm_time",
+                "interested": "confirm_time",
+                "deny": "retry_is_leads",
                 "not_interested": "retry_is_leads",
-                "callback": "Confirm_Time",     # Demande callback → traité comme intérêt
-                "unsure": "Confirm_Time",       # Hésitation → continue (comme affirm)
-                "question": "Confirm_Time",     # Après max_turns → continue
-                "objection": "Confirm_Time",    # Après max_turns → continue
-                "silence": "retry_is_leads",    # Silence → relance
+                "callback": "confirm_time",
+                "unsure": "confirm_time",
+                "question": "confirm_time",
+                "objection": "confirm_time",
+                "silence": "retry_is_leads",
                 "*": "retry_is_leads"
             }
         }
 
-        # Étape RETRY_IS_LEADS (Phase 7: conversion finale)
-        print_info("Création RETRY_IS_LEADS...")
-        retry_is_leads_msg = ask_text(
-            "Message RETRY_IS_LEADS (conversion finale)",
-            default="C'est dommage, vous êtes éligible et les conseils de nos experts valent vraiment le coup. Ça ne vous engage en rien. On se programme ce rappel ?"
-        )
-
-        self.scenario["steps"]["retry_is_leads"] = {
-            "message_text": retry_is_leads_msg,
+        # ─────────────────────────────────────────────────────────────────
+        # RETRY_IS_LEADS
+        # ─────────────────────────────────────────────────────────────────
+        steps["retry_is_leads"] = {
+            "message_text": self.audio_files["retry_is_leads"]["transcription"],
+            "audio_file": self.audio_files["retry_is_leads"]["audio_path"],
             "audio_type": "audio",
-            "voice": voice,
-            "barge_in": self.barge_in_default,
+            "voice": self.voice_name,
+            "barge_in": self.scenario["metadata"]["barge_in_default"],
             "timeout": 15,
+            "max_autonomous_turns": 2,
             "intent_mapping": {
-                "affirm": "Confirm_Time",       # Oui → client convaincu, confirme RDV
-                "interested": "Confirm_Time",
-                "deny": "bye_failed",           # Non → 2ème refus, échec
+                "affirm": "confirm_time",
+                "interested": "confirm_time",
+                "deny": "bye_failed",
                 "not_interested": "bye_failed",
-                "callback": "Confirm_Time",     # Demande callback → traité comme acceptation
-                "unsure": "Confirm_Time",       # Hésitation → continue (comme affirm)
-                "question": "Confirm_Time",     # Après max_turns → continue
-                "objection": "Confirm_Time",    # Après max_turns → continue
-                "silence": "bye_failed",        # Silence → échec (2ème tentative)
+                "callback": "confirm_time",
+                "unsure": "confirm_time",
+                "question": "confirm_time",
+                "objection": "confirm_time",
+                "silence": "bye_failed",
                 "*": "bye_failed"
             }
         }
 
-        # Étape CONFIRM_TIME (Phase 7: confirmation RDV/callback)
-        print_info("Création CONFIRM_TIME...")
-        confirm_msg = ask_text(
-            "Message CONFIRM_TIME (confirmation)",
-            default="Parfait ! Un conseiller va vous rappeler pour fixer un rendez-vous. Merci {{first_name}} !"
-        )
-
-        self.scenario["steps"]["Confirm_Time"] = {  # Phase 7: naming
-            "message_text": confirm_msg,
+        # ─────────────────────────────────────────────────────────────────
+        # CONFIRM_TIME
+        # ─────────────────────────────────────────────────────────────────
+        steps["confirm_time"] = {
+            "message_text": self.audio_files["confirm_time"]["transcription"],
+            "audio_file": self.audio_files["confirm_time"]["audio_path"],
             "audio_type": "audio",
-            "voice": voice,
-            "barge_in": False,
-            "timeout": 10,
-            "max_autonomous_turns": 1,  # Phase 7
-            "is_determinant": False,  # Phase 7: pas déterminant (déjà qualifié)
+            "voice": self.voice_name,
+            "barge_in": self.scenario["metadata"]["barge_in_default"],
+            "timeout": 15,
+            "max_autonomous_turns": 2,
             "intent_mapping": {
-                "*": "Bye",  # Phase 7: toujours vers Bye
-                "silence": "Bye"
+                "*": "bye"
             }
         }
 
-        # Étape NOT_UNDERSTOOD (remplace freestyle_answer)
-        print_info("Création NOT_UNDERSTOOD...")
-        not_understood_msg = ask_text(
-            "Message NOT_UNDERSTOOD (fallback)",
-            default="Excusez-moi je n'ai pas bien compris, vous pourriez répéter ?"
-        )
-
-        self.scenario["steps"]["not_understood"] = {
-            "message_text": not_understood_msg,
+        # ─────────────────────────────────────────────────────────────────
+        # BYE (succès)
+        # ─────────────────────────────────────────────────────────────────
+        steps["bye"] = {
+            "message_text": self.audio_files["bye"]["transcription"],
+            "audio_file": self.audio_files["bye"]["audio_path"],
             "audio_type": "audio",
-            "voice": voice,
+            "voice": self.voice_name,
+            "barge_in": False,
+            "timeout": 5,
+            "result": "completed",
+            "intent_mapping": {
+                "*": "end"
+            }
+        }
+
+        # ─────────────────────────────────────────────────────────────────
+        # BYE_NO_ANSWER (pas d'audio)
+        # ─────────────────────────────────────────────────────────────────
+        steps["bye_no_answer"] = {
+            "message_text": "",
+            "audio_type": "none",
+            "voice": self.voice_name,
+            "barge_in": False,
+            "timeout": 0,
+            "result": "no_answer",
+            "intent_mapping": {
+                "*": "end"
+            }
+        }
+
+        # ─────────────────────────────────────────────────────────────────
+        # BYE_FAILED
+        # ─────────────────────────────────────────────────────────────────
+        steps["bye_failed"] = {
+            "message_text": self.audio_files["bye_failed"]["transcription"],
+            "audio_file": self.audio_files["bye_failed"]["audio_path"],
+            "audio_type": "audio",
+            "voice": self.voice_name,
+            "barge_in": False,
+            "timeout": 5,
+            "result": "failed",
+            "intent_mapping": {
+                "*": "end"
+            }
+        }
+
+        # ─────────────────────────────────────────────────────────────────
+        # NOT_UNDERSTOOD (fallback)
+        # ─────────────────────────────────────────────────────────────────
+        steps["not_understood"] = {
+            "message_text": self.audio_files["not_understood"]["transcription"],
+            "audio_file": self.audio_files["not_understood"]["audio_path"],
+            "audio_type": "audio",
+            "voice": self.voice_name,
             "barge_in": True,
-            "timeout": 10,
+            "timeout": 15,
             "intent_mapping": {
-                "*": "previous_step"  # Retourne à l'étape précédente
+                "*": "bye_failed"
             }
         }
 
-        # Étape BYE (Phase 7: étape unique de fin)
-        print_info("Création étape BYE...")
-        bye_msg = ask_text(
-            "Message BYE (fin d'appel réussie)",
-            default="Merci {{first_name}} et excellente journée !"
-        )
-
-        self.scenario["steps"]["Bye"] = {  # Phase 7: naming convention
-            "message_text": bye_msg,
-            "audio_type": "audio",
-            "voice": voice,
+        # ─────────────────────────────────────────────────────────────────
+        # END (terminal)
+        # ─────────────────────────────────────────────────────────────────
+        steps["end"] = {
+            "message_text": "",
+            "audio_type": "none",
+            "voice": self.voice_name,
             "barge_in": False,
-            "timeout": 5,
-            "result": "completed",  # Phase 7: qualification déterminée par scoring
-            "intent_mapping": {"*": "end"}
+            "timeout": 0,
+            "result": "ended",
+            "intent_mapping": {}
         }
 
-        # Étape BYE_NO_ANSWER (Phase 7: fin d'appel - pas de réponse)
-        # Raccroche directement après 2 silences consécutifs (pas de message)
-        print_info("Création étape BYE_NO_ANSWER (raccrochage direct)...")
-
-        self.scenario["steps"]["bye_no_answer"] = {
-            "message_text": "",  # Pas de message, raccrochage direct
-            "audio_type": "none",  # Pas d'audio à jouer
-            "voice": voice,
-            "barge_in": False,
-            "timeout": 0,  # Raccrochage immédiat
-            "result": "no_answer",  # Phase 7: pas de réponse
-            "intent_mapping": {"*": "end"}
-        }
-
-        # Étape BYE_FAILED (Phase 7: fin d'appel échec)
-        print_info("Création étape BYE_FAILED...")
-        bye_failed_msg = ask_text(
-            "Message BYE_FAILED (fin d'appel échec)",
-            default="Très bien, c'est noté. Je vous souhaite une bonne journée et une bonne continuation. Au revoir."
-        )
-
-        self.scenario["steps"]["bye_failed"] = {
-            "message_text": bye_failed_msg,
-            "audio_type": "audio",
-            "voice": voice,
-            "barge_in": False,
-            "timeout": 5,
-            "result": "failed",  # Phase 7: échec qualification
-            "intent_mapping": {"*": "end"}
-        }
-
-        total_steps = len(self.scenario["steps"])
-        print_success(f"{total_steps} étapes créées avec succès")
+        self.scenario["steps"] = steps
+        print_success(f"Structure créée avec {len(steps)} étapes")
 
     def _ask_qualification_rules(self):
-        """Configuration qualification cumulative (Phase 7: scoring 70%)"""
-        print_header("🎯 Règles de qualification (Phase 7: Cumulative Scoring)")
+        """Configuration des règles de qualification (auto-calcul)"""
+        print_header("📊 RÈGLES DE QUALIFICATION")
 
-        print_info("Phase 7 utilise un système de scoring cumulatif:")
-        print_info("  • Chaque étape déterminante a un poids (weight)")
-        print_info("  • Score cumulatif calculé sur 100%")
-        print_info("  • Seuil LEAD: 70% minimum\n")
+        print_info("Calcul automatique des poids:")
+        print_info(f"  - Questions déterminantes (Q{', Q'.join(map(str, self.determinant_questions))}): 20 points chacune")
+        print_info(f"  - Questions non-déterminantes: 10 points chacune")
+        print_info(f"  - is_leads (toujours déterminant): 40 points")
 
-        # Phase 7: Toujours mode scoring cumulatif
-        print_info("Étapes déterminantes détectées:")
-        total_weight = 0
-        scoring_detail = {}
+        # Calcul total
+        determinant_score = len(self.determinant_questions) * 20
+        non_determinant_score = (self.num_questions - len(self.determinant_questions)) * 10
+        is_leads_score = 40
+        total_possible = determinant_score + non_determinant_score + is_leads_score
 
-        for i in range(1, self.num_questions + 1):
-            step_name = f"Q{i}"
-            if f"question{i}" in self.qualifying_steps:
-                weight = self.scenario["steps"][step_name]["qualification_weight"]
-                total_weight += weight
-                scoring_detail[step_name] = weight
-                print(f"  • {step_name}: {weight}% (déterminante)")
+        print_info(f"\n  Total points possible: {total_possible}")
 
-        # Is_Leads toujours déterminante
-        is_leads_weight = self.scenario["steps"]["Is_Leads"]["qualification_weight"]
-        total_weight += is_leads_weight
-        scoring_detail["Is_Leads"] = is_leads_weight
-        print(f"  • Is_Leads: {is_leads_weight}% (toujours déterminante)")
-
-        print(f"\n📊 Total poids: {total_weight}%")
-
-        if total_weight != 100:
-            print_warning(f"Attention: Le total devrait être 100% (actuellement {total_weight}%)")
-            print_info("Ajustement automatique des poids...")
-
-            # Normaliser les poids pour atteindre 100%
-            factor = 100.0 / total_weight
-            for step, weight in scoring_detail.items():
-                scoring_detail[step] = round(weight * factor, 1)
-                self.scenario["steps"][step]["qualification_weight"] = scoring_detail[step]
-
-            print_success(f"Poids ajustés: {scoring_detail}")
-
-        # Phase 7: Seuil 70% par défaut (configurable)
-        threshold = ask_int("Seuil de qualification (%)", default=70, min_val=50, max_val=100)
+        # Seuil de qualification
+        default_threshold = 70
+        threshold = ask_int(
+            f"Seuil de qualification (% de score requis)",
+            default=default_threshold,
+            min_val=0,
+            max_val=100
+        )
 
         self.scenario["qualification_rules"] = {
-            "lead_threshold": threshold,
-            "scoring_weights": scoring_detail
+            "enabled": True,
+            "threshold": threshold,
+            "max_score": total_possible,
+            "cumulative": True
         }
 
-        print_success(f"Qualification: Seuil {threshold}% (scoring cumulatif)")
-        print_info("Le système calculera automatiquement le score final")
-
-    def _clean_custom_audios(self):
-        """Nettoie les audios pré-enregistrés avec UVR (enlève musique/bruits)"""
-        print_header("🎵 Nettoyage audios pré-enregistrés (UVR)")
-
-        print_info("Cette fonction nettoie vos audios personnalisés (enlève musique, bruits de fond)")
-        print_info("Utile pour préparer des messages pré-enregistrés de qualité\n")
-
-        audio_custom_dir = Path("audio/custom")
-        if not audio_custom_dir.exists():
-            print_warning(f"Dossier {audio_custom_dir} inexistant")
-            audio_custom_dir.mkdir(parents=True, exist_ok=True)
-            print_info(f"Créé: {audio_custom_dir}/")
-            return
-
-        # Trouver fichiers WAV non-nettoyés
-        audio_files = [f for f in audio_custom_dir.glob("*.wav") if "_clean" not in f.stem]
-
-        if not audio_files:
-            print_warning("Aucun fichier .wav à nettoyer dans audio/custom/")
-            return
-
-        print(f"📂 {len(audio_files)} fichier(s) trouvé(s):")
-        for f in audio_files:
-            print(f"   • {f.name}")
-        print()
-
-        if not ask_yes_no("Nettoyer ces fichiers avec UVR ?", default=False):
-            return
-
-        try:
-            from audio_separator.separator import Separator
-
-            print_info("🔧 Chargement modèle UVR...")
-            separator = Separator(
-                log_level=40,  # ERROR only
-                model_file_dir=str(Path.home() / ".cache" / "audio-separator")
-            )
-            separator.load_model("UVR-MDX-NET-Voc_FT")
-            print_success("Modèle chargé\n")
-
-            for i, audio_file in enumerate(audio_files, 1):
-                print(f"[{i}/{len(audio_files)}] 🎵 {audio_file.name}")
-
-                # Séparer vocals
-                output_files = separator.separate(str(audio_file))
-
-                # Trouver fichier vocals
-                vocals_file = None
-                for f in output_files:
-                    if "Vocals" in f or "vocals" in f:
-                        vocals_file = Path(f)
-                        break
-
-                if vocals_file and vocals_file.exists():
-                    # Renommer avec _clean
-                    output_name = audio_file.stem + "_clean" + audio_file.suffix
-                    output_path = audio_custom_dir / output_name
-                    vocals_file.rename(output_path)
-
-                    # Nettoyer instrumental
-                    for f in output_files:
-                        f_path = Path(f)
-                        if f_path.exists() and f_path != output_path:
-                            f_path.unlink()
-
-                    print_success(f"   → {output_name} ({output_path.stat().st_size / 1024:.1f} KB)")
-                else:
-                    print_error("   → Échec extraction vocals")
-
-                print()
-
-            print_success(f"✅ {len(audio_files)} fichier(s) nettoyé(s)")
-
-        except ImportError:
-            print_error("audio-separator non disponible")
-            print_info("Installation: pip install audio-separator==0.12.0")
-        except Exception as e:
-            print_error(f"Erreur UVR: {e}")
-
-    # _generate_objections_tts removed - using pre-recorded audio only
+        print_success(f"Seuil fixé à {threshold}% ({threshold * total_possible / 100:.0f} points sur {total_possible})")
 
     def _save_scenario(self):
-        """Sauvegarde finale"""
-        print_header("💾 Sauvegarde")
+        """Sauvegarde le scénario dans scenarios/"""
+        print_header("💾 SAUVEGARDE")
 
-        print(f"{Colors.BOLD}Récapitulatif:{Colors.END}")
-        print(f"  • Nom: {self.scenario['name']}")
-        print(f"  • Thématique: {self.thematique['name']}")
-        print(f"  • Étapes: {len(self.scenario['steps'])}")
-        print(f"  • Questions: {self.num_questions}")
-        print(f"  • Questions déterminantes: {len(self.qualifying_steps)}")
-        print(f"  • Freestyle: {'✓' if self.freestyle_enabled else '✗'}")
-        print(f"  • Objections pré-enregistrées: {len(self.objections_responses)}\n")
-
-        if not ask_yes_no("Sauvegarder ?", default=True):
-            print_warning("Non sauvegardé")
-            return
-
-        filename = re.sub(r'[^a-z0-9_]', '_', self.scenario['name'].lower())
+        # Créer dossier scenarios/ si besoin
         scenarios_dir = Path("scenarios")
-        scenarios_dir.mkdir(parents=True, exist_ok=True)
+        scenarios_dir.mkdir(exist_ok=True)
 
-        filepath = scenarios_dir / f"scenario_{filename}.json"
+        filename = f"{self.scenario['metadata']['name']}.json"
+        filepath = scenarios_dir / filename
 
+        # Sauvegarder
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(self.scenario, f, indent=2, ensure_ascii=False)
 
         print_success(f"Scénario sauvegardé: {filepath}")
 
-        # Preview
-        if ask_yes_no("\nPrévisualiser le JSON ?", default=False):
-            with open(filepath, 'r', encoding='utf-8') as f:
-                print(f"\n{Colors.CYAN}{'─' * 70}")
-                print(f.read())
-                print(f"{'─' * 70}{Colors.END}\n")
-
-        print(f"\n{Colors.GREEN}✅ Terminé ! Votre scénario est prêt.{Colors.END}\n")
 
 def main():
     """Point d'entrée"""
     try:
-        builder = ScenarioBuilder()
+        builder = ScenarioBuilderV3()
         builder.run()
     except KeyboardInterrupt:
-        print(f"\n\n{Colors.YELLOW}⚠️  Annulé{Colors.END}")
-        sys.exit(0)
+        print("\n\n❌ Annulé par l'utilisateur")
+        sys.exit(1)
     except Exception as e:
         print_error(f"Erreur: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
