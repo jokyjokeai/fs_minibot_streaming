@@ -66,7 +66,7 @@ class CacheManager:
         # Configuration
         self.config = {
             "scenario_ttl": 3600,  # 1h (scénarios changent peu)
-            "objections_ttl": 1800,  # 30min
+            "objections_ttl": 14400,  # 4h (pour campagnes longues 3h+)
             "models_ttl": 0,  # Infini (modèles restent en mémoire)
             "max_scenarios": 50,  # Max scénarios en cache
             "max_objections": 20,  # Max thématiques objections
@@ -310,6 +310,21 @@ class CacheManager:
             self._objections_meta.clear()
             self.stats["objections"]["cache_size"] = 0
             logger.info(f"Cache CLEAR: {count} objection themes removed")
+
+    def set_objections_ttl(self, ttl_seconds: int):
+        """
+        Configure le TTL des objections dynamiquement.
+
+        Args:
+            ttl_seconds: Durée en secondes (0 = infini)
+
+        Example:
+            >>> cache = get_cache()
+            >>> cache.set_objections_ttl(7200)  # 2 heures
+            >>> cache.set_objections_ttl(0)     # Infini
+        """
+        self.config["objections_ttl"] = ttl_seconds
+        logger.info(f"Cache CONFIG: objections_ttl set to {ttl_seconds}s ({ttl_seconds/3600:.1f}h)")
 
     # ========== MODELS CACHE ==========
 

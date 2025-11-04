@@ -536,7 +536,9 @@ class ScenarioManager:
 
     def get_theme(self, scenario: Dict) -> str:
         """
-        Récupère la thématique du scénario
+        Récupère la thématique du scénario (ANCIEN SYSTÈME).
+
+        DEPRECATED: Utiliser get_theme_file() à la place.
 
         Args:
             scenario: Scénario chargé
@@ -545,6 +547,40 @@ class ScenarioManager:
             Theme (défaut: "general")
         """
         return scenario.get("theme", "general")
+
+    def get_theme_file(self, scenario: Dict) -> str:
+        """
+        Récupère le fichier d'objections du scénario (NOUVEAU SYSTÈME).
+
+        Le nouveau système utilise "theme_file" pour charger depuis
+        system/objections_db/{theme_file}.py
+
+        Args:
+            scenario: Scénario chargé
+
+        Returns:
+            Nom du fichier (ex: "objections_finance", "objections_crypto")
+            Défaut: "objections_general"
+
+        Example:
+            >>> theme_file = manager.get_theme_file(scenario)
+            >>> print(theme_file)
+            objections_finance
+        """
+        # Essayer d'abord "theme_file" (nouveau système)
+        if "theme_file" in scenario:
+            return scenario["theme_file"]
+
+        # Fallback: "theme" (ancien système) → conversion automatique
+        if "theme" in scenario:
+            theme = scenario["theme"]
+            # Conversion: "finance" → "objections_finance"
+            if not theme.startswith("objections_"):
+                return f"objections_{theme}"
+            return theme
+
+        # Défaut
+        return "objections_general"
 
     def get_max_autonomous_turns(self, scenario: Dict, step_name: str) -> int:
         """

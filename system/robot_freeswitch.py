@@ -1116,15 +1116,16 @@ class RobotFreeSWITCH:
             logger.info(f"[{call_uuid[:8]}] 🤖 Agent Mode ENABLED")
 
             # Charger objection matcher pour la thématique
-            theme = self.scenario_manager.get_theme(scenario) if self.scenario_manager else "general"
+            # NOUVEAU SYSTÈME: Utilise theme_file depuis system/objections_db/
+            theme_file = self.scenario_manager.get_theme_file(scenario) if self.scenario_manager else "objections_general"
             if OBJECTION_MATCHER_AVAILABLE:
-                logger.info(f"[{call_uuid[:8]}] Loading objections for theme: {theme}")
-                matcher = ObjectionMatcher.load_objections_for_theme(theme)
+                logger.info(f"[{call_uuid[:8]}] Loading objections from: {theme_file}")
+                matcher = ObjectionMatcher.load_objections_from_file(theme_file)
                 if matcher:
                     self.streaming_sessions[call_uuid]["objection_matcher"] = matcher
-                    logger.info(f"[{call_uuid[:8]}] ✅ Objection matcher loaded ({theme})")
+                    logger.info(f"[{call_uuid[:8]}] ✅ Objection matcher loaded ({theme_file})")
                 else:
-                    logger.warning(f"[{call_uuid[:8]}] ⚠️ Failed to load objection matcher")
+                    logger.warning(f"[{call_uuid[:8]}] ⚠️ Failed to load objection matcher from {theme_file}")
             else:
                 logger.warning(f"[{call_uuid[:8]}] ⚠️ ObjectionMatcher not available")
 

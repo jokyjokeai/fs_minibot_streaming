@@ -21,6 +21,8 @@ from system.database import SessionLocal
 from system.models import Campaign, Contact, CampaignStatus
 from system.campaign_manager import CampaignManager
 from system.batch_caller import start_batch_caller
+from system.scenarios import ScenarioManager
+from system.cache_manager import get_cache
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -295,6 +297,43 @@ def main():
         logger.info(f"📊 Campaign: {campaign.name} (ID: {campaign.id})")
         logger.info(f"   Scenario: {campaign.scenario}")
         logger.info(f"   Status: {campaign.status}")
+
+        # ─────────────────────────────────────────────────────────────
+        # 🔥 PRELOAD: Charger les objections dans le cache AVANT le lancement
+        # ─────────────────────────────────────────────────────────────
+        try:
+            logger.info("🔄 Preloading objections into cache...")
+
+            # Charger le scénario pour récupérer le theme_file
+            scenario_mgr = ScenarioManager()
+            scenario_data = scenario_mgr.load_scenario(campaign.scenario)
+
+            if scenario_data:
+                theme_file = scenario_mgr.get_theme_file(scenario_data)
+                logger.info(f"   Theme file: {theme_file}")
+
+                # Charger objections via ObjectionMatcher (qui utilise le cache)
+                try:
+                    from system.objection_matcher import ObjectionMatcher
+
+                    matcher = ObjectionMatcher.load_objections_from_file(theme_file)
+                    if matcher:
+                        logger.info(f"✅ Objections preloaded successfully from '{theme_file}'")
+
+                        # Vérifier stats cache
+                        cache = get_cache()
+                        stats = cache.get_stats()
+                        objections_count = stats["objections"].get("cache_size", 0)
+                        logger.info(f"   Cache: {objections_count} theme(s) loaded")
+                    else:
+                        logger.warning(f"⚠️  Failed to preload objections from '{theme_file}'")
+                except ImportError:
+                    logger.warning("⚠️  ObjectionMatcher not available, skipping preload")
+            else:
+                logger.warning(f"⚠️  Cannot load scenario '{campaign.scenario}', skipping objections preload")
+        except Exception as e:
+            logger.warning(f"⚠️  Error preloading objections: {e}")
+            # Non-bloquant: on continue même si le preload échoue
 
         # Mettre à jour statut à RUNNING
         if campaign.status == CampaignStatus.PENDING:

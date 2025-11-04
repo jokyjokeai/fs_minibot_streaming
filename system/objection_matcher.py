@@ -101,6 +101,65 @@ class ObjectionMatcher:
         logger.info(f"ObjectionMatcher ready with {len(self.objections)} objections")
 
     @staticmethod
+    def load_objections_from_file(theme_file: str) -> Optional['ObjectionMatcher']:
+        """
+        Charge les objections depuis un fichier de la nouvelle structure modulaire.
+
+        Utilise le nouveau système: system/objections_db/{theme_file}.py
+        Charge AUTOMATIQUEMENT objections_general.py + thématique choisie.
+
+        Phase 8: Utilise CacheManager pour cache intelligent avec TTL + LRU.
+
+        Args:
+            theme_file: Nom du fichier (sans .py)
+                       Ex: "objections_finance", "objections_crypto", "objections_energie"
+
+        Returns:
+            ObjectionMatcher initialisé ou None si erreur
+
+        Example:
+            >>> matcher = ObjectionMatcher.load_objections_from_file("objections_finance")
+            >>> match = matcher.find_best_match("C'est trop cher")
+            >>> if match:
+            ...     print(match['response'])
+            ...     play_audio(match['audio_path'])
+        """
+        try:
+            # Import du nouveau système
+            from system.objections_db import load_objections
+
+            # Phase 8: Check CacheManager global
+            cache = get_cache()
+            cached_objections = cache.get_objections(theme_file)
+
+            if cached_objections:
+                logger.debug(f"Objections '{theme_file}' loaded from CacheManager (hit)")
+                return ObjectionMatcher(cached_objections)
+
+            # Charger depuis nouveau système (inclut GENERAL automatiquement)
+            objections_list = load_objections(theme_file)
+
+            if not objections_list:
+                logger.warning(f"⚠️  No objections found in '{theme_file}'")
+                return None
+
+            logger.info(f"📚 Loaded {len(objections_list)} objections from '{theme_file}'")
+
+            # Phase 8: Mettre en cache via CacheManager
+            cache.set_objections(theme_file, objections_list)
+
+            # Créer et retourner le matcher
+            return ObjectionMatcher(objections_list)
+
+        except ImportError as e:
+            logger.error(f"❌ Cannot load objections from '{theme_file}': {e}")
+            logger.error("💡 Make sure the file exists in system/objections_db/")
+            return None
+        except Exception as e:
+            logger.error(f"❌ Error loading objections from '{theme_file}': {e}")
+            return None
+
+    @staticmethod
     def load_objections_for_theme(theme: str = "general") -> Optional['ObjectionMatcher']:
         """
         Charge les objections pour une thématique spécifique (GENERAL + thématique).
