@@ -561,6 +561,7 @@ class RobotFreeSWITCH:
             "last_transcription": None,  # Pour _listen_for_response
             "is_speaking": False,  # Pour barge-in
             "consecutive_silences": 0,  # Phase 6: tracking 2 silences consécutifs
+            "consecutive_no_match": 0,  # Phase 7: tracking 3 no match consécutifs = hangup
             "autonomous_turns": 0,  # Phase 6: compteur turns dans step
             "objection_matcher": None  # Phase 6: matcher chargé par thématique
         }
@@ -720,15 +721,8 @@ class RobotFreeSWITCH:
                     self.streaming_sessions[call_uuid]["last_transcription"] = text
                     self.streaming_sessions[call_uuid]["transcriptions"].append(text)
 
-                    # Détecter questions pour IA Freestyle
-                    if self.nlp_service:
-                        intent_result = self.nlp_service.analyze_intent(text, context="general")
-                        intent = intent_result.get("intent", "unknown")
-
-                        if intent == "question":
-                            logger.info(f"[{call_uuid[:8]}] ❓ Question detected → IA Freestyle mode")
-                            # Générer réponse IA Freestyle
-                            self._handle_freestyle_question(call_uuid, text)
+                    # NOTE: Intent detection et objection handling sont gérés dans _run_autonomous_step()
+                    # Pas besoin de traiter les questions ici dans le callback streaming
 
                 else:
                     # Partial transcription (debug seulement)
@@ -960,6 +954,9 @@ class RobotFreeSWITCH:
                     if match:
                         logger.info(f"[{call_uuid[:8]}]   ✅ Match trouvé ({match_latency_ms:.0f}ms): {match['objection'][:50]}...")
 
+                        # Réinitialiser compteur no_match (match trouvé)
+                        session["consecutive_no_match"] = 0
+
                         # Jouer audio pré-enregistré si disponible
                         if match.get("audio_path"):
                             audio_path = self._resolve_audio_path(call_uuid, match["audio_path"], scenario)
@@ -981,8 +978,18 @@ class RobotFreeSWITCH:
 
                 # b. Si pas de match: Jouer fallback audio générique
                 if not match:
-                    logger.info(f"[{call_uuid[:8]}] ⚠️ No match found → Playing fallback audio")
+                    # Incrémenter compteur no_match
+                    session["consecutive_no_match"] += 1
+                    logger.warning(f"[{call_uuid[:8]}] ⚠️ No match found ({session['consecutive_no_match']}/3)")
+
+                    # 3 no match consécutifs = hangup silencieux
+                    if session["consecutive_no_match"] >= 3:
+                        logger.warning(f"[{call_uuid[:8]}] ❌ 3 no match consécutifs → hangup silencieux")
+                        self._update_call_status(call_uuid, "NO_ANSWER")
+                        return None  # Termine l'appel sans audio
+
                     # Jouer audio fallback "Je n'ai pas bien compris"
+                    logger.info(f"[{call_uuid[:8]}] Playing fallback audio not_understood.wav")
                     voice = scenario.get("voice", config.DEFAULT_VOICE)
                     fallback_audio = step_config.get("fallback_audio", "not_understood.wav")
                     fallback_path = config.get_audio_path(voice, "base", fallback_audio)
@@ -1287,6 +1294,27 @@ class RobotFreeSWITCH:
 
     # _handle_freestyle_step removed - using pre-recorded audio only
 
+    def _get_audio_duration(self, audio_file: str) -> float:
+        """
+        Calcule la durée d'un fichier audio WAV.
+
+        Args:
+            audio_file: Chemin vers fichier audio WAV
+
+        Returns:
+            Durée en secondes (ou 60.0 si erreur)
+        """
+        try:
+            import wave
+            with wave.open(audio_file, 'rb') as wav:
+                frames = wav.getnframes()
+                rate = wav.getframerate()
+                duration = frames / float(rate)
+                return duration
+        except Exception as e:
+            logger.warning(f"Could not read audio duration from {Path(audio_file).name}: {e}")
+            return 60.0  # Fallback vers timeout par défaut
+
     def _play_audio(self, call_uuid: str, audio_file: str) -> bool:
         """
         Joue un fichier audio sur l'appel avec support barge-in.
@@ -1315,7 +1343,9 @@ class RobotFreeSWITCH:
                 logger.error(f"[{call_uuid[:8]}] Playback failed: {result_str}")
                 return False
 
-            logger.debug(f"[{call_uuid[:8]}] 🔊 Playing: {Path(audio_file).name}")
+            # Calculer durée réelle du fichier audio
+            audio_duration = self._get_audio_duration(audio_file)
+            logger.debug(f"[{call_uuid[:8]}] 🔊 Playing: {Path(audio_file).name} (duration: {audio_duration:.1f}s)")
 
             # Auto-tracking
             self.call_sequences[call_uuid].append({
@@ -1324,26 +1354,22 @@ class RobotFreeSWITCH:
                 "timestamp": datetime.now()
             })
 
-            # Surveiller barge-in pendant playback
-            # Estimer durée audio (ou interroger FreeSWITCH)
-            max_duration = 60  # secondes (sécurité)
+            # Surveiller barge-in pendant playback avec durée réelle + marge sécurité
+            max_duration = audio_duration + 1.0  # Durée réelle + 1 seconde de marge
             check_interval = 0.1  # 100ms
             elapsed = 0.0
 
             while elapsed < max_duration:
                 # Vérifier si barge-in détecté
                 if self.barge_in_active.get(call_uuid, False):
-                    logger.info(f"[{call_uuid[:8]}] ⏹️ Audio interrupted by barge-in")
+                    logger.info(f"[{call_uuid[:8]}] ⏹️ Audio interrupted by barge-in after {elapsed:.1f}s")
                     return False  # Playback interrompu
-
-                # Vérifier si playback terminé
-                # TODO: Vérifier status via uuid_getvar playback_terminators ou events
-                # Pour l'instant, on assume terminé après durée max ou barge-in
 
                 time.sleep(check_interval)
                 elapsed += check_interval
 
-            # Playback terminé normalement (ou timeout)
+            # Playback terminé normalement
+            logger.debug(f"[{call_uuid[:8]}] ✅ Audio playback completed ({elapsed:.1f}s)")
             return True
 
         except Exception as e:

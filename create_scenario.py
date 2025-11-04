@@ -366,9 +366,7 @@ class ScenarioBuilder:
         }
         self.thematique = None
         self.campaign_objective = None  # Type objectif campagne
-        self.agent_personality = None  # Personnalité agent pour Freestyle
-        self.freestyle_enabled = True  # Phase 7: activé par défaut pour agent autonome
-        self.freestyle_context = {}
+        self.agent_personality = None  # Personnalité agent
         self.objections_responses = {}  # {objection_text: response_text}
         self.variables = ["first_name", "last_name", "company"]
         self.qualifying_steps = []  # Étapes déterminantes
@@ -380,6 +378,8 @@ class ScenarioBuilder:
         self.telemarketer_name = ""  # Nom du téléprospecteur
         self.company_name = ""  # Société
         self.use_audio_files = {}  # Phase 7: {step: bool} audio pré-enregistré vs TTS
+        self.freestyle_context = {}  # Phase 7: contexte Freestyle (thématique)
+        self.freestyle_enabled = False  # Phase 7: Freestyle AI activé ou non
 
     def run(self):
         """Lance le processus interactif complet"""
@@ -409,10 +409,7 @@ class ScenarioBuilder:
         # 5. Variables dynamiques
         self._ask_variables()
 
-        # 6. Mode Freestyle
-        self._ask_freestyle_config()
-
-        # 5. Configuration des questions
+        # 6. Configuration des questions
         self._ask_questions_config()
 
         # 6. Configuration objections
@@ -554,10 +551,12 @@ class ScenarioBuilder:
         # Phase 7: Configurer theme pour objection matcher
         if thematique_key != "custom":
             self.scenario["theme"] = thematique_key  # finance, crypto, energie, etc.
+            self.freestyle_context = self.thematique.get("context", {})
             print_success(f"Thématique: {self.thematique['name']}")
             print_info(f"Theme code: {thematique_key} (pour objection matcher)")
         else:
             self.scenario["theme"] = "general"  # custom = general
+            self.freestyle_context = {}
             print_info("Theme: general (aucune thématique spécifique)")
 
     def _ask_agent_personality(self):
@@ -595,58 +594,6 @@ class ScenarioBuilder:
                 if var_name not in self.variables:
                     self.variables.append(var_name)
                     print_success(f"Variable ajoutée: {{{{" + var_name + "}}}}")
-
-    def _ask_freestyle_config(self):
-        """Configuration Freestyle"""
-        print_header("✨ Mode Freestyle AI")
-        print_info("Le Freestyle répond dynamiquement aux questions hors-script\n")
-
-        self.freestyle_enabled = ask_yes_no("Activer Freestyle AI ?", default=True)
-
-        if not self.freestyle_enabled:
-            return
-
-        # Context depuis thématique ou custom
-        if self.thematique.get("context"):
-            self.freestyle_context = self.thematique["context"].copy()
-            print_info(f"Contexte thématique chargé ({self.thematique['name']})\n")
-            if ask_yes_no("Personnaliser le contexte ?", default=False):
-                for key in ["agent_name", "company", "product"]:
-                    if key in self.freestyle_context:
-                        self.freestyle_context[key] = ask_text(
-                            key.replace('_', ' ').title(),
-                            default=self.freestyle_context[key]
-                        )
-        else:
-            self.freestyle_context = {
-                "agent_name": ask_text("Nom agent", default="Julie"),
-                "company": ask_text("Nom entreprise"),
-                "product": ask_text("Produit/service"),
-                "campaign_context": ask_text("Description campagne"),
-                "key_benefits": ask_text("Bénéfices clés"),
-            }
-
-        price_info = ask_text("Indication prix (optionnel)", required=False)
-        if price_info:
-            self.freestyle_context["price_range"] = price_info
-
-        # Ajouter l'objectif de campagne au contexte
-        if self.campaign_objective:
-            objective_context = {
-                "appointment": "L'objectif est d'obtenir un rendez-vous avec un expert",
-                "lead_generation": "L'objectif est de qualifier le lead pour un callback par un conseiller",
-                "call_transfer": "L'objectif est de transférer le prospect vers un conseiller disponible"
-            }
-            self.freestyle_context["campaign_objective"] = objective_context[self.campaign_objective]
-
-        # Ajouter la personnalité au contexte
-        if self.agent_personality:
-            self.freestyle_context["agent_tone"] = self.agent_personality["tone"]
-            self.freestyle_context["agent_style"] = self.agent_personality["style"]
-            print_info(f"\n💡 Personnalité intégrée: {self.agent_personality['name']}")
-
-        self.freestyle_context["max_turns"] = ask_int("Max échanges freestyle par appel", default=3, min_val=1, max_val=10)
-        print_success("Freestyle configuré")
 
     def _ask_questions_config(self):
         """Configuration questions Q1, Q2, Q3..."""
@@ -764,15 +711,16 @@ class ScenarioBuilder:
             "barge_in": self.barge_in_default,
             "timeout": 15,
             "intent_mapping": {
-                "affirm": "question1",
-                "interested": "question1",
-                "question": "freestyle_answer" if self.freestyle_enabled else "retry",
-                "deny": "retry",
-                "not_interested": "retry",
-                "unsure": "retry",
-                "callback": "retry",
-                "silence": "retry",
-                "*": "retry"
+                "affirm": "Q1",              # Oui → next step
+                "interested": "Q1",
+                "deny": "retry_hello",       # Non → retry
+                "not_interested": "retry_hello",
+                "callback": "retry_hello",   # Callback → retry (même logique que deny)
+                "unsure": "Q1",              # Hésitation → continue (comme affirm)
+                "question": "Q1",            # Après max_turns questions → continue
+                "objection": "Q1",           # Après max_turns objections → continue
+                "silence": "retry_silence",  # 1er silence → demande si toujours là
+                "*": "retry_hello"
             }
         }
 
@@ -790,14 +738,69 @@ class ScenarioBuilder:
             "barge_in": self.barge_in_default,
             "timeout": 15,
             "intent_mapping": {
-                "affirm": "question1",
-                "interested": "question1",
-                "question": "freestyle_answer" if self.freestyle_enabled else "bye_failed",
+                "affirm": "Q1",
+                "interested": "Q1",
+                "question": "not_understood",
                 "deny": "bye_failed",
                 "not_interested": "bye_failed",
-                "unsure": "bye_failed",
+                "unsure": "Q1",
+                "callback": "retry_hello",
                 "silence": "bye_failed",
                 "*": "bye_failed"
+            }
+        }
+
+        # Étape RETRY_HELLO (Phase 7: relance spécifique après Hello)
+        print_info("Création étape RETRY_HELLO...")
+        retry_hello_msg = ask_text(
+            "Message RETRY_HELLO (relance après Hello)",
+            default="On a presque fini, il reste quelques questions. Ça vous va ?"
+        )
+
+        self.scenario["steps"]["retry_hello"] = {
+            "message_text": retry_hello_msg,
+            "audio_type": "audio",
+            "voice": voice,
+            "barge_in": self.barge_in_default,
+            "timeout": 15,
+            "intent_mapping": {
+                "affirm": "Q1",              # Oui → accepte relance, continue
+                "interested": "Q1",
+                "deny": "bye_failed",        # Non → 2ème refus, échec
+                "not_interested": "bye_failed",
+                "callback": "bye_failed",    # 2ème callback → échec
+                "unsure": "Q1",              # Hésitation → continue (comme affirm)
+                "question": "Q1",            # Après max_turns → continue
+                "objection": "Q1",           # Après max_turns → continue
+                "silence": "bye_failed",     # Silence géré par compteur dans robot_freeswitch
+                "*": "bye_failed"
+            }
+        }
+
+        # Étape RETRY_SILENCE (Phase 7: gestion silences consécutifs)
+        print_info("Création RETRY_SILENCE...")
+        retry_silence_msg = ask_text(
+            "Message RETRY_SILENCE (silence détecté)",
+            default="Allô ? Vous êtes toujours là {{first_name}} ?"
+        )
+
+        self.scenario["steps"]["retry_silence"] = {
+            "message_text": retry_silence_msg,
+            "audio_type": "audio",
+            "voice": voice,
+            "barge_in": self.barge_in_default,
+            "timeout": 10,
+            "intent_mapping": {
+                "affirm": "Q1",              # Oui → client toujours là, continue
+                "interested": "Q1",
+                "deny": "bye_failed",        # Non → refus, échec
+                "not_interested": "bye_failed",
+                "callback": "retry_hello",   # Demande rappel → retour retry_hello
+                "unsure": "Q1",              # Hésitation → continue
+                "question": "Q1",            # Après max_turns → continue
+                "objection": "Q1",           # Après max_turns → continue
+                "silence": "bye_no_answer",  # 2ème silence consécutif → raccroche direct
+                "*": "Q1"
             }
         }
 
@@ -818,9 +821,12 @@ class ScenarioBuilder:
                 "is_determinant": is_determinant,  # Phase 7: pour qualification
                 "qualification_weight": 30 if is_determinant else 10,  # Phase 7: poids cumulatif
                 "intent_mapping": {
-                    "question": "freestyle_answer" if self.freestyle_enabled else next_step,
-                    "*": next_step,
-                    "silence": next_step
+                    "question": next_step,           # Après max_turns questions → continue
+                    "objection": next_step,          # Après max_turns objections → continue
+                    "unsure": next_step,             # Hésitation → continue (comme affirm)
+                    "callback": next_step,           # Callback → continue
+                    "silence": next_step,            # Silence → continue (pas critique en Q1-Q3)
+                    "*": next_step
                 }
             }
 
@@ -842,14 +848,43 @@ class ScenarioBuilder:
             "is_determinant": True,  # Phase 7: toujours déterminant
             "qualification_weight": 40,  # Phase 7: poids élevé (40% du score)
             "intent_mapping": {
-                "affirm": "Confirm_Time",  # Phase 7: vers Confirm_Time
+                "affirm": "Confirm_Time",       # Oui → client intéressé, confirme RDV
                 "interested": "Confirm_Time",
-                "question": "freestyle_answer" if self.freestyle_enabled else "Bye",
-                "deny": "Bye",
-                "not_interested": "Bye",
-                "unsure": "Bye",
-                "silence": "Bye",
-                "*": "Bye"
+                "deny": "retry_is_leads",       # Non → 1ère objection, tente relance
+                "not_interested": "retry_is_leads",
+                "callback": "Confirm_Time",     # Demande callback → traité comme intérêt
+                "unsure": "Confirm_Time",       # Hésitation → continue (comme affirm)
+                "question": "Confirm_Time",     # Après max_turns → continue
+                "objection": "Confirm_Time",    # Après max_turns → continue
+                "silence": "retry_is_leads",    # Silence → relance
+                "*": "retry_is_leads"
+            }
+        }
+
+        # Étape RETRY_IS_LEADS (Phase 7: conversion finale)
+        print_info("Création RETRY_IS_LEADS...")
+        retry_is_leads_msg = ask_text(
+            "Message RETRY_IS_LEADS (conversion finale)",
+            default="C'est dommage, vous êtes éligible et les conseils de nos experts valent vraiment le coup. Ça ne vous engage en rien. On se programme ce rappel ?"
+        )
+
+        self.scenario["steps"]["retry_is_leads"] = {
+            "message_text": retry_is_leads_msg,
+            "audio_type": "audio",
+            "voice": voice,
+            "barge_in": self.barge_in_default,
+            "timeout": 15,
+            "intent_mapping": {
+                "affirm": "Confirm_Time",       # Oui → client convaincu, confirme RDV
+                "interested": "Confirm_Time",
+                "deny": "bye_failed",           # Non → 2ème refus, échec
+                "not_interested": "bye_failed",
+                "callback": "Confirm_Time",     # Demande callback → traité comme acceptation
+                "unsure": "Confirm_Time",       # Hésitation → continue (comme affirm)
+                "question": "Confirm_Time",     # Après max_turns → continue
+                "objection": "Confirm_Time",    # Après max_turns → continue
+                "silence": "bye_failed",        # Silence → échec (2ème tentative)
+                "*": "bye_failed"
             }
         }
 
@@ -874,29 +909,28 @@ class ScenarioBuilder:
             }
         }
 
-        # Étape FREESTYLE_ANSWER (si activé)
-        if self.freestyle_enabled:
-            print_info("Création FREESTYLE_ANSWER...")
-            self.scenario["steps"]["freestyle_answer"] = {
-                "audio_type": "audio",  # Freestyle removed
-                "voice": voice,
-                "barge_in": True,
-                "timeout": 10,
-                "max_turns": self.freestyle_context.get("max_turns", 3),
-                "context": self.freestyle_context,
-                "intent_mapping": {
-                    "affirm": "question1",
-                    "interested": "question1",
-                    "question": "freestyle_answer",
-                    "deny": "retry",
-                    "*": "question1"
-                }
+        # Étape NOT_UNDERSTOOD (remplace freestyle_answer)
+        print_info("Création NOT_UNDERSTOOD...")
+        not_understood_msg = ask_text(
+            "Message NOT_UNDERSTOOD (fallback)",
+            default="Excusez-moi je n'ai pas bien compris, vous pourriez répéter ?"
+        )
+
+        self.scenario["steps"]["not_understood"] = {
+            "message_text": not_understood_msg,
+            "audio_type": "audio",
+            "voice": voice,
+            "barge_in": True,
+            "timeout": 10,
+            "intent_mapping": {
+                "*": "previous_step"  # Retourne à l'étape précédente
             }
+        }
 
         # Étape BYE (Phase 7: étape unique de fin)
         print_info("Création étape BYE...")
         bye_msg = ask_text(
-            "Message BYE (fin d'appel)",
+            "Message BYE (fin d'appel réussie)",
             default="Merci {{first_name}} et excellente journée !"
         )
 
@@ -907,6 +941,37 @@ class ScenarioBuilder:
             "barge_in": False,
             "timeout": 5,
             "result": "completed",  # Phase 7: qualification déterminée par scoring
+            "intent_mapping": {"*": "end"}
+        }
+
+        # Étape BYE_NO_ANSWER (Phase 7: fin d'appel - pas de réponse)
+        # Raccroche directement après 2 silences consécutifs (pas de message)
+        print_info("Création étape BYE_NO_ANSWER (raccrochage direct)...")
+
+        self.scenario["steps"]["bye_no_answer"] = {
+            "message_text": "",  # Pas de message, raccrochage direct
+            "audio_type": "none",  # Pas d'audio à jouer
+            "voice": voice,
+            "barge_in": False,
+            "timeout": 0,  # Raccrochage immédiat
+            "result": "no_answer",  # Phase 7: pas de réponse
+            "intent_mapping": {"*": "end"}
+        }
+
+        # Étape BYE_FAILED (Phase 7: fin d'appel échec)
+        print_info("Création étape BYE_FAILED...")
+        bye_failed_msg = ask_text(
+            "Message BYE_FAILED (fin d'appel échec)",
+            default="Très bien, c'est noté. Je vous souhaite une bonne journée et une bonne continuation. Au revoir."
+        )
+
+        self.scenario["steps"]["bye_failed"] = {
+            "message_text": bye_failed_msg,
+            "audio_type": "audio",
+            "voice": voice,
+            "barge_in": False,
+            "timeout": 5,
+            "result": "failed",  # Phase 7: échec qualification
             "intent_mapping": {"*": "end"}
         }
 
