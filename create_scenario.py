@@ -23,13 +23,17 @@ import re
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-# Import objections database
+# Import objections database (NOUVEAU SYSTÈME MODULAIRE)
 try:
-    from system.objections_db.objections_database import get_objections_by_theme
+    from system.objections_db import load_objections, list_available_themes
+    OBJECTIONS_SYSTEM_AVAILABLE = True
 except ImportError:
     import warnings
-    warnings.warn("objections_database not found", UserWarning)
-    def get_objections_by_theme(key):
+    warnings.warn("objections_db not found", UserWarning)
+    OBJECTIONS_SYSTEM_AVAILABLE = False
+    def load_objections(theme_file):
+        return []
+    def list_available_themes():
         return []
 
 # Couleurs terminal
@@ -149,7 +153,7 @@ class ScenarioBuilderV3:
                 "name": "",
                 "description": "",
                 "version": "3.0",
-                "thematique": "",
+                "theme_file": "",  # Nouveau système: theme_file au lieu de thematique
                 "voice": "",
                 "barge_in_default": True
             },
@@ -326,29 +330,53 @@ class ScenarioBuilderV3:
                     print_error("Format invalide. Utilisez des nombres séparés par des virgules (ex: 1,3)")
 
     def _ask_theme_for_objections(self):
-        """Sélection du thème pour la base d'objections"""
+        """Sélection du thème pour la base d'objections (NOUVEAU SYSTÈME MODULAIRE)"""
         print_header("🎯 THÈME POUR OBJECTIONS")
 
-        themes = ["finance", "crypto", "energie", "immobilier", "assurance", "generic"]
+        if not OBJECTIONS_SYSTEM_AVAILABLE:
+            print_warning("Système d'objections non disponible - utilisation thème par défaut")
+            self.theme = "objections_general"
+            self.scenario["metadata"]["theme_file"] = self.theme
+            return
 
-        print_info("Thèmes disponibles:")
-        for i, theme in enumerate(themes, 1):
-            print(f"  {i}) {theme}")
+        # Lister thématiques disponibles depuis system/objections_db/
+        available_themes = list_available_themes()
+
+        if not available_themes:
+            print_warning("Aucune thématique trouvée - utilisation 'objections_general'")
+            self.theme = "objections_general"
+            self.scenario["metadata"]["theme_file"] = self.theme
+            return
+
+        print_info("Thématiques disponibles (détectées automatiquement):")
+        for i, theme in enumerate(available_themes, 1):
+            # Afficher nom simplifié (sans "objections_")
+            display_name = theme.replace("objections_", "")
+            print(f"  {i}) {display_name} [{theme}]")
+
+        # Chercher index de general pour défaut
+        default_idx = 1
+        if "objections_general" in available_themes:
+            default_idx = available_themes.index("objections_general") + 1
 
         choice = ask_choice(
             "Quel thème pour la base d'objections ?",
-            themes,
-            default=len(themes)  # generic par défaut
+            [t.replace("objections_", "") for t in available_themes],
+            default=default_idx
         )
 
-        self.theme = themes[choice - 1]
-        self.scenario["metadata"]["thematique"] = self.theme
+        # Récupérer nom complet du fichier (avec "objections_")
+        self.theme = available_themes[choice - 1]
+        self.scenario["metadata"]["theme_file"] = self.theme
 
         print_success(f"Thème sélectionné: {self.theme}")
 
         # Vérifier nombre d'objections disponibles
-        objections = get_objections_by_theme(self.theme)
-        print_info(f"   {len(objections)} objections disponibles dans cette thématique")
+        try:
+            objections = load_objections(self.theme)
+            print_info(f"   {len(objections)} objections disponibles (general + thématique)")
+        except Exception as e:
+            print_warning(f"   Impossible de charger les objections: {e}")
 
     def _ask_barge_in_config(self):
         """Configuration barge-in (une seule question globale)"""

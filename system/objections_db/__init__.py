@@ -127,7 +127,8 @@ def list_available_themes() -> List[str]:
     theme_files = []
 
     for file in objections_dir.glob("objections_*.py"):
-        if file.name != "__init__.py":
+        # Exclure __init__.py et objections_database.py (ancien système)
+        if file.name != "__init__.py" and file.stem != "objections_database":
             theme_files.append(file.stem)  # stem = nom sans extension
 
     return sorted(theme_files)
