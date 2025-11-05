@@ -1619,7 +1619,7 @@ class RobotFreeSWITCH:
                     # Logique simple: si majorité de "affirm", c'est un LEAD
                     affirm_count = sum(1 for i in intents if i == "affirm")
                     if affirm_count >= len(intents) / 2:
-                        info["qualification_result"] = "LEAD"
+                        info["qualification_result"] = "LEADS"
                     else:
                         info["qualification_result"] = "NOT_INTERESTED"
 

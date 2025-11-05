@@ -207,11 +207,11 @@ def get_live_stats(
             )
         ).count()
 
-        # Résultats principaux
+        # Résultats principaux (3 status seulement)
         leads = db.query(Call).filter(
             and_(
                 Call.campaign_id == campaign_id,
-                Call.result == CallResult.LEAD
+                Call.result == CallResult.LEADS
             )
         ).count()
 
@@ -222,24 +222,18 @@ def get_live_stats(
             )
         ).count()
 
-        callbacks = db.query(Call).filter(
-            and_(
-                Call.campaign_id == campaign_id,
-                Call.result == CallResult.CALLBACK
-            )
-        ).count()
-
-        answering_machines = db.query(Call).filter(
-            and_(
-                Call.campaign_id == campaign_id,
-                Call.amd_result == "machine"
-            )
-        ).count()
-
         no_answer = db.query(Call).filter(
             and_(
                 Call.campaign_id == campaign_id,
                 Call.result == CallResult.NO_ANSWER
+            )
+        ).count()
+
+        # AMD stats (detection répondeur)
+        answering_machines = db.query(Call).filter(
+            and_(
+                Call.campaign_id == campaign_id,
+                Call.amd_result == "machine"
             )
         ).count()
 
@@ -296,7 +290,6 @@ def get_live_stats(
             "results": {
                 "leads": leads,
                 "not_interested": not_interested,
-                "callbacks": callbacks,
                 "answering_machines": answering_machines,
                 "no_answer": no_answer
             },
@@ -379,7 +372,7 @@ def get_campaign_timeline(
                 Call.campaign_id == campaign_id,
                 Call.created_at >= current_time,
                 Call.created_at < next_time,
-                Call.result == CallResult.LEAD
+                Call.result == CallResult.LEADS
             )
         ).count()
 
@@ -436,7 +429,7 @@ def get_system_stats(db: Session = Depends(get_db)) -> Dict[str, Any]:
     ).count()
 
     total_leads = db.query(Call).filter(
-        Call.result == CallResult.LEAD
+        Call.result == CallResult.LEADS
     ).count()
 
     if total_completed > 0:

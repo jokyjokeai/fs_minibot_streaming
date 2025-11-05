@@ -1,0 +1,188 @@
+{
+  "metadata": {
+    "name": "sfdgdfs",
+    "description": "sdfdsf",
+    "version": "3.0",
+    "theme_file": "objections_crypto",
+    "voice": "julie",
+    "barge_in_default": true,
+    "objective": "sdfdsf"
+  },
+  "variables": {
+    "first_name": "{{first_name}}",
+    "company_name": "sfdsf",
+    "agent_name": "fdsdf"
+  },
+  "steps": {
+    "hello": {
+      "message_text": "fgfeg",
+      "audio_file": "audio/julie/base/hello.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "max_autonomous_turns": 2,
+      "intent_mapping": {
+        "affirm": "q1",
+        "deny": "retry_hello",
+        "unsure": "q1",
+        "silence": "retry_silence",
+        "*": "retry_hello"
+      }
+    },
+    "retry_hello": {
+      "message_text": "dfgefg",
+      "audio_file": "audio/julie/base/retry_hello.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "max_autonomous_turns": 2,
+      "intent_mapping": {
+        "affirm": "q1",
+        "deny": "bye_failed",
+        "unsure": "q1",
+        "silence": "bye_failed",
+        "*": "bye_failed"
+      }
+    },
+    "retry_silence": {
+      "message_text": "fghfgh",
+      "audio_file": "audio/julie/base/retry_silence.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "max_autonomous_turns": 2,
+      "intent_mapping": {
+        "affirm": "q1",
+        "deny": "bye_failed",
+        "unsure": "q1",
+        "silence": "bye_no_answer",
+        "*": "q1"
+      }
+    },
+    "q1": {
+      "message_text": "tghgh",
+      "audio_file": "audio/julie/base/q1.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "max_autonomous_turns": 2,
+      "is_determinant": true,
+      "qualification_weight": 20,
+      "intent_mapping": {
+        "*": "is_leads"
+      }
+    },
+    "is_leads": {
+      "message_text": "fghfrgh",
+      "audio_file": "audio/julie/base/is_leads.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "max_autonomous_turns": 2,
+      "is_determinant": true,
+      "qualification_weight": 40,
+      "intent_mapping": {
+        "affirm": "confirm_time",
+        "deny": "retry_is_leads",
+        "unsure": "confirm_time",
+        "silence": "retry_is_leads",
+        "*": "retry_is_leads"
+      }
+    },
+    "retry_is_leads": {
+      "message_text": "dfghfghf",
+      "audio_file": "audio/julie/base/retry_is_leads.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "max_autonomous_turns": 2,
+      "intent_mapping": {
+        "affirm": "confirm_time",
+        "deny": "bye_failed",
+        "unsure": "confirm_time",
+        "silence": "bye_failed",
+        "*": "bye_failed"
+      }
+    },
+    "confirm_time": {
+      "message_text": "dfgdfh",
+      "audio_file": "audio/julie/base/confirm_time.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "max_autonomous_turns": 2,
+      "intent_mapping": {
+        "*": "bye"
+      }
+    },
+    "bye": {
+      "message_text": "dfbdfg",
+      "audio_file": "audio/julie/base/bye.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 5,
+      "result": "completed",
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+    "bye_no_answer": {
+      "message_text": "",
+      "audio_type": "none",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 0,
+      "result": "no_answer",
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+    "bye_failed": {
+      "message_text": "fhdfsh",
+      "audio_file": "audio/julie/base/bye_failed.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 5,
+      "result": "failed",
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+    "not_understood": {
+      "message_text": "fgbxfnxfgn",
+      "audio_file": "audio/julie/base/not_understood.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "*": "bye_failed"
+      }
+    },
+    "end": {
+      "message_text": "",
+      "audio_type": "none",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 0,
+      "result": "ended",
+      "intent_mapping": {}
+    }
+  },
+  "flow_summary": {},
+  "qualification_rules": {
+    "enabled": true,
+    "threshold": 60,
+    "max_score": 60,
+    "cumulative": true
+  }
+}

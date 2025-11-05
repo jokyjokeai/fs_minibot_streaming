@@ -355,7 +355,7 @@ class ScenarioManager:
         """
         Évalue la qualification d'un lead selon les règles du scénario.
 
-        Système BINAIRE : soit LEAD, soit NOT_INTERESTED.
+        Système simplifié à 3 status : LEADS, NOT_INTERESTED, NO_ANSWER.
 
         Args:
             scenario: Scénario chargé
@@ -419,9 +419,9 @@ class ScenarioManager:
                         all_required_met = False
                         break
 
-                # Si TOUTES les conditions sont remplies → LEAD
+                # Si TOUTES les conditions sont remplies → LEADS
                 if all_required_met:
-                    result["result"] = "lead"
+                    result["result"] = "leads"
                 else:
                     result["result"] = "not_interested"
 
@@ -434,7 +434,7 @@ class ScenarioManager:
             if deny_count > 0:
                 result["result"] = "not_interested"
             else:
-                result["result"] = "lead"
+                result["result"] = "leads"
 
         # Stocker les données de qualification
         result["qualification_data"]["qualifying_questions"] = list(qualifying_answers.keys())

@@ -392,8 +392,8 @@ class BatchCaller:
 
                 # Qualification result
                 if "qualification_result" in call_info:
-                    if call_info["qualification_result"] == "LEAD":
-                        call.result = CallResult.LEAD
+                    if call_info["qualification_result"] == "LEADS":
+                        call.result = CallResult.LEADS
                     else:
                         call.result = CallResult.NOT_INTERESTED
             else:

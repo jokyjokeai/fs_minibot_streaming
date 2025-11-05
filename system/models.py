@@ -53,16 +53,15 @@ class CallStatus(str, enum.Enum):
     RETRY = "retry"               # À réessayer
 
 class CallResult(str, enum.Enum):
-    """Résultat métier de l'appel"""
-    NEW = "new"                               # Nouveau contact (jamais appelé)
-    LEAD = "lead"                             # Lead qualifié (intéressé)
-    NOT_INTERESTED = "not_interested"         # Pas intéressé
-    CALLBACK = "callback"                     # Demande rappel
-    ANSWERING_MACHINE = "answering_machine"   # Répondeur détecté
-    NO_ANSWER = "no_answer"                   # Pas de réponse
-    WRONG_NUMBER = "wrong_number"             # Mauvais numéro
-    NOT_QUALIFIED = "not_qualified"           # Non qualifié
-    OTHER = "other"                           # Autre
+    """Résultat métier de l'appel - Simplifié à 3 status finaux"""
+    # Status techniques (temporaires)
+    NEW = "new"                      # Nouveau contact (jamais appelé)
+    CALLING = "calling"              # Appel en cours
+
+    # Status finaux (3 uniquement)
+    LEADS = "leads"                  # ✅ Lead qualifié (score >= threshold)
+    NOT_INTERESTED = "not_interested"  # ❌ Pas intéressé (score faible ou refus)
+    NO_ANSWER = "no_answer"          # 📞 À rappeler (silence/erreur/pas de réponse)
 
 class Sentiment(str, enum.Enum):
     """Sentiment détecté"""

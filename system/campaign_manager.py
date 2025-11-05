@@ -223,7 +223,7 @@ class CampaignManager:
 
                         if contact.blacklist or contact.opt_out:
                             call.status = CallStatus.CANCELLED
-                            call.result = CallResult.NOT_QUALIFIED
+                            call.result = CallResult.NOT_INTERESTED
                             call.notes = "Contact in blocklist"
                             db.commit()
                             continue
