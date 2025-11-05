@@ -474,15 +474,12 @@ class ScenarioBuilderV3:
             "timeout": 15,
             "max_autonomous_turns": 2,
             "intent_mapping": {
-                "affirm": "q1",
-                "interested": "q1",
-                "deny": "retry_hello",
-                "not_interested": "retry_hello",
-                "callback": "retry_hello",
-                "unsure": "q1",
-                "question": "q1",
-                "objection": "q1",
+                # Intents de base (Ollama NLP)
+                "affirm": "q1",         # Oui, d'accord, ok
+                "deny": "retry_hello",  # Non, pas intéressé
+                "unsure": "q1",         # Peut-être, je ne sais pas
                 "silence": "retry_silence",
+                # objection/question/concern gérés automatiquement par matcher
                 "*": "retry_hello"
             }
         }
@@ -499,14 +496,10 @@ class ScenarioBuilderV3:
             "timeout": 15,
             "max_autonomous_turns": 2,
             "intent_mapping": {
+                # Deuxième chance: si affirm → q1, sinon → bye_failed
                 "affirm": "q1",
-                "interested": "q1",
                 "deny": "bye_failed",
-                "not_interested": "bye_failed",
-                "callback": "bye_failed",
                 "unsure": "q1",
-                "question": "q1",
-                "objection": "q1",
                 "silence": "bye_failed",
                 "*": "bye_failed"
             }
@@ -525,14 +518,9 @@ class ScenarioBuilderV3:
             "max_autonomous_turns": 2,
             "intent_mapping": {
                 "affirm": "q1",
-                "interested": "q1",
                 "deny": "bye_failed",
-                "not_interested": "bye_failed",
-                "callback": "retry_hello",
                 "unsure": "q1",
-                "question": "q1",
-                "objection": "q1",
-                "silence": "bye_no_answer",
+                "silence": "bye_no_answer",  # 2ème silence → hangup
                 "*": "q1"
             }
         }
@@ -557,11 +545,8 @@ class ScenarioBuilderV3:
                 "is_determinant": is_determinant,
                 "qualification_weight": 20 if is_determinant else 10,
                 "intent_mapping": {
-                    "question": next_step,
-                    "objection": next_step,
-                    "unsure": next_step,
-                    "callback": next_step,
-                    "silence": next_step,
+                    # En mode agent autonome, toutes les réponses → prochaine étape
+                    # objection/question/concern gérés automatiquement par matcher
                     "*": next_step
                 }
             }
@@ -580,14 +565,10 @@ class ScenarioBuilderV3:
             "is_determinant": True,
             "qualification_weight": 40,
             "intent_mapping": {
+                # Proposition finale: affirm → confirm, deny → retry, autre → confirm
                 "affirm": "confirm_time",
-                "interested": "confirm_time",
                 "deny": "retry_is_leads",
-                "not_interested": "retry_is_leads",
-                "callback": "confirm_time",
                 "unsure": "confirm_time",
-                "question": "confirm_time",
-                "objection": "confirm_time",
                 "silence": "retry_is_leads",
                 "*": "retry_is_leads"
             }
@@ -605,14 +586,10 @@ class ScenarioBuilderV3:
             "timeout": 15,
             "max_autonomous_turns": 2,
             "intent_mapping": {
+                # Retry proposition: dernière chance
                 "affirm": "confirm_time",
-                "interested": "confirm_time",
                 "deny": "bye_failed",
-                "not_interested": "bye_failed",
-                "callback": "confirm_time",
                 "unsure": "confirm_time",
-                "question": "confirm_time",
-                "objection": "confirm_time",
                 "silence": "bye_failed",
                 "*": "bye_failed"
             }
