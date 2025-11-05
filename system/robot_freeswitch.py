@@ -1183,7 +1183,11 @@ class RobotFreeSWITCH:
             if "result" in step_config:
                 result = step_config["result"]
                 logger.info(f"[{call_uuid[:8]}] Scenario ended with result: {result}")
-                # Sauvegarder résultat en DB ici
+
+                # Sauvegarder résultat dans session pour récupération par batch_caller
+                if call_uuid in self.streaming_sessions:
+                    self.streaming_sessions[call_uuid]["final_result"] = result
+
                 break
 
             # MODE AGENT AUTONOME (Phase 6+)
@@ -1243,11 +1247,7 @@ class RobotFreeSWITCH:
 
                 current_step = next_step
 
-        # Évaluer qualification finale
-        qualification = self.scenario_manager.evaluate_qualification(scenario, call_history)
-        logger.info(f"[{call_uuid[:8]}] Qualification: {qualification['result']}")
-
-        # Fin du scénario
+        # Fin du scénario (result déjà sauvegardé dans streaming_sessions)
         self.hangup_call(call_uuid)
 
     def _handle_normal_step(self, call_uuid: str, step_config: Dict[str, Any], variables: Dict[str, Any]):
@@ -1609,18 +1609,22 @@ class RobotFreeSWITCH:
             if result_str and not result_str.startswith("-ERR"):
                 info["amd_result"] = result_str.strip()
 
-            # Qualification result (depuis metadata session)
+            # Qualification result (depuis final_result du scénario)
             if call_uuid in self.streaming_sessions:
                 session = self.streaming_sessions[call_uuid]
 
-                # Déterminer qualification basée sur intents
-                intents = session.get("intents", [])
-                if intents:
-                    # Logique simple: si majorité de "affirm", c'est un LEAD
-                    affirm_count = sum(1 for i in intents if i == "affirm")
-                    if affirm_count >= len(intents) / 2:
+                # Récupérer result du step final
+                final_result = session.get("final_result")
+                if final_result:
+                    # Mapper result → qualification_result pour batch_caller
+                    if final_result == "completed":
                         info["qualification_result"] = "LEADS"
+                    elif final_result == "failed":
+                        info["qualification_result"] = "NOT_INTERESTED"
+                    elif final_result == "no_answer":
+                        info["qualification_result"] = "NO_ANSWER"
                     else:
+                        # Fallback (ended, etc.)
                         info["qualification_result"] = "NOT_INTERESTED"
 
             return info if info else None

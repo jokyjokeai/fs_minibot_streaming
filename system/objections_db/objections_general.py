@@ -252,4 +252,20 @@ OBJECTIONS_DATABASE: List[ObjectionEntry] = [
         audio_path="general_derangez.wav",
         entry_type="faq"
     ),
+
+    # ─────────────────────────────────────────────────────────────────────
+    # RATTRAPAGE ABANDON
+    # ─────────────────────────────────────────────────────────────────────
+    ObjectionEntry(
+        keywords=[
+            "laissez tomber", "laisser tomber", "laisse tomber",
+            "arrêtez", "arrêter", "stop", "j'arrête",
+            "j'ai pas le temps", "plus le temps", "ça va pas le faire",
+            "plus intéressé", "je suis plus intéressé", "ça m'intéresse plus",
+            "je veux arrêter", "on arrête là", "terminé", "fini"
+        ],
+        response="C'est dommage, on avait bien avancé ! Si vous êtes éligible, vous pourrez bénéficier des conseils de notre expert, c'est sans engagement. On continue juste 2 minutes ?",
+        audio_path="retry_global.wav",
+        entry_type="objection"
+    ),
 ]

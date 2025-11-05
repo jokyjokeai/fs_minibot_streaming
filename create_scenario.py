@@ -206,10 +206,7 @@ class ScenarioBuilderV3:
         # 7. Construction de la structure
         self._build_all_steps()
 
-        # 8. Configuration qualification
-        self._ask_qualification_rules()
-
-        # 9. Sauvegarder
+        # 8. Sauvegarder (pas de qualification_rules, le flow décide)
         self._save_scenario()
 
         print_success(f"\n🎉 Scénario créé avec succès!")
@@ -528,11 +525,39 @@ class ScenarioBuilderV3:
         # ─────────────────────────────────────────────────────────────────
         # Q1, Q2, Q3... Qn (QUESTIONS DYNAMIQUES)
         # ─────────────────────────────────────────────────────────────────
+        print_info("\n📋 Configuration des questions qualifiantes")
+        print_info("Pour chaque question, indiquez si elle est DÉTERMINANTE")
+        print_info("(un refus élimine le lead) ou NON-DÉTERMINANTE (refus accepté)\n")
+
         for i in range(1, self.num_questions + 1):
             step_name = f"q{i}"
             next_step = f"q{i+1}" if i < self.num_questions else "is_leads"
 
-            is_determinant = i in self.determinant_questions
+            # Demander si déterminante
+            print(f"\n{'─'*60}")
+            print(f"Question Q{i}: {self.audio_files[step_name]['transcription'][:60]}...")
+            print("─"*60)
+            is_determinant = input(f"  Cette question est-elle DÉTERMINANTE (refus = élimination) ? (oui/non) : ").lower() == "oui"
+
+            # Générer intent_mapping selon déterminante
+            if is_determinant:
+                print_success("  ✅ Déterminante : Un refus → bye_failed")
+                intent_mapping = {
+                    "affirm": next_step,
+                    "deny": "bye_failed",     # Refus = éliminé
+                    "unsure": next_step,
+                    "silence": "retry_silence",
+                    "*": "bye_failed"
+                }
+            else:
+                print_info("  ℹ️  Non-déterminante : Toute réponse acceptée")
+                intent_mapping = {
+                    "affirm": next_step,
+                    "deny": next_step,        # Refus accepté
+                    "unsure": next_step,
+                    "silence": "retry_silence",
+                    "*": next_step
+                }
 
             steps[step_name] = {
                 "message_text": self.audio_files[step_name]["transcription"],
@@ -542,18 +567,36 @@ class ScenarioBuilderV3:
                 "barge_in": self.scenario["metadata"]["barge_in_default"],
                 "timeout": 15,
                 "max_autonomous_turns": 2,
-                "is_determinant": is_determinant,
-                "qualification_weight": 20 if is_determinant else 10,
-                "intent_mapping": {
-                    # En mode agent autonome, toutes les réponses → prochaine étape
-                    # objection/question gérés automatiquement par matcher
-                    "*": next_step
-                }
+                "intent_mapping": intent_mapping
             }
 
         # ─────────────────────────────────────────────────────────────────
         # IS_LEADS
         # ─────────────────────────────────────────────────────────────────
+        print(f"\n{'─'*60}")
+        print(f"Étape IS_LEADS: {self.audio_files['is_leads']['transcription'][:60]}...")
+        print("─"*60)
+        is_leads_determinant = input(f"  Cette étape est-elle DÉTERMINANTE (refus = élimination) ? (oui/non) : ").lower() == "oui"
+
+        if is_leads_determinant:
+            print_success("  ✅ Déterminante : Un refus → retry_is_leads (puis bye_failed)")
+            is_leads_mapping = {
+                "affirm": "confirm_time",
+                "deny": "retry_is_leads",
+                "unsure": "confirm_time",
+                "silence": "retry_is_leads",
+                "*": "retry_is_leads"
+            }
+        else:
+            print_info("  ℹ️  Non-déterminante : Toute réponse → confirm_time")
+            is_leads_mapping = {
+                "affirm": "confirm_time",
+                "deny": "confirm_time",
+                "unsure": "confirm_time",
+                "silence": "retry_is_leads",
+                "*": "confirm_time"
+            }
+
         steps["is_leads"] = {
             "message_text": self.audio_files["is_leads"]["transcription"],
             "audio_file": self.audio_files["is_leads"]["audio_path"],
@@ -562,16 +605,7 @@ class ScenarioBuilderV3:
             "barge_in": self.scenario["metadata"]["barge_in_default"],
             "timeout": 15,
             "max_autonomous_turns": 2,
-            "is_determinant": True,
-            "qualification_weight": 40,
-            "intent_mapping": {
-                # Proposition finale: affirm → confirm, deny → retry, autre → confirm
-                "affirm": "confirm_time",
-                "deny": "retry_is_leads",
-                "unsure": "confirm_time",
-                "silence": "retry_is_leads",
-                "*": "retry_is_leads"
-            }
+            "intent_mapping": is_leads_mapping
         }
 
         # ─────────────────────────────────────────────────────────────────
@@ -598,6 +632,26 @@ class ScenarioBuilderV3:
         # ─────────────────────────────────────────────────────────────────
         # CONFIRM_TIME
         # ─────────────────────────────────────────────────────────────────
+        print(f"\n{'─'*60}")
+        print(f"Étape CONFIRM_TIME: {self.audio_files['confirm_time']['transcription'][:60]}...")
+        print("─"*60)
+        confirm_determinant = input(f"  Cette étape est-elle DÉTERMINANTE (refus = élimination) ? (oui/non) : ").lower() == "oui"
+
+        if confirm_determinant:
+            print_success("  ✅ Déterminante : Un refus → bye_failed")
+            confirm_mapping = {
+                "affirm": "bye",
+                "deny": "bye_failed",
+                "unsure": "bye",
+                "silence": "bye_failed",
+                "*": "bye"
+            }
+        else:
+            print_info("  ℹ️  Non-déterminante : Toute réponse → bye")
+            confirm_mapping = {
+                "*": "bye"
+            }
+
         steps["confirm_time"] = {
             "message_text": self.audio_files["confirm_time"]["transcription"],
             "audio_file": self.audio_files["confirm_time"]["audio_path"],
@@ -606,9 +660,7 @@ class ScenarioBuilderV3:
             "barge_in": self.scenario["metadata"]["barge_in_default"],
             "timeout": 15,
             "max_autonomous_turns": 2,
-            "intent_mapping": {
-                "*": "bye"
-            }
+            "intent_mapping": confirm_mapping
         }
 
         # ─────────────────────────────────────────────────────────────────
@@ -689,40 +741,6 @@ class ScenarioBuilderV3:
         self.scenario["steps"] = steps
         print_success(f"Structure créée avec {len(steps)} étapes")
 
-    def _ask_qualification_rules(self):
-        """Configuration des règles de qualification (auto-calcul)"""
-        print_header("📊 RÈGLES DE QUALIFICATION")
-
-        print_info("Calcul automatique des poids:")
-        print_info(f"  - Questions déterminantes (Q{', Q'.join(map(str, self.determinant_questions))}): 20 points chacune")
-        print_info(f"  - Questions non-déterminantes: 10 points chacune")
-        print_info(f"  - is_leads (toujours déterminant): 40 points")
-
-        # Calcul total
-        determinant_score = len(self.determinant_questions) * 20
-        non_determinant_score = (self.num_questions - len(self.determinant_questions)) * 10
-        is_leads_score = 40
-        total_possible = determinant_score + non_determinant_score + is_leads_score
-
-        print_info(f"\n  Total points possible: {total_possible}")
-
-        # Seuil de qualification
-        default_threshold = 70
-        threshold = ask_int(
-            f"Seuil de qualification (% de score requis)",
-            default=default_threshold,
-            min_val=0,
-            max_val=100
-        )
-
-        self.scenario["qualification_rules"] = {
-            "enabled": True,
-            "threshold": threshold,
-            "max_score": total_possible,
-            "cumulative": True
-        }
-
-        print_success(f"Seuil fixé à {threshold}% ({threshold * total_possible / 100:.0f} points sur {total_possible})")
 
     def _save_scenario(self):
         """Sauvegarde le scénario dans scenarios/"""
