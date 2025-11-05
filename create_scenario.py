@@ -559,7 +559,7 @@ class ScenarioBuilderV3:
                 "affirm": "confirm_time",
                 "deny": "retry_is_leads",
                 "unsure": "confirm_time",
-                "silence": "retry_is_leads",
+                "silence": "retry_silence",  # Silence = problème technique, pas refus
                 "*": "retry_is_leads"
             }
         else:
@@ -568,7 +568,7 @@ class ScenarioBuilderV3:
                 "affirm": "confirm_time",
                 "deny": "confirm_time",
                 "unsure": "confirm_time",
-                "silence": "retry_is_leads",
+                "silence": "retry_silence",  # Silence → retry quand même
                 "*": "confirm_time"
             }
 
@@ -599,7 +599,7 @@ class ScenarioBuilderV3:
                 "affirm": "confirm_time",
                 "deny": "bye_failed",
                 "unsure": "confirm_time",
-                "silence": "bye_failed",
+                "silence": "retry_silence",  # Silence = problème technique, pas refus
                 "*": "bye_failed"
             }
         }
@@ -618,12 +618,16 @@ class ScenarioBuilderV3:
                 "affirm": "bye",
                 "deny": "bye_failed",
                 "unsure": "bye",
-                "silence": "bye_failed",
+                "silence": "retry_silence",  # Silence = problème technique, pas refus
                 "*": "bye"
             }
         else:
             print_info("  ℹ️  Non-déterminante : Toute réponse → bye")
             confirm_mapping = {
+                "affirm": "bye",
+                "deny": "bye",
+                "unsure": "bye",
+                "silence": "retry_silence",  # Silence → retry quand même
                 "*": "bye"
             }
 
