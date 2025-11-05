@@ -299,32 +299,7 @@ class ScenarioBuilderV3:
         )
 
         print_success(f"Le scénario aura {self.num_questions} questions (Q1 à Q{self.num_questions})")
-
-        # Questions déterminantes
-        print_info("\n💡 Questions déterminantes = questions importantes pour qualifier le lead")
-        print_info("   Ex: 'Êtes-vous propriétaire ?' pourrait être déterminante pour un scénario énergie")
-
-        if ask_yes_no("\nCertaines questions sont-elles déterminantes pour qualifier le lead ?", default=True):
-            print_info(f"Indiquez les numéros des questions déterminantes (séparés par des virgules)")
-            print_info(f"Ex: 1,3 pour Q1 et Q3 déterminantes")
-
-            while True:
-                response = input(f"Questions déterminantes [1-{self.num_questions}]: ").strip()
-                if not response:
-                    print_warning("Aucune question déterminante définie")
-                    break
-
-                try:
-                    indices = [int(x.strip()) for x in response.split(',')]
-                    # Valider indices
-                    if all(1 <= i <= self.num_questions for i in indices):
-                        self.determinant_questions = indices
-                        print_success(f"Questions déterminantes: Q{', Q'.join(map(str, indices))}")
-                        break
-                    else:
-                        print_error(f"Les numéros doivent être entre 1 et {self.num_questions}")
-                except ValueError:
-                    print_error("Format invalide. Utilisez des nombres séparés par des virgules (ex: 1,3)")
+        print_info("\n💡 Vous configurerez si chaque question est déterminante après l'enregistrement audio")
 
     def _ask_theme_for_objections(self):
         """Sélection du thème pour la base d'objections (NOUVEAU SYSTÈME MODULAIRE)"""
