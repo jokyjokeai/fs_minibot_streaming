@@ -479,7 +479,7 @@ class ScenarioBuilderV3:
                 "deny": "retry_hello",  # Non, pas intéressé
                 "unsure": "q1",         # Peut-être, je ne sais pas
                 "silence": "retry_silence",
-                # objection/question/concern gérés automatiquement par matcher
+                # objection/question gérés automatiquement par matcher
                 "*": "retry_hello"
             }
         }
@@ -546,7 +546,7 @@ class ScenarioBuilderV3:
                 "qualification_weight": 20 if is_determinant else 10,
                 "intent_mapping": {
                     # En mode agent autonome, toutes les réponses → prochaine étape
-                    # objection/question/concern gérés automatiquement par matcher
+                    # objection/question gérés automatiquement par matcher
                     "*": next_step
                 }
             }

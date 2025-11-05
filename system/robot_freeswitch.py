@@ -938,7 +938,7 @@ class RobotFreeSWITCH:
             session["intents"].append(intent)
 
             # 4. Vérifier si c'est une objection/question
-            if intent in ["objection", "question", "concern", "unsure"]:
+            if intent in ["objection", "question", "unsure"]:
                 logger.info(f"[{call_uuid[:8]}] 🎯 Objection/Question détectée → Matching...")
 
                 # a. Matcher objection (50ms rapide)
