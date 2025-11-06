@@ -97,8 +97,11 @@ class RobotFreeSWITCH:
         """Initialise le robot FreeSWITCH."""
         logger.info("Initializing RobotFreeSWITCH...")
 
-        # Connexion ESL
-        self.esl_conn = None
+        # Connexions ESL (2 connexions séparées)
+        # - esl_conn_events: Pour recevoir événements (bloquante dans start())
+        # - esl_conn_api: Pour envoyer commandes API (originate, uuid_*, etc.)
+        self.esl_conn_events = None
+        self.esl_conn_api = None
         self.running = False
 
         # État des appels (architecture identique à robot_ari_hybrid)
@@ -229,7 +232,7 @@ class RobotFreeSWITCH:
             self.scenario_manager = None
 
     def connect(self):
-        """Établit la connexion ESL avec FreeSWITCH"""
+        """Établit les connexions ESL avec FreeSWITCH (2 connexions distinctes)"""
         logger.info("📡 Connecting to FreeSWITCH ESL...")
 
         if not ESL_AVAILABLE:
@@ -237,23 +240,36 @@ class RobotFreeSWITCH:
             return False
 
         try:
-            # Connexion ESL (équivalent de WebSocket ARI)
-            self.esl_conn = ESLconnection(
+            # Connexion #1: Pour recevoir les événements (bloquante dans start())
+            self.esl_conn_events = ESLconnection(
                 config.FREESWITCH_HOST,
                 str(config.FREESWITCH_ESL_PORT),
                 config.FREESWITCH_ESL_PASSWORD
             )
 
-            if self.esl_conn.connected():
-                logger.info("✅ Connected to FreeSWITCH ESL")
-
-                # S'abonner aux événements (équivalent de ws.on_message)
-                self.esl_conn.events("plain", "CHANNEL_CREATE CHANNEL_ANSWER CHANNEL_HANGUP CHANNEL_DESTROY")
-
-                return True
-            else:
-                logger.error("❌ Failed to connect to FreeSWITCH ESL")
+            if not self.esl_conn_events.connected():
+                logger.error("❌ Failed to connect ESL events connection")
                 return False
+
+            # S'abonner aux événements
+            self.esl_conn_events.events("plain", "CHANNEL_CREATE CHANNEL_ANSWER CHANNEL_HANGUP CHANNEL_DESTROY")
+            logger.info("✅ ESL events connection established")
+
+            # Connexion #2: Pour envoyer les commandes API (non-bloquante)
+            self.esl_conn_api = ESLconnection(
+                config.FREESWITCH_HOST,
+                str(config.FREESWITCH_ESL_PORT),
+                config.FREESWITCH_ESL_PASSWORD
+            )
+
+            if not self.esl_conn_api.connected():
+                logger.error("❌ Failed to connect ESL API connection")
+                return False
+
+            logger.info("✅ ESL API connection established")
+            logger.info("✅ Connected to FreeSWITCH ESL (2 connections)")
+
+            return True
 
         except Exception as e:
             logger.error(f"❌ ESL connection error: {e}", exc_info=True)
@@ -280,7 +296,8 @@ class RobotFreeSWITCH:
         try:
             while self.running:
                 # Recevoir événement (bloquant avec timeout)
-                event = self.esl_conn.recvEvent()
+                # Utilise esl_conn_events (connexion dédiée aux événements)
+                event = self.esl_conn_events.recvEvent()
 
                 if event:
                     self.handle_event(event)
@@ -304,10 +321,13 @@ class RobotFreeSWITCH:
             if active_count > 0:
                 logger.info(f"⏳ Waiting for {active_count} active calls to finish...")
 
-        # Fermer connexion ESL
-        if self.esl_conn and self.esl_conn.connected():
+        # Fermer les 2 connexions ESL
+        if self.esl_conn_events and self.esl_conn_events.connected():
             # Note: ESL n'a pas de méthode disconnect() explicite
-            self.esl_conn = None
+            self.esl_conn_events = None
+
+        if self.esl_conn_api and self.esl_conn_api.connected():
+            self.esl_conn_api = None
 
         logger.info("✅ RobotFreeSWITCH stopped")
 
@@ -429,8 +449,8 @@ class RobotFreeSWITCH:
         """
         logger.info(f"Originating call to {phone_number} (campaign {campaign_id}, scenario {scenario}, retry {retry_count})")
 
-        if not self.esl_conn or not self.esl_conn.connected():
-            logger.error("❌ ESL not connected")
+        if not self.esl_conn_api or not self.esl_conn_api.connected():
+            logger.error("❌ ESL API not connected")
             return None
 
         try:
@@ -469,7 +489,8 @@ class RobotFreeSWITCH:
             # originate <dial_string> &park() - park() pour garder le canal ouvert
             cmd = f"originate {dial_string} &park()"
 
-            result = self.esl_conn.api(cmd)
+            # Utiliser esl_conn_api (connexion dédiée aux commandes API)
+            result = self.esl_conn_api.api(cmd)
             result_str = result.getBody() if hasattr(result, 'getBody') else str(result)
 
             # Extraire UUID de la réponse (+OK uuid)
@@ -527,13 +548,15 @@ class RobotFreeSWITCH:
 
             # Démarrer background audio loop (bruit de fond)
             # Note: Le fichier peut être configuré par scénario ou via audio/background/default.wav
-            self._start_background_audio(call_uuid)
+            # TEMPORAIREMENT DÉSACTIVÉ pour tester si c'est ça qui bloque l'audio principal
+            # time.sleep(0.5)
+            # self._start_background_audio(call_uuid)
 
             # Exécuter scénario (nouveau système JSON via ScenarioManager)
             if self.scenario_manager:
                 scenario_data = self.scenario_manager.load_scenario(scenario)
                 if scenario_data:
-                    self._execute_scenario(call_uuid, scenario, campaign_id)
+                    self._execute_scenario_json(call_uuid, scenario, campaign_id)
                 else:
                     logger.error(f"[{call_uuid[:8]}] Scenario '{scenario}' not found in ScenarioManager")
                     self.hangup_call(call_uuid)
@@ -588,7 +611,7 @@ class RobotFreeSWITCH:
             background_audio_path: Chemin vers le fichier audio de fond (optionnel)
                                    Si None, cherche dans audio/background/default.wav
         """
-        if not self.esl_conn or not self.esl_conn.connected():
+        if not self.esl_conn_api or not self.esl_conn_api.connected():
             logger.warning(f"[{call_uuid[:8]}] Cannot start background audio: ESL not connected")
             return
 
@@ -607,7 +630,7 @@ class RobotFreeSWITCH:
             # Commande uuid_displace avec loop infini (limit=0) et mixage (mux)
             # Syntaxe: uuid_displace <uuid> start <file> <limit> [mux]
             cmd = f"uuid_displace {call_uuid} start {background_audio_path} 0 mux"
-            result = self.esl_conn.api(cmd)
+            result = self.esl_conn_api.api(cmd)
 
             result_str = result.getBody() if hasattr(result, 'getBody') else str(result)
 
@@ -627,7 +650,7 @@ class RobotFreeSWITCH:
         Args:
             call_uuid: UUID de l'appel
         """
-        if not self.esl_conn or not self.esl_conn.connected():
+        if not self.esl_conn_api or not self.esl_conn_api.connected():
             return
 
         # Vérifier si background audio était actif
@@ -637,7 +660,7 @@ class RobotFreeSWITCH:
         try:
             # Commande uuid_displace stop
             cmd = f"uuid_displace {call_uuid} stop"
-            result = self.esl_conn.api(cmd)
+            result = self.esl_conn_api.api(cmd)
 
             result_str = result.getBody() if hasattr(result, 'getBody') else str(result)
 
@@ -656,28 +679,35 @@ class RobotFreeSWITCH:
 
     def _enable_audio_fork(self, call_uuid: str):
         """Active le streaming audio vers le serveur WebSocket"""
-        if not self.esl_conn:
-            return
+        # TODO: uuid_audio_fork n'existe pas dans FreeSWITCH standard
+        # Options pour streaming audio:
+        # 1. mod_audio_fork (nécessite compilation custom)
+        # 2. mod_avmd + mod_event_socket
+        # 3. uuid_record + transcription post-call
+        #
+        # Pour l'instant: mode non-streaming (record + transcribe après)
+        logger.debug(f"[{call_uuid[:8]}] Audio fork disabled (not supported yet)")
+        return
 
-        try:
-            # Forker l'audio vers WebSocket (mod_audio_fork ou uuid_audio_fork)
-            websocket_url = f"ws://127.0.0.1:8080/stream/{call_uuid}"
-
-            # Commande FreeSWITCH pour forker audio
-            # Note: Nécessite mod_audio_fork compilé dans FreeSWITCH
-            cmd = f"uuid_audio_fork {call_uuid} start {websocket_url}"
-            result = self.esl_conn.api(cmd)
-
-            result_str = result.getBody() if hasattr(result, 'getBody') else str(result)
-
-            if "+OK" in result_str or "success" in result_str.lower():
-                logger.info(f"[{call_uuid[:8]}] ✅ Audio fork enabled → WebSocket")
-            else:
-                logger.warning(f"[{call_uuid[:8]}] ⚠️ Audio fork failed: {result_str}")
-                logger.warning(f"[{call_uuid[:8]}] Falling back to non-streaming mode")
-
-        except Exception as e:
-            logger.error(f"[{call_uuid[:8]}] Audio fork error: {e}")
+        # Code original commenté (nécessite mod_audio_fork custom)
+        # if not self.esl_conn_api:
+        #     return
+        #
+        # try:
+        #     websocket_url = f"ws://127.0.0.1:8080/stream/{call_uuid}"
+        #     cmd = f"uuid_audio_fork {call_uuid} start {websocket_url}"
+        #     result = self.esl_conn_api.api(cmd)
+        #
+        #     result_str = result.getBody() if hasattr(result, 'getBody') else str(result)
+        #
+        #     if "+OK" in result_str or "success" in result_str.lower():
+        #         logger.info(f"[{call_uuid[:8]}] ✅ Audio fork enabled → WebSocket")
+        #     else:
+        #         logger.warning(f"[{call_uuid[:8]}] ⚠️ Audio fork failed: {result_str}")
+        #         logger.warning(f"[{call_uuid[:8]}] Falling back to non-streaming mode")
+        #
+        # except Exception as e:
+        #     logger.error(f"[{call_uuid[:8]}] Audio fork error: {e}")
 
     def _handle_streaming_event(self, event_data: Dict[str, Any]):
         """
@@ -733,13 +763,13 @@ class RobotFreeSWITCH:
 
     def _stop_audio(self, call_uuid: str):
         """Arrête l'audio en cours (pour barge-in)"""
-        if not self.esl_conn:
+        if not self.esl_conn_api:
             return
 
         try:
             # uuid_break arrête le playback en cours
             cmd = f"uuid_break {call_uuid}"
-            self.esl_conn.api(cmd)
+            self.esl_conn_api.api(cmd)
 
             logger.debug(f"[{call_uuid[:8]}] ⏹️ Audio stopped (barge-in)")
 
@@ -754,84 +784,8 @@ class RobotFreeSWITCH:
 
     # _play_fallback_freestyle removed - using pre-recorded audio only
 
-    def _execute_scenario(self, call_uuid: str, scenario_name: str, campaign_id: str):
-        """
-        Exécute un scénario conversationnel (utilise ScenarioManager).
-
-        Args:
-            call_uuid: UUID de l'appel
-            scenario_name: Nom du scénario
-            campaign_id: ID campagne
-        """
-        logger.info(f"[{call_uuid[:8]}] Executing scenario: {scenario_name}")
-
-        # Charger le scénario via ScenarioManager
-        scenario = self.scenario_manager.load_scenario(scenario_name)
-        if not scenario:
-            logger.error(f"[{call_uuid[:8]}] Scenario not found")
-            return
-
-        # Commencer à la première étape
-        current_step = scenario.get("start_step", "HELLO")
-
-        # Loop sur les étapes
-        max_iterations = 50  # Sécurité contre boucles infinies
-        iteration = 0
-
-        while current_step and iteration < max_iterations:
-            iteration += 1
-
-            # Récupérer config étape
-            step_config = scenario.get("steps", {}).get(current_step)
-            if not step_config:
-                logger.error(f"[{call_uuid[:8]}] Step '{current_step}' not found")
-                break
-
-            logger.info(f"[{call_uuid[:8]}] Step: {current_step}")
-            self.streaming_sessions[call_uuid]["current_step"] = current_step
-
-            # 1. Jouer audio
-            audio_file = step_config.get("audio")
-            if audio_file:
-                audio_path = Path(config.AUDIO_FILES_PATH) / audio_file
-                if not self._play_audio(call_uuid, str(audio_path)):
-                    logger.error(f"[{call_uuid[:8]}] Failed to play audio")
-                    break
-
-            # 2. Écouter réponse si attendue
-            if step_config.get("expect_response", True):
-                timeout = step_config.get("timeout", 10)
-                transcription = self._listen_for_response(call_uuid, timeout)
-
-                # 3. Analyser intent
-                if transcription and self.nlp_service:
-                    intent = self._analyze_intent(transcription, step_config)
-                    logger.info(f"[{call_uuid[:8]}] Intent: {intent}")
-
-                    # Sauvegarder
-                    self.streaming_sessions[call_uuid]["transcriptions"].append(transcription)
-                    self.streaming_sessions[call_uuid]["intents"].append(intent)
-
-                    # 4. Brancher vers étape suivante
-                    next_step = step_config.get("next", {}).get(intent)
-                    if not next_step:
-                        next_step = step_config.get("next", {}).get("default")
-
-                    current_step = next_step
-                else:
-                    # Pas de réponse ou pas de NLP
-                    current_step = step_config.get("next", {}).get("silence")
-            else:
-                # Pas de réponse attendue, next direct
-                current_step = step_config.get("next")
-
-            # Si étape terminale, sortir
-            if current_step in ["BYE_SUCCESS", "BYE_FAILED", None]:
-                logger.info(f"[{call_uuid[:8]}] Scenario ended at: {current_step}")
-                break
-
-        # Fin du scénario
-        self.hangup_call(call_uuid)
+    # _execute_scenario() removed - replaced by _execute_scenario_json()
+    # Old version used "audio" key instead of "audio_file" and didn't support new JSON format
 
     def _execute_autonomous_step(
         self,
@@ -1162,7 +1116,9 @@ class RobotFreeSWITCH:
                 self.hangup_call(call_uuid)
                 return
         else:
-            current_step = "intro"  # Convention: toujours commencer par "intro"
+            # Utiliser start_step du scénario ou "hello" par défaut
+            metadata = scenario.get("metadata", {})
+            current_step = metadata.get("start_step") or scenario.get("start_step", "hello")
 
         # Loop sur les étapes
         max_iterations = 50
@@ -1272,15 +1228,17 @@ class RobotFreeSWITCH:
             # Audio pré-enregistré
             audio_filename = step_config.get("audio_file")
             if audio_filename:
-                # Récupérer voix du scénario
-                if call_uuid in self.streaming_sessions:
-                    scenario = self.streaming_sessions[call_uuid].get("scenario", {})
-                    voice = scenario.get("voice", config.DEFAULT_VOICE)
+                # Si chemin absolu, utiliser tel quel (pour compatibilité FreeSWITCH)
+                if audio_filename.startswith("/"):
+                    audio_file = audio_filename
                 else:
-                    voice = config.DEFAULT_VOICE
-
-                # Fichiers de base dans audio/{voice}/base/
-                audio_file = str(config.get_audio_path(voice, "base", audio_filename))
+                    # Sinon, construire le chemin complet
+                    if call_uuid in self.streaming_sessions:
+                        scenario = self.streaming_sessions[call_uuid].get("scenario", {})
+                        voice = scenario.get("voice", config.DEFAULT_VOICE)
+                    else:
+                        voice = config.DEFAULT_VOICE
+                    audio_file = str(config.get_audio_path(voice, "base", audio_filename))
         elif audio_type == "tts" or audio_type == "tts_cloned":
             # TTS removed - log error
             logger.error(f"[{call_uuid[:8]}] ❌ TTS audio_type no longer supported. Use 'audio' type with pre-recorded files.")
@@ -1326,16 +1284,17 @@ class RobotFreeSWITCH:
         Returns:
             True si lecture complète OK, False si interrompu par barge-in ou erreur
         """
-        if not self.esl_conn:
+        if not self.esl_conn_api:
             return False
 
         try:
             # Réinitialiser flag barge-in
             self.barge_in_active[call_uuid] = False
 
-            # Commande ESL uuid_playback (non-bloquante)
-            cmd = f"uuid_playback {call_uuid} {audio_file}"
-            result = self.esl_conn.api(cmd)
+            # Commande ESL uuid_broadcast pour playback (non-bloquante)
+            # Syntaxe: uuid_broadcast <uuid> <path> [aleg|bleg|both]
+            cmd = f"uuid_broadcast {call_uuid} {audio_file} aleg"
+            result = self.esl_conn_api.api(cmd)
 
             result_str = result.getBody() if hasattr(result, 'getBody') else str(result)
 
@@ -1431,14 +1390,14 @@ class RobotFreeSWITCH:
 
                 # uuid_record pour capturer audio
                 cmd = f"uuid_record {call_uuid} start {temp_file}"
-                self.esl_conn.api(cmd)
+                self.esl_conn_api.api(cmd)
 
                 # Attendre
                 time.sleep(timeout)
 
                 # Arrêter enregistrement
                 cmd = f"uuid_record {call_uuid} stop {temp_file}"
-                self.esl_conn.api(cmd)
+                self.esl_conn_api.api(cmd)
 
                 # Transcrire avec Vosk
                 result = self.stt_service.transcribe_file(temp_file)
@@ -1482,7 +1441,7 @@ class RobotFreeSWITCH:
 
     def hangup_call(self, call_uuid: str):
         """Raccroche un appel (équivalent DELETE /channels en ARI)"""
-        if not self.esl_conn:
+        if not self.esl_conn_api:
             return
 
         try:
@@ -1490,7 +1449,7 @@ class RobotFreeSWITCH:
             self._stop_background_audio(call_uuid)
 
             cmd = f"uuid_kill {call_uuid}"
-            self.esl_conn.api(cmd)
+            self.esl_conn_api.api(cmd)
             logger.info(f"[{call_uuid[:8]}] Call hung up")
 
         except Exception as e:
@@ -1501,18 +1460,20 @@ class RobotFreeSWITCH:
         try:
             db = SessionLocal()
 
-            call = Call(
-                uuid=call_uuid,
-                phone_number=phone_number,
-                campaign_id=int(campaign_id) if campaign_id != "default" else None,
-                status="in_progress",
-                started_at=datetime.now(),
-                scenario=scenario
-            )
+            # TODO: Trouver ou créer le contact_id d'abord
+            # Pour l'instant, skip la création - sera créé par CampaignManager avec contact_id
+            logger.debug(f"[{call_uuid[:8]}] Call record creation skipped (no contact_id)")
 
-            db.add(call)
-            db.commit()
-            logger.debug(f"[{call_uuid[:8]}] Call record created")
+            # call = Call(
+            #     uuid=call_uuid,
+            #     contact_id=???,  # REQUIRED - besoin de trouver/créer contact d'abord
+            #     campaign_id=int(campaign_id) if campaign_id != "default" else None,
+            #     status=CallStatus.IN_PROGRESS,
+            #     started_at=datetime.now()
+            # )
+            #
+            # db.add(call)
+            # db.commit()
 
         except Exception as e:
             logger.error(f"[{call_uuid[:8]}] Failed to create call record: {e}")
@@ -1556,7 +1517,8 @@ class RobotFreeSWITCH:
         with self.call_lock:
             return {
                 "running": self.running,
-                "esl_connected": self.esl_conn and self.esl_conn.connected() if self.esl_conn else False,
+                "esl_connected": (self.esl_conn_api and self.esl_conn_api.connected() and
+                                  self.esl_conn_events and self.esl_conn_events.connected()),
                 "active_calls": len(self.active_calls),
                 "active_calls_list": list(self.active_calls.keys()),
                 "streaming_sessions": len(self.streaming_sessions),
@@ -1588,7 +1550,7 @@ class RobotFreeSWITCH:
         Returns:
             Dict avec infos de l'appel ou None
         """
-        if not self.esl_conn or not self.esl_conn.connected():
+        if not self.esl_conn_api or not self.esl_conn_api.connected():
             return None
 
         try:
@@ -1597,14 +1559,14 @@ class RobotFreeSWITCH:
 
             # Hangup cause
             cmd = f"uuid_getvar {call_uuid} hangup_cause"
-            result = self.esl_conn.api(cmd)
+            result = self.esl_conn_api.api(cmd)
             result_str = result.getBody() if hasattr(result, 'getBody') else str(result)
             if result_str and not result_str.startswith("-ERR"):
                 info["hangup_cause"] = result_str.strip()
 
             # AMD result
             cmd = f"uuid_getvar {call_uuid} amd_result"
-            result = self.esl_conn.api(cmd)
+            result = self.esl_conn_api.api(cmd)
             result_str = result.getBody() if hasattr(result, 'getBody') else str(result)
             if result_str and not result_str.startswith("-ERR"):
                 info["amd_result"] = result_str.strip()

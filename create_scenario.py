@@ -644,7 +644,7 @@ class ScenarioBuilderV3:
                 "affirm": "q1",
                 "deny": "bye_failed",
                 "unsure": "q1",
-                "silence": "bye_no_answer",  # 2ème silence → hangup
+                "silence": "end",  # 2ème silence → hangup direct
                 "*": "q1"
             }
         }
@@ -811,19 +811,8 @@ class ScenarioBuilderV3:
         }
 
         # ─────────────────────────────────────────────────────────────────
-        # BYE_NO_ANSWER (pas d'audio)
+        # BYE_NO_ANSWER supprimé - redirection directe vers "end" maintenant
         # ─────────────────────────────────────────────────────────────────
-        steps["bye_no_answer"] = {
-            "message_text": "",
-            "audio_type": "none",
-            "voice": self.voice_name,
-            "barge_in": False,
-            "timeout": 0,
-            "result": "no_answer",
-            "intent_mapping": {
-                "*": "end"
-            }
-        }
 
         # ─────────────────────────────────────────────────────────────────
         # BYE_FAILED

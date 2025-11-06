@@ -169,12 +169,20 @@ class ScenarioManager:
         Returns:
             True si valide, False sinon
         """
-        required_fields = ["name", "steps"]
+        # Support 2 formats:
+        # - Ancien: {"name": "...", "steps": {...}}
+        # - Nouveau: {"metadata": {"name": "..."}, "steps": {...}}
 
-        for field in required_fields:
-            if field not in scenario:
-                logger.error(f"Missing required field: {field}")
-                return False
+        # Vérifier "name" - soit à la racine, soit dans metadata
+        has_name = "name" in scenario or ("metadata" in scenario and "name" in scenario.get("metadata", {}))
+        if not has_name:
+            logger.error(f"Missing required field: name (either at root or in metadata)")
+            return False
+
+        # Vérifier "steps"
+        if "steps" not in scenario:
+            logger.error(f"Missing required field: steps")
+            return False
 
         # Valider steps
         if not isinstance(scenario["steps"], dict) or len(scenario["steps"]) == 0:
@@ -210,6 +218,10 @@ class ScenarioManager:
 
         # Valider chaque step
         for step_name, step_config in scenario["steps"].items():
+            # Skip validation pour step "end" (juste pour raccrocher)
+            if step_name == "end":
+                continue
+
             # audio_type et intent_mapping toujours requis
             required_step_fields = ["audio_type", "intent_mapping"]
 
@@ -223,8 +235,10 @@ class ScenarioManager:
                 logger.error(f"Step '{step_name}' missing required field: message_text")
                 return False
 
-            # Valider audio_type (freestyle removed in v3)
-            valid_audio_types = ["audio", "tts", "tts_cloned"]
+            # Valider audio_type (v3: TTS removed, only pre-recorded audio)
+            # "audio" = pre-recorded audio file
+            # "none" = no audio (for end steps)
+            valid_audio_types = ["audio", "none"]
             if step_config["audio_type"] not in valid_audio_types:
                 logger.error(f"Step '{step_name}' has invalid audio_type")
                 return False
@@ -234,18 +248,7 @@ class ScenarioManager:
                 logger.error(f"Step '{step_name}' audio type but no audio_file")
                 return False
 
-            # Si TTS, vérifier voice
-            if step_config["audio_type"] == "tts" and "voice" not in step_config:
-                logger.error(f"Step '{step_name}' tts type but no voice")
-                return False
-
-            # Support pour tts_cloned (avec voice_config optionnel)
-            if step_config["audio_type"] == "tts_cloned":
-                if "voice" not in step_config:
-                    logger.error(f"Step '{step_name}' tts_cloned type but no voice")
-                    return False
-
-            # Freestyle AI mode removed in v3 (using pre-recorded audio only)
+            # TTS removed in v3 - only pre-recorded audio supported
 
             # Validation champs agent autonome
             if agent_mode:

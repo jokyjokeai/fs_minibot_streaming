@@ -1,0 +1,207 @@
+{
+  "metadata": {
+    "name": "dfdf",
+    "description": "fdfd",
+    "version": "3.0",
+    "theme_file": "objections_finance",
+    "voice": "julie",
+    "barge_in_default": true,
+    "objective": "dfdfd"
+  },
+  "variables": {
+    "first_name": "{{first_name}}",
+    "company_name": "dfd",
+    "agent_name": "dfd"
+  },
+  "steps": {
+    "hello": {
+      "message_text": "oui bonjour je suis thierry de l'association france patrimoine nous aidons les épargnants à mieux protéger leur capital et optimiser leurs placements j'ai juste trois petites questions pour voir si nous pouvons vous aider à protéger optimiser votre patrimoine ça vous va",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/hello.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "max_autonomous_turns": 0,
+      "intent_mapping": {
+        "affirm": "q1",
+        "deny": "retry_hello",
+        "unsure": "q1",
+        "silence": "retry_silence",
+        "*": "retry_hello"
+      }
+    },
+    "retry_hello": {
+      "message_text": "écoutez c'est dommage d'en avoir vraiment que pour quelques minutes quelques questions et si vous êtes éligible vous pourrez bénéficier sans engagement des conseils de notre expert on y va",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/retry_hello.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "max_autonomous_turns": 0,
+      "intent_mapping": {
+        "affirm": "q1",
+        "deny": "bye_failed",
+        "unsure": "q1",
+        "silence": "bye_failed",
+        "*": "bye_failed"
+      }
+    },
+    "retry_silence": {
+      "message_text": "allô allô je ne vous entends pas",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/retry_silence.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "max_autonomous_turns": 0,
+      "intent_mapping": {
+        "affirm": "q1",
+        "deny": "bye_failed",
+        "unsure": "q1",
+        "silence": "end",
+        "*": "q1"
+      }
+    },
+    "q1": {
+      "message_text": "super tout d'abord avez-vous actuellement un livret a un powell ou bien une assurance-vie",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/q1.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "max_autonomous_turns": 0,
+      "intent_mapping": {
+        "affirm": "q2",
+        "deny": "q2",
+        "unsure": "q2",
+        "silence": "retry_silence",
+        "*": "q2"
+      }
+    },
+    "q2": {
+      "message_text": "très bien et savez-vous si votre livret vous rapporte plus que l'inflation",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/q2.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "max_autonomous_turns": 0,
+      "intent_mapping": {
+        "affirm": "q3",
+        "deny": "q3",
+        "unsure": "q3",
+        "silence": "retry_silence",
+        "*": "q3"
+      }
+    },
+    "q3": {
+      "message_text": "okay et enfin êtes-vous satisfait du suivi de votre conseiller bancaire actuelle",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/q3.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "max_autonomous_turns": 0,
+      "intent_mapping": {
+        "affirm": "is_leads",
+        "deny": "is_leads",
+        "unsure": "is_leads",
+        "silence": "retry_silence",
+        "*": "is_leads"
+      }
+    },
+    "is_leads": {
+      "message_text": "d'accord alors bonne nouvelle je peux vous faire bénéficier d'un meilleur accompagnement pour optimiser vos placements ce que je vous propose ses cannes nos experts vous rappelle sous quarante-huit heures pour analyser votre dossier vous présenter nos solutions ça vous va",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/is_leads.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "max_autonomous_turns": 0,
+      "intent_mapping": {
+        "affirm": "confirm_time",
+        "deny": "retry_is_leads",
+        "unsure": "confirm_time",
+        "silence": "retry_silence",
+        "*": "retry_is_leads"
+      }
+    },
+    "retry_is_leads": {
+      "message_text": "on écoutait c'est dommage on a bientôt terminé il reste que quelques questions et après vous pourrez discuter avec notre expert qui pourra vous conseiller en continu",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/retry_is_leads.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "max_autonomous_turns": 0,
+      "intent_mapping": {
+        "affirm": "confirm_time",
+        "deny": "bye_failed",
+        "unsure": "confirm_time",
+        "silence": "retry_silence",
+        "*": "bye_failed"
+      }
+    },
+    "confirm_time": {
+      "message_text": "génial vous préférez être rappelé le matin l'après-midi ou plutôt en soirée",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/confirm_time.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "max_autonomous_turns": 0,
+      "intent_mapping": {
+        "affirm": "bye",
+        "deny": "bye_failed",
+        "unsure": "bye",
+        "silence": "retry_silence",
+        "*": "bye"
+      }
+    },
+    "bye": {
+      "message_text": "parfait un conseiller vous rappellera très prochainement merci pour votre temps et bonne journée",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/bye.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 5,
+      "result": "completed",
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+    "bye_failed": {
+      "message_text": "pas de soucis je comprends merci pour votre temps et je vous souhaite une excellente journée",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/bye_failed.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 5,
+      "result": "failed",
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+    "not_understood": {
+      "message_text": "excusez-moi je n'est pas très bien compris votre question",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/not_understood.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "*": "bye_failed"
+      }
+    },
+    "end": {
+      "message_text": "",
+      "audio_type": "none",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 0,
+      "result": "ended",
+      "intent_mapping": {}
+    }
+  },
+  "flow_summary": {}
+}
