@@ -36,6 +36,16 @@ except ImportError:
     def list_available_themes():
         return []
 
+# Import config pour chemins FreeSWITCH
+try:
+    from system.config import get_freeswitch_audio_path, FREESWITCH_SOUNDS_DIR
+    FREESWITCH_CONFIG_AVAILABLE = True
+except ImportError:
+    FREESWITCH_CONFIG_AVAILABLE = False
+    def get_freeswitch_audio_path(voice, audio_type, filename):
+        return Path(f"/usr/share/freeswitch/sounds/minibot/{voice}/{audio_type}/{filename}")
+    FREESWITCH_SOUNDS_DIR = Path("/usr/share/freeswitch/sounds/minibot")
+
 # Couleurs terminal
 class Colors:
     HEADER = '\033[95m'
@@ -169,6 +179,7 @@ class ScenarioBuilderV3:
         self.determinant_questions = []  # Indices des questions déterminantes (ex: [1, 3])
         self.voice_name = ""
         self.theme = ""
+        self.max_turns = 2  # Nombre max de tours pour objections/questions
         self.audio_files = {}  # {step_name: {"audio_path": "...", "transcription": "..."}}
 
     def run(self):
@@ -196,7 +207,10 @@ class ScenarioBuilderV3:
         # 5. Configuration barge-in
         self._ask_barge_in_config()
 
-        # 6. Enregistrement audio pour chaque étape
+        # 6. Configuration max_autonomous_turns
+        self._ask_max_turns_config()
+
+        # 7. Enregistrement audio pour chaque étape
         print_header("📹 ENREGISTREMENT AUDIO DES ÉTAPES")
         print_warning("Pour chaque étape, vous devrez enregistrer un fichier audio.")
         print_info("Le système utilisera Vosk pour transcrire l'audio automatiquement.\n")
@@ -368,6 +382,55 @@ class ScenarioBuilderV3:
         else:
             print_warning("Barge-in désactivé (le client devra attendre que le robot finisse)")
 
+    def _ask_max_turns_config(self):
+        """Configuration max_autonomous_turns (gestion objections/questions)"""
+        print_header("🔄 CONFIGURATION MAX TURNS (Objections)")
+
+        print_info("Le 'max_autonomous_turns' définit combien de fois le robot peut gérer")
+        print_info("des objections/questions avant de passer à l'étape suivante.\n")
+
+        print(f"{Colors.YELLOW}Exemples:{Colors.END}")
+        print(f"  • {Colors.BOLD}0{Colors.END} = Pas de gestion d'objections (robot ignore et continue)")
+        print(f"  • {Colors.BOLD}1{Colors.END} = Répond 1 fois aux objections puis continue")
+        print(f"  • {Colors.BOLD}2{Colors.END} = Répond jusqu'à 2 fois (recommandé)")
+        print(f"  • {Colors.BOLD}3+{Colors.END} = Répond plusieurs fois (attention aux boucles)\n")
+
+        while True:
+            try:
+                max_turns_input = input(f"Nombre de max_autonomous_turns [2]: ").strip()
+
+                if not max_turns_input:
+                    max_turns = 2  # Défaut
+                else:
+                    max_turns = int(max_turns_input)
+
+                if max_turns < 0:
+                    print_error("Le nombre doit être >= 0")
+                    continue
+
+                if max_turns > 5:
+                    print_warning(f"Valeur élevée ({max_turns}) - risque de boucles longues")
+                    if not ask_yes_no("Confirmer cette valeur ?", default=False):
+                        continue
+
+                self.max_turns = max_turns
+                break
+
+            except ValueError:
+                print_error("Entrez un nombre valide")
+
+        # Messages d'information
+        if self.max_turns == 0:
+            print_warning("⚠️  max_turns = 0 : Le robot n'utilisera PAS le système d'objections")
+            print_info("    → Il suivra uniquement l'intent_mapping de manière linéaire")
+            print_info("    → Pas besoin de fichiers audio objections")
+        elif self.max_turns == 1:
+            print_success(f"✅ max_turns = {self.max_turns} : Gestion d'objections légère")
+        else:
+            print_success(f"✅ max_turns = {self.max_turns} : Gestion d'objections complète")
+
+        print_info(f"    → Le robot répondra jusqu'à {self.max_turns} fois aux objections/questions par étape")
+
     def _record_all_audio_files(self):
         """Enregistre et transcrit les fichiers audio pour toutes les étapes"""
         print_header("🎤 ENREGISTREMENT AUDIO")
@@ -398,17 +461,21 @@ class ScenarioBuilderV3:
         for step_name, step_desc in base_steps:
             print(f"\n{Colors.BOLD}Étape: {step_name}{Colors.END} - {step_desc}")
 
-            # Demander chemin fichier audio
-            audio_path = ask_text(
-                f"  Chemin du fichier audio (ex: audio/{self.voice_name}/base/{step_name}.wav)",
-                default=f"audio/{self.voice_name}/base/{step_name}.wav"
+            # Utiliser chemin FreeSWITCH automatiquement
+            freeswitch_audio_path = get_freeswitch_audio_path(
+                self.voice_name,
+                "base",
+                f"{step_name}.wav"
             )
 
-            # Vérifier existence fichier
-            if not Path(audio_path).exists():
-                print_warning(f"  ⚠️  Fichier introuvable: {audio_path}")
-                if not ask_yes_no("  Continuer quand même ?", default=True):
-                    sys.exit(1)
+            # Afficher chemin utilisé
+            print_info(f"  Chemin FreeSWITCH: {freeswitch_audio_path}")
+
+            # Vérifier existence fichier (warning seulement, pas bloquant)
+            if not Path(freeswitch_audio_path).exists():
+                print_warning(f"  ⚠️  Fichier non trouvé (sera créé par setup_audio.py)")
+                print_info(f"  📝 Placez le fichier source dans: audio/{self.voice_name}/base/{step_name}.wav")
+                print_info(f"  📝 Puis lancez: python3 setup_audio.py")
 
             # TODO: Transcription automatique avec Vosk
             # Pour l'instant, demander saisie manuelle
@@ -418,9 +485,9 @@ class ScenarioBuilderV3:
                 required=True
             )
 
-            # Enregistrer
+            # Enregistrer avec chemin FreeSWITCH
             self.audio_files[step_name] = {
-                "audio_path": audio_path,
+                "audio_path": str(freeswitch_audio_path),
                 "transcription": transcription
             }
 
@@ -444,7 +511,7 @@ class ScenarioBuilderV3:
             "voice": self.voice_name,
             "barge_in": self.scenario["metadata"]["barge_in_default"],
             "timeout": 15,
-            "max_autonomous_turns": 2,
+            "max_autonomous_turns": self.max_turns,
             "intent_mapping": {
                 # Intents de base (Ollama NLP)
                 "affirm": "q1",         # Oui, d'accord, ok
@@ -466,7 +533,7 @@ class ScenarioBuilderV3:
             "voice": self.voice_name,
             "barge_in": self.scenario["metadata"]["barge_in_default"],
             "timeout": 15,
-            "max_autonomous_turns": 2,
+            "max_autonomous_turns": self.max_turns,
             "intent_mapping": {
                 # Deuxième chance: si affirm → q1, sinon → bye_failed
                 "affirm": "q1",
@@ -487,7 +554,7 @@ class ScenarioBuilderV3:
             "voice": self.voice_name,
             "barge_in": self.scenario["metadata"]["barge_in_default"],
             "timeout": 10,
-            "max_autonomous_turns": 2,
+            "max_autonomous_turns": self.max_turns,
             "intent_mapping": {
                 "affirm": "q1",
                 "deny": "bye_failed",
@@ -541,7 +608,7 @@ class ScenarioBuilderV3:
                 "voice": self.voice_name,
                 "barge_in": self.scenario["metadata"]["barge_in_default"],
                 "timeout": 15,
-                "max_autonomous_turns": 2,
+                "max_autonomous_turns": self.max_turns,
                 "intent_mapping": intent_mapping
             }
 
@@ -579,7 +646,7 @@ class ScenarioBuilderV3:
             "voice": self.voice_name,
             "barge_in": self.scenario["metadata"]["barge_in_default"],
             "timeout": 15,
-            "max_autonomous_turns": 2,
+            "max_autonomous_turns": self.max_turns,
             "intent_mapping": is_leads_mapping
         }
 
@@ -593,7 +660,7 @@ class ScenarioBuilderV3:
             "voice": self.voice_name,
             "barge_in": self.scenario["metadata"]["barge_in_default"],
             "timeout": 15,
-            "max_autonomous_turns": 2,
+            "max_autonomous_turns": self.max_turns,
             "intent_mapping": {
                 # Retry proposition: dernière chance
                 "affirm": "confirm_time",
@@ -638,7 +705,7 @@ class ScenarioBuilderV3:
             "voice": self.voice_name,
             "barge_in": self.scenario["metadata"]["barge_in_default"],
             "timeout": 15,
-            "max_autonomous_turns": 2,
+            "max_autonomous_turns": self.max_turns,
             "intent_mapping": confirm_mapping
         }
 
