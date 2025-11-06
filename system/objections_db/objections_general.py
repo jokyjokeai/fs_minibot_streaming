@@ -19,7 +19,7 @@ Audio:
 """
 
 from typing import List
-from system.objections_db.objections_database import ObjectionEntry
+from system.objections_db import ObjectionEntry
 
 
 # ═══════════════════════════════════════════════════════════════════════════

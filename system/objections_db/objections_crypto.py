@@ -7,7 +7,7 @@ Audio: audio/{voice}/objections/crypto_*.wav
 """
 
 from typing import List
-from system.objections_db.objections_database import ObjectionEntry
+from system.objections_db import ObjectionEntry
 
 OBJECTIONS_DATABASE: List[ObjectionEntry] = [
     # OBJECTIONS

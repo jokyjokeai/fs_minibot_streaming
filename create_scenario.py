@@ -534,19 +534,22 @@ class ScenarioBuilderV3:
                 f"{step_name}.wav"
             )
 
+            # Chemin fichier source (pour transcription Vosk)
+            source_audio_path = Path(f"audio/{self.voice_name}/base/{step_name}.wav")
+
             # Afficher chemin utilisé
             print_info(f"  Chemin FreeSWITCH: {freeswitch_audio_path}")
 
-            # Vérifier existence fichier (warning seulement, pas bloquant)
-            if not Path(freeswitch_audio_path).exists():
-                print_warning(f"  ⚠️  Fichier non trouvé (sera créé par setup_audio.py)")
-                print_info(f"  📝 Placez le fichier source dans: audio/{self.voice_name}/base/{step_name}.wav")
+            # Vérifier existence fichier source pour transcription
+            if not source_audio_path.exists():
+                print_warning(f"  ⚠️  Fichier source non trouvé")
+                print_info(f"  📝 Placez le fichier source dans: {source_audio_path}")
                 print_info(f"  📝 Puis lancez: python3 setup_audio.py")
                 transcription = ""
             else:
-                # Transcription automatique avec Vosk
+                # Transcription automatique avec Vosk (sur fichier SOURCE, pas FreeSWITCH)
                 print_info("  🎤 Transcription automatique avec Vosk...")
-                transcription = self._transcribe_audio_with_vosk(Path(freeswitch_audio_path))
+                transcription = self._transcribe_audio_with_vosk(source_audio_path)
 
                 if transcription:
                     print_success(f"  ✅ Transcription: {transcription[:100]}{'...' if len(transcription) > 100 else ''}")
