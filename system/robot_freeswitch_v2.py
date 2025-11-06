@@ -746,32 +746,36 @@ class RobotFreeSwitchV2:
     def _listen_for_response(self, call_uuid: str, timeout: int = 10) -> Optional[str]:
         """
         Écoute et transcrit la réponse du client
-        
+
         Modes:
-        1. Streaming (WebSocket) - Si StreamingASR disponible et connecté
-        2. Record fallback - Enregistre puis transcrit (fallback)
-        
+        1. Streaming (WebSocket) - Si StreamingASR disponible ET mod_audio_stream installé
+        2. Record fallback - Enregistre puis transcrit (mode par défaut)
+
         Args:
             call_uuid: UUID de l'appel
             timeout: Timeout en secondes
-            
+
         Returns:
             Transcription texte ou None si silence/timeout
         """
         if call_uuid not in self.streaming_sessions:
             logger.warning(f"[{call_uuid[:8]}] No streaming session")
             return None
-        
+
         try:
-            # Mode streaming (si disponible)
-            if self.streaming_asr and self.streaming_asr.is_available:
-                return self._listen_streaming(call_uuid, timeout)
-            else:
-                # Fallback: mode record
-                return self._listen_record_fallback(call_uuid, timeout)
-                
+            # POUR L'INSTANT: Toujours utiliser mode record
+            # Le mode streaming WebSocket nécessite mod_audio_stream ou uuid_audio_stream
+            # qui n'est pas encore installé/configuré
+
+            # TODO: Activer mode streaming quand mod_audio_stream sera installé
+            # if self.streaming_asr and self.streaming_asr.is_available and self.has_audio_stream_module:
+            #     return self._listen_streaming(call_uuid, timeout)
+
+            # Mode record (fallback fiable)
+            return self._listen_record_fallback(call_uuid, timeout)
+
         except Exception as e:
-            logger.error(f"[{call_uuid[:8]}] Listen error: {e}")
+            logger.error(f"[{call_uuid[:8]}] Listen error: {e}", exc_info=True)
             return None
 
     def _listen_streaming(self, call_uuid: str, timeout: int) -> Optional[str]:
@@ -811,59 +815,82 @@ class RobotFreeSwitchV2:
     def _listen_record_fallback(self, call_uuid: str, timeout: int) -> Optional[str]:
         """
         Fallback: Enregistre audio puis transcrit
-        
+
         Utilisé si StreamingASR n'est pas disponible
-        
+
+        AMÉLIORATION: Enregistre PENDANT timeout, puis transcrit immédiatement
+
         Args:
             call_uuid: UUID de l'appel
             timeout: Timeout en secondes
-            
+
         Returns:
             Transcription ou None
         """
-        logger.debug(f"[{call_uuid[:8]}] 👂 Listening (record fallback mode)...")
-        
+        logger.debug(f"[{call_uuid[:8]}] 👂 Listening (record fallback mode, timeout: {timeout}s)...")
+
         try:
             # Créer fichier temporaire
             temp_dir = Path("/tmp/minibot_responses")
             temp_dir.mkdir(exist_ok=True)
             record_file = temp_dir / f"{call_uuid}_{int(time.time())}.wav"
-            
-            # Enregistrer pendant timeout
+
+            # Démarrer enregistrement avec limite de durée
+            # uuid_record format: uuid_record <uuid> start <path> [<limit_secs>]
             cmd = f"uuid_record {call_uuid} start {record_file} {timeout}"
-            self.esl_conn_api.api(cmd)
-            
-            # Attendre fin enregistrement
-            time.sleep(timeout)
-            
-            # Arrêter enregistrement
+            result = self.esl_conn_api.api(cmd)
+
+            result_str = result.getBody() if hasattr(result, 'getBody') else str(result)
+            logger.debug(f"[{call_uuid[:8]}] uuid_record start result: {result_str}")
+
+            # Attendre fin enregistrement (timeout + petite marge)
+            time.sleep(timeout + 0.5)
+
+            # Arrêter enregistrement (au cas où)
             cmd = f"uuid_record {call_uuid} stop {record_file}"
             self.esl_conn_api.api(cmd)
-            
-            # Vérifier si fichier existe
-            if not record_file.exists() or record_file.stat().st_size < 1000:
-                logger.debug(f"[{call_uuid[:8]}] No audio recorded (silence)")
+
+            # Petite attente pour flush du fichier
+            time.sleep(0.2)
+
+            # Vérifier si fichier existe et a du contenu
+            if not record_file.exists():
+                logger.debug(f"[{call_uuid[:8]}] No recording file created (silence)")
                 return None
-            
-            # Transcrire avec Vosk
-            if self.stt_service:
-                transcription = self.stt_service.transcribe_file(str(record_file))
-                
-                # Cleanup
+
+            file_size = record_file.stat().st_size
+            logger.debug(f"[{call_uuid[:8]}] Recording file size: {file_size} bytes")
+
+            # Taille minimale: ~1KB pour avoir du contenu audio
+            if file_size < 1000:
+                logger.debug(f"[{call_uuid[:8]}] Recording too small (silence)")
                 record_file.unlink()
-                
-                if transcription:
-                    logger.info(f"[{call_uuid[:8]}] ✅ Transcription: {transcription}")
-                    return transcription
-                else:
-                    logger.debug(f"[{call_uuid[:8]}] No speech detected")
-                    return None
-            else:
-                logger.error(f"[{call_uuid[:8]}] STT service not available")
                 return None
-                
+
+            # Transcrire avec Vosk
+            if not self.stt_service:
+                logger.error(f"[{call_uuid[:8]}] STT service not available")
+                record_file.unlink()
+                return None
+
+            logger.debug(f"[{call_uuid[:8]}] Transcribing recording...")
+            transcription = self.stt_service.transcribe_file(str(record_file))
+
+            # Cleanup
+            try:
+                record_file.unlink()
+            except:
+                pass
+
+            if transcription:
+                logger.info(f"[{call_uuid[:8]}] ✅ Transcription: '{transcription}'")
+                return transcription
+            else:
+                logger.debug(f"[{call_uuid[:8]}] No speech detected in recording")
+                return None
+
         except Exception as e:
-            logger.error(f"[{call_uuid[:8]}] Record fallback error: {e}")
+            logger.error(f"[{call_uuid[:8]}] Record fallback error: {e}", exc_info=True)
             return None
 
     def _handle_streaming_event(self, call_uuid: str, event_type: str, data: Any):
