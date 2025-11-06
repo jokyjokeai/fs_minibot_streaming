@@ -28,13 +28,29 @@ AUDIO_DIR = BASE_DIR / "audio"
 AUDIO_FILES_PATH = AUDIO_DIR  # Alias pour compatibilité
 
 # Structure audio par voix
-# audio/{voice_name}/base/        - Fichiers scénario de base
-# audio/{voice_name}/objections/  - Objections/questions de la DB
+# audio/{voice_name}/base/        - Fichiers scénario de base (source)
+# audio/{voice_name}/objections/  - Objections/questions de la DB (source)
 DEFAULT_VOICE = os.getenv("DEFAULT_VOICE", "julie")
+
+# ============================================================================
+# CHEMINS AUDIO FREESWITCH
+# ============================================================================
+# Dossier FreeSWITCH pour audio traité (après setup_audio.py)
+FREESWITCH_SOUNDS_DIR = Path(os.getenv(
+    "FREESWITCH_SOUNDS_DIR",
+    "/usr/share/freeswitch/sounds/minibot"
+))
+
+# Volume adjustments pour setup_audio.py
+AUDIO_VOLUME_ADJUST = float(os.getenv("AUDIO_VOLUME_ADJUST", "2.0"))  # +2dB par défaut
+AUDIO_BACKGROUND_REDUCTION = float(os.getenv("AUDIO_BACKGROUND_REDUCTION", "-10.0"))  # -10dB
 
 def get_audio_path(voice: str, audio_type: str, filename: str) -> Path:
     """
-    Retourne le chemin complet d'un fichier audio.
+    Retourne le chemin complet d'un fichier audio SOURCE (audio/ local).
+
+    LEGACY: Utilisé pour compatibilité avec ancien code.
+    Pour FreeSWITCH, utilisez get_freeswitch_audio_path().
 
     Args:
         voice: Nom de la voix (julie, marie, etc.)
@@ -42,9 +58,33 @@ def get_audio_path(voice: str, audio_type: str, filename: str) -> Path:
         filename: Nom du fichier (avec .wav)
 
     Returns:
-        Path complet vers le fichier audio
+        Path complet vers le fichier audio source
     """
     return AUDIO_DIR / voice / audio_type / filename
+
+def get_freeswitch_audio_path(voice: str, audio_type: str, filename: str) -> Path:
+    """
+    Retourne le chemin FreeSWITCH d'un fichier audio (après traitement setup_audio.py).
+
+    Utilisez CETTE fonction pour tous les appels FreeSWITCH.
+
+    Args:
+        voice: Nom de la voix (julie, marie, etc.)
+        audio_type: Type audio ("base" ou "objections")
+        filename: Nom du fichier (avec .wav)
+
+    Returns:
+        Path: /usr/share/freeswitch/sounds/minibot/{voice}/{audio_type}/{filename}
+
+    Example:
+        >>> get_freeswitch_audio_path("julie", "base", "hello.wav")
+        Path('/usr/share/freeswitch/sounds/minibot/julie/base/hello.wav')
+    """
+    # S'assurer que filename a extension .wav
+    if not filename.endswith('.wav'):
+        filename = f"{filename}.wav"
+
+    return FREESWITCH_SOUNDS_DIR / voice / audio_type / filename
 
 LOGS_DIR = BASE_DIR / "logs"
 EXPORTS_DIR = BASE_DIR / "exports"
@@ -171,6 +211,12 @@ class Config:
     EXPORTS_DIR = EXPORTS_DIR
     RECORDINGS_DIR = RECORDINGS_DIR
     TRANSCRIPTIONS_DIR = TRANSCRIPTIONS_DIR
+
+    # Chemins audio FreeSWITCH
+    FREESWITCH_SOUNDS_DIR = FREESWITCH_SOUNDS_DIR
+    AUDIO_VOLUME_ADJUST = AUDIO_VOLUME_ADJUST
+    AUDIO_BACKGROUND_REDUCTION = AUDIO_BACKGROUND_REDUCTION
+    DEFAULT_VOICE = DEFAULT_VOICE
 
     # Database
     DATABASE_URL = DATABASE_URL

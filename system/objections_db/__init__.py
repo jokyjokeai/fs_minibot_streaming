@@ -22,6 +22,16 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Import config pour chemins FreeSWITCH
+try:
+    from system.config import get_freeswitch_audio_path
+    FREESWITCH_CONFIG_AVAILABLE = True
+except ImportError:
+    FREESWITCH_CONFIG_AVAILABLE = False
+    logger.warning("Could not import FreeSWITCH config, audio paths may not work correctly")
+    def get_freeswitch_audio_path(voice, audio_type, filename):
+        return Path(f"/usr/share/freeswitch/sounds/minibot/{voice}/{audio_type}/{filename}")
+
 # Import de la classe ObjectionEntry
 try:
     from system.objections_database import ObjectionEntry
@@ -46,7 +56,36 @@ except ImportError:
             }
 
 
-def load_objections(theme_file: str) -> List[ObjectionEntry]:
+def _convert_audio_paths_to_freeswitch(objections: List[ObjectionEntry], voice: str = "julie") -> List[ObjectionEntry]:
+    """
+    Convertit les chemins audio des objections vers chemins FreeSWITCH.
+
+    Args:
+        objections: Liste d'ObjectionEntry avec chemins relatifs
+        voice: Nom de la voix (défaut: julie)
+
+    Returns:
+        Liste d'ObjectionEntry avec chemins FreeSWITCH
+    """
+    for objection in objections:
+        if objection.audio_path:
+            # Si chemin relatif (audio/julie/objections/...)
+            if objection.audio_path.startswith("audio/"):
+                # Extraire juste le nom de fichier
+                filename = Path(objection.audio_path).name
+                # Convertir vers chemin FreeSWITCH
+                objection.audio_path = str(get_freeswitch_audio_path(voice, "objections", filename))
+            # Si déjà un chemin absolu FreeSWITCH, ne rien faire
+            elif objection.audio_path.startswith("/usr/share/freeswitch"):
+                pass
+            # Sinon, assumer que c'est juste un nom de fichier
+            else:
+                objection.audio_path = str(get_freeswitch_audio_path(voice, "objections", objection.audio_path))
+
+    return objections
+
+
+def load_objections(theme_file: str, voice: str = "julie", use_freeswitch_paths: bool = True) -> List[ObjectionEntry]:
     """
     Charge les objections depuis un fichier de thématique spécifique.
 
@@ -59,6 +98,8 @@ def load_objections(theme_file: str) -> List[ObjectionEntry]:
     Args:
         theme_file: Nom du fichier (sans .py)
                    Ex: "objections_finance", "objections_crypto"
+        voice: Nom de la voix pour chemins audio (défaut: "julie")
+        use_freeswitch_paths: Si True, convertit chemins vers FreeSWITCH (défaut: True)
 
     Returns:
         Liste d'ObjectionEntry (GENERAL + thématique)
@@ -100,6 +141,11 @@ def load_objections(theme_file: str) -> List[ObjectionEntry]:
 
         logger.info(f"✅ Loaded {len(theme_objections)} objections from '{theme_file}'")
         logger.info(f"📚 Total: {len(objections)} objections (general + {theme_file})")
+
+        # 3. Convertir chemins audio vers FreeSWITCH si demandé
+        if use_freeswitch_paths:
+            objections = _convert_audio_paths_to_freeswitch(objections, voice)
+            logger.debug(f"✅ Audio paths converted to FreeSWITCH format")
 
         return objections
 
