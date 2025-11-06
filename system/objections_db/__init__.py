@@ -32,28 +32,24 @@ except ImportError:
     def get_freeswitch_audio_path(voice, audio_type, filename):
         return Path(f"/usr/share/freeswitch/sounds/minibot/{voice}/{audio_type}/{filename}")
 
-# Import de la classe ObjectionEntry
-try:
-    from system.objections_database import ObjectionEntry
-except ImportError:
-    # Fallback: définir ObjectionEntry ici si besoin
-    from dataclasses import dataclass
+# Définition de la classe ObjectionEntry
+from dataclasses import dataclass
 
-    @dataclass
-    class ObjectionEntry:
-        """Entrée d'objection ou FAQ"""
-        keywords: List[str]
-        response: str
-        audio_path: Optional[str] = None
-        entry_type: str = "objection"
+@dataclass
+class ObjectionEntry:
+    """Entrée d'objection ou FAQ"""
+    keywords: List[str]
+    response: str
+    audio_path: Optional[str] = None
+    entry_type: str = "objection"
 
-        def to_dict(self) -> dict:
-            return {
-                "keywords": self.keywords,
-                "response": self.response,
-                "audio_path": self.audio_path,
-                "type": self.entry_type
-            }
+    def to_dict(self) -> dict:
+        return {
+            "keywords": self.keywords,
+            "response": self.response,
+            "audio_path": self.audio_path,
+            "type": self.entry_type
+        }
 
 
 def _convert_audio_paths_to_freeswitch(objections: List[ObjectionEntry], voice: str = "julie") -> List[ObjectionEntry]:

@@ -20,6 +20,7 @@ Usage:
 import json
 import sys
 import re
+import wave
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
@@ -45,6 +46,15 @@ except ImportError:
     def get_freeswitch_audio_path(voice, audio_type, filename):
         return Path(f"/usr/share/freeswitch/sounds/minibot/{voice}/{audio_type}/{filename}")
     FREESWITCH_SOUNDS_DIR = Path("/usr/share/freeswitch/sounds/minibot")
+
+# Import Vosk pour transcription automatique
+try:
+    from vosk import Model, KaldiRecognizer
+    from system.config import VOSK_MODEL_PATH
+    VOSK_AVAILABLE = True
+except ImportError:
+    VOSK_AVAILABLE = False
+    print_warning = lambda x: print(f"⚠️  {x}")
 
 # Couleurs terminal
 class Colors:
@@ -181,6 +191,7 @@ class ScenarioBuilderV3:
         self.theme = ""
         self.max_turns = 2  # Nombre max de tours pour objections/questions
         self.audio_files = {}  # {step_name: {"audio_path": "...", "transcription": "..."}}
+        self.vosk_model = None  # Modèle Vosk pour transcription
 
     def run(self):
         """Lance le processus interactif complet"""
@@ -431,6 +442,61 @@ class ScenarioBuilderV3:
 
         print_info(f"    → Le robot répondra jusqu'à {self.max_turns} fois aux objections/questions par étape")
 
+    def _transcribe_audio_with_vosk(self, audio_path: Path) -> Optional[str]:
+        """
+        Transcrit un fichier audio avec Vosk.
+
+        Args:
+            audio_path: Chemin vers le fichier audio WAV
+
+        Returns:
+            Transcription du fichier ou None si erreur
+        """
+        if not VOSK_AVAILABLE:
+            return None
+
+        try:
+            # Charger le modèle Vosk une seule fois
+            if self.vosk_model is None:
+                print_info(f"  📥 Chargement modèle Vosk...")
+                self.vosk_model = Model(VOSK_MODEL_PATH)
+
+            # Ouvrir le fichier audio
+            wf = wave.open(str(audio_path), "rb")
+
+            # Vérifier le format
+            if wf.getnchannels() != 1:
+                print_warning(f"  ⚠️  Audio doit être mono, transcription peut être imprécise")
+
+            # Créer le recognizer avec le sample rate du fichier
+            rec = KaldiRecognizer(self.vosk_model, wf.getframerate())
+            rec.SetWords(True)
+
+            # Transcrire
+            transcription_parts = []
+            while True:
+                data = wf.readframes(4000)
+                if len(data) == 0:
+                    break
+                if rec.AcceptWaveform(data):
+                    result = json.loads(rec.Result())
+                    if result.get("text"):
+                        transcription_parts.append(result["text"])
+
+            # Résultat final
+            final_result = json.loads(rec.FinalResult())
+            if final_result.get("text"):
+                transcription_parts.append(final_result["text"])
+
+            wf.close()
+
+            transcription = " ".join(transcription_parts).strip()
+            return transcription if transcription else None
+
+        except Exception as e:
+            print_warning(f"  ⚠️  Erreur transcription Vosk: {e}")
+            return None
+
     def _record_all_audio_files(self):
         """Enregistre et transcrit les fichiers audio pour toutes les étapes"""
         print_header("🎤 ENREGISTREMENT AUDIO")
@@ -476,14 +542,30 @@ class ScenarioBuilderV3:
                 print_warning(f"  ⚠️  Fichier non trouvé (sera créé par setup_audio.py)")
                 print_info(f"  📝 Placez le fichier source dans: audio/{self.voice_name}/base/{step_name}.wav")
                 print_info(f"  📝 Puis lancez: python3 setup_audio.py")
+                transcription = ""
+            else:
+                # Transcription automatique avec Vosk
+                print_info("  🎤 Transcription automatique avec Vosk...")
+                transcription = self._transcribe_audio_with_vosk(Path(freeswitch_audio_path))
 
-            # TODO: Transcription automatique avec Vosk
-            # Pour l'instant, demander saisie manuelle
-            print_info("  Transcription du fichier audio:")
-            transcription = ask_text(
-                f"  Texte de '{step_name}'",
-                required=True
-            )
+                if transcription:
+                    print_success(f"  ✅ Transcription: {transcription[:100]}{'...' if len(transcription) > 100 else ''}")
+
+                    # Demander confirmation ou modification
+                    confirm = ask_yes_no("  Transcription correcte ?", default=True)
+                    if not confirm:
+                        print_info("  📝 Saisie manuelle:")
+                        transcription = ask_text(
+                            f"  Texte de '{step_name}'",
+                            default=transcription,
+                            required=True
+                        )
+                else:
+                    print_warning("  ⚠️  Transcription automatique échouée, saisie manuelle:")
+                    transcription = ask_text(
+                        f"  Texte de '{step_name}'",
+                        required=True
+                    )
 
             # Enregistrer avec chemin FreeSWITCH
             self.audio_files[step_name] = {
