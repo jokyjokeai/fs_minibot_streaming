@@ -154,7 +154,8 @@ DELAY_BETWEEN_CALLS = float(os.getenv("DELAY_BETWEEN_CALLS", "2.0"))  # secondes
 # BARGE-IN & BACKCHANNEL DETECTION
 # ============================================================================
 # Grace period (début audio - ignorer toute parole)
-GRACE_PERIOD_SECONDS = float(os.getenv("GRACE_PERIOD_SECONDS", "4.0"))  # 4 secondes
+# Réduit de 4s → 2.5s pour conversation plus naturelle (basé tests réels)
+GRACE_PERIOD_SECONDS = float(os.getenv("GRACE_PERIOD_SECONDS", "2.5"))  # 2.5 secondes
 
 # Backchannel detection (mots courts d'acquiescement à ignorer pendant audio bot)
 BACKCHANNEL_ENABLED = os.getenv("BACKCHANNEL_ENABLED", "true").lower() == "true"
@@ -174,7 +175,9 @@ BACKCHANNEL_KEYWORDS = [
     # Greetings utilisés comme acquiescement
     "allô", "allo", "bonjour", "salut", "ouais", "ouai",
     # Mots de continuite
-    "ça", "vas-y", "allez", "continue", "je vois", "compris"
+    "ça", "vas-y", "allez", "continue", "je vois", "compris",
+    # Hésitations (basé tests réels)
+    "alors", "bah", "euh", "ben", "donc"
 ]
 
 # Mots de questions (toujours détecter comme vraie interruption)

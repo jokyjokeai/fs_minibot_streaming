@@ -1082,12 +1082,16 @@ class RobotFreeSwitchV2:
                 # Two-stage barge-in (basé recherche 2025)
                 # Vérifier si robot est EN TRAIN de jouer (barge_in_active = False)
                 if call_uuid in self.barge_in_active and not self.barge_in_active[call_uuid]:
-                    # Calculer durée depuis last speech_start
-                    last_speech_time = self.streaming_sessions[call_uuid].get("last_speech_time", 0)
-                    speech_duration = current_time - last_speech_time if last_speech_time > 0 else 0
+                    # Calculer durée depuis speech_start_time (début parole actuelle)
+                    # FIX: Utiliser speech_start_time au lieu de last_speech_time
+                    prev_speech_start = self.streaming_sessions[call_uuid].get("prev_speech_start_time", 0)
+                    speech_duration = current_time - prev_speech_start if prev_speech_start > 0 else 0
+
+                    # Sauvegarder timestamp pour prochain speech_start
+                    self.streaming_sessions[call_uuid]["prev_speech_start_time"] = current_time
 
                     # STAGE 1: Vérification durée immédiate (sans attendre transcription)
-                    if speech_duration > 0:  # On a déjà un speech en cours
+                    if speech_duration > 0:  # On a déjà un speech en cours (calcul entre 2 speech_start)
                         # Si parole très longue (>2.5s), barge-in immédiat
                         if speech_duration > config.BACKCHANNEL_MAX_DURATION:
                             self.barge_in_active[call_uuid] = True
