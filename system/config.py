@@ -162,10 +162,19 @@ BACKCHANNEL_MIN_DURATION = float(os.getenv("BACKCHANNEL_MIN_DURATION", "1.0"))  
 BACKCHANNEL_MAX_DURATION = float(os.getenv("BACKCHANNEL_MAX_DURATION", "2.5"))  # > 2.5s = toujours barge-in
 BACKCHANNEL_MAX_WORDS = int(os.getenv("BACKCHANNEL_MAX_WORDS", "2"))  # <= 2 mots pour être backchannel
 
+# Two-stage barge-in (basé recherche 2025: séparer speech_start de transcription)
+BACKCHANNEL_SPEECH_START_THRESHOLD = float(os.getenv("BACKCHANNEL_SPEECH_START_THRESHOLD", "0.8"))  # < 0.8s sur speech_start = potential backchannel
+
 # Mots d'acquiescement (backchannels) à ignorer
+# Basé sur recherche industrie 2025 (Deepgram Flux, AssemblyAI)
 BACKCHANNEL_KEYWORDS = [
+    # Acquiescements
     "oui", "ok", "d'accord", "ah", "oh", "hm", "mm", "hmm",
-    "voilà", "bien", "super", "parfait", "tout à fait", "exact"
+    "voilà", "bien", "super", "parfait", "tout à fait", "exact",
+    # Greetings utilisés comme acquiescement
+    "allô", "allo", "bonjour", "salut", "ouais", "ouai",
+    # Mots de continuite
+    "ça", "vas-y", "allez", "continue", "je vois", "compris"
 ]
 
 # Mots de questions (toujours détecter comme vraie interruption)
@@ -280,6 +289,7 @@ class Config:
     BACKCHANNEL_MIN_DURATION = BACKCHANNEL_MIN_DURATION
     BACKCHANNEL_MAX_DURATION = BACKCHANNEL_MAX_DURATION
     BACKCHANNEL_MAX_WORDS = BACKCHANNEL_MAX_WORDS
+    BACKCHANNEL_SPEECH_START_THRESHOLD = BACKCHANNEL_SPEECH_START_THRESHOLD
     BACKCHANNEL_KEYWORDS = BACKCHANNEL_KEYWORDS
     QUESTION_KEYWORDS = QUESTION_KEYWORDS
 

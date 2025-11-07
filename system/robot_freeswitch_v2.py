@@ -989,12 +989,15 @@ class RobotFreeSwitchV2:
         words = transcription.lower().strip().split()
         word_count = len(words)
 
-        # Critère 3: Nombre de mots
+        # Critère 3: Nombre de mots ET présence mot backchannel
+        # Basé sur recherche 2025: any() plus flexible que all()
+        # "oui allô" (contient "oui") → backchannel ✅
+        # "peut-être demain" (pas de mot backchannel) → interruption ✅
         if word_count <= config.BACKCHANNEL_MAX_WORDS:
-            # 1-2 mots courts, vérifier si backchannels purs
-            if all(word in config.BACKCHANNEL_KEYWORDS for word in words):
-                logger.info(f"[{call_uuid[:8]}] 💬 BACKCHANNEL detected ({word_count} acknowledgment words, {speech_duration:.1f}s): '{transcription}'")
-                return True  # "oui oui", "ok d'accord" → Ignorer
+            # 1-2 mots courts, vérifier si AU MOINS UN mot est backchannel
+            if any(word in config.BACKCHANNEL_KEYWORDS for word in words):
+                logger.info(f"[{call_uuid[:8]}] 💬 BACKCHANNEL detected ({word_count} words with backchannel keyword, {speech_duration:.1f}s): '{transcription}'")
+                return True  # "oui allô", "ok merci", "d'accord oui" → Ignorer
 
         # Critère 4: Mots interrogatifs (toujours vraie interruption)
         if any(qword in words for qword in config.QUESTION_KEYWORDS):
@@ -1065,18 +1068,41 @@ class RobotFreeSwitchV2:
                 logger.debug(f"[{call_uuid[:8]}] 🎤 Speech started")
 
                 # Tracker timestamp speech_start (pour calcul durée backchannel)
-                self.streaming_sessions[call_uuid]["speech_start_time"] = time.time()
+                current_time = time.time()
+                self.streaming_sessions[call_uuid]["speech_start_time"] = current_time
 
                 # Grace period anti-faux positifs (ignorer barge-in dans les X premières secondes)
                 audio_start_time = self.streaming_sessions[call_uuid].get("audio_start_time", 0)
-                elapsed_since_audio_start = time.time() - audio_start_time if audio_start_time > 0 else 999
+                elapsed_since_audio_start = current_time - audio_start_time if audio_start_time > 0 else 999
 
                 if elapsed_since_audio_start < config.GRACE_PERIOD_SECONDS:
                     logger.debug(f"[{call_uuid[:8]}] 🚫 Speech ignored (grace period: {elapsed_since_audio_start:.1f}s < {config.GRACE_PERIOD_SECONDS:.1f}s)")
                     return
 
-                # Détecter barge-in si robot est EN TRAIN de jouer (barge_in_active = False)
+                # Two-stage barge-in (basé recherche 2025)
+                # Vérifier si robot est EN TRAIN de jouer (barge_in_active = False)
                 if call_uuid in self.barge_in_active and not self.barge_in_active[call_uuid]:
+                    # Calculer durée depuis last speech_start
+                    last_speech_time = self.streaming_sessions[call_uuid].get("last_speech_time", 0)
+                    speech_duration = current_time - last_speech_time if last_speech_time > 0 else 0
+
+                    # STAGE 1: Vérification durée immédiate (sans attendre transcription)
+                    if speech_duration > 0:  # On a déjà un speech en cours
+                        # Si parole très longue (>2.5s), barge-in immédiat
+                        if speech_duration > config.BACKCHANNEL_MAX_DURATION:
+                            self.barge_in_active[call_uuid] = True
+                            logger.info(f"[{call_uuid[:8]}] 🔊 Barge-in detected (speech_start, duration > {config.BACKCHANNEL_MAX_DURATION}s: {speech_duration:.1f}s)")
+                            return
+
+                        # Si parole très courte (<0.8s), probable backchannel → ATTENDRE transcription
+                        if speech_duration < config.BACKCHANNEL_SPEECH_START_THRESHOLD:
+                            logger.debug(f"[{call_uuid[:8]}] ⏳ Potential backchannel (duration < {config.BACKCHANNEL_SPEECH_START_THRESHOLD}s: {speech_duration:.1f}s) - waiting for transcription")
+                            # Marquer comme "potential backchannel" mais NE PAS trigger barge-in
+                            # La transcription décidera (STAGE 2)
+                            return
+
+                    # Durée moyenne (0.8-2.5s) ou pas de last_speech → Trigger barge-in par défaut
+                    # (La transcription peut override si backchannel détecté)
                     self.barge_in_active[call_uuid] = True
                     logger.info(f"[{call_uuid[:8]}] 🔊 Barge-in detected (speech_start)!")
 
