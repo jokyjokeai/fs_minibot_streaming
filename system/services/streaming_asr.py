@@ -82,9 +82,9 @@ class StreamingASR:
         self.frame_duration_ms = 30  # 30ms frames
         self.frame_size = int(self.sample_rate * self.frame_duration_ms / 1000)
 
-        # Seuils
-        self.silence_threshold = 3.0  # 3 secondes de silence = fin de parole
-        self.speech_start_threshold = 0.3  # 300ms de parole = début détecté
+        # Seuils (optimisés pour réactivité)
+        self.silence_threshold = 2.5  # 2.5 secondes de silence = fin de parole (augmenté pour laisser client finir)
+        self.speech_start_threshold = 0.5  # 500ms de parole = début détecté (augmenté de 0.2s pour éviter faux positifs)
 
         # Modèle Vosk
         self.model = None
@@ -161,14 +161,20 @@ class StreamingASR:
             logger.info("✅ WebSocket server started successfully")
             logger.info("   Waiting for audio streams from FreeSWITCH...")
 
+            # Garder le serveur actif
+            await self.websocket_server.wait_closed()
+
         except Exception as e:
             logger.error(f"❌ Failed to start WebSocket server: {e}")
             raise
 
-    async def _handle_websocket_connection(self, websocket, path):
+    async def _handle_websocket_connection(self, websocket):
         """Gère une connexion WebSocket depuis FreeSWITCH"""
+        call_uuid = None
         try:
             # Extraire call_uuid du path: /stream/{UUID}
+            # websockets 15+ utilise websocket.request.path
+            path = websocket.request.path if hasattr(websocket, 'request') else websocket.path
             call_uuid = path.split('/')[-1]
             logger.info(f"📞 New audio stream for call: {call_uuid[:8]}")
 
@@ -194,11 +200,16 @@ class StreamingASR:
                         await self._process_audio_frame(call_uuid, frame_bytes)
 
         except websockets.exceptions.ConnectionClosed:
-            logger.info(f"📞 Audio stream closed for call: {call_uuid[:8]}")
+            if call_uuid:
+                logger.info(f"📞 Audio stream closed for call: {call_uuid[:8]}")
         except Exception as e:
-            logger.error(f"❌ Error handling audio stream: {e}", exc_info=True)
+            if call_uuid:
+                logger.error(f"❌ Error handling audio stream for {call_uuid[:8]}: {e}", exc_info=True)
+            else:
+                logger.error(f"❌ Error handling audio stream: {e}", exc_info=True)
         finally:
-            self._cleanup_stream(call_uuid)
+            if call_uuid:
+                self._cleanup_stream(call_uuid)
 
     def _initialize_stream(self, call_uuid: str):
         """Initialise un stream pour un appel"""

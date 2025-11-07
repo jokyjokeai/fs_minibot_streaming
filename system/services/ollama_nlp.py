@@ -71,6 +71,8 @@ class OllamaNLP:
         self.intent_to_status = {
             "Positif": "affirm",
             "Négatif": "deny",
+            "Question": "question",
+            "Objection": "objection",
             "Neutre": "unsure",
             "Unsure": "unsure"
         }
@@ -82,11 +84,13 @@ class OllamaNLP:
 Tu analyses les réponses des prospects français.
 Réponds UNIQUEMENT en JSON au format {"intent": "...", "confidence": 0.9}.
 
-Intents possibles (4 seulement) :
-- "Positif" : oui, d'accord, ok, intéressé, absolument, évidemment, j'aimerais en savoir plus
-- "Négatif" : non, pas intéressé, pas le temps, ça ne m'intéresse pas, arrêtez
+Intents possibles (6 seulement) :
+- "Positif" : oui, d'accord, ok, intéressé, absolument, évidemment, j'aimerais en savoir plus, ça me convient
+- "Négatif" : non, pas intéressé, pas le temps, ça ne m'intéresse pas, arrêtez, jamais
+- "Question" : qui êtes-vous, c'est quoi, pourquoi, comment ça marche, c'est combien, quand
+- "Objection" : c'est trop cher, j'ai pas le temps, j'ai déjà un fournisseur, rappellez plus tard
 - "Neutre" : peut-être, je ne sais pas, il faut que je réfléchisse, ça dépend
-- "Unsure" : je n'ai pas compris, pouvez-vous répéter, pardon, comment
+- "Unsure" : je n'ai pas compris, pouvez-vous répéter, pardon, comment, hein
 
 Réponds TOUJOURS en JSON valide.""",
 
@@ -98,8 +102,10 @@ Le prospect répond à l'introduction.
 Intents :
 - "Positif" : oui, ok, d'accord, allez-y, je vous écoute, pourquoi pas
 - "Négatif" : non, pas le temps, pas intéressé, raccrochez, ça ne m'intéresse pas
+- "Question" : qui êtes-vous, c'est pour quoi, qu'est-ce que vous voulez, c'est quoi votre société
+- "Objection" : j'ai pas le temps, rappelez plus tard, je suis occupé, pas maintenant
 - "Neutre" : peut-être, ça dépend, voyons, je ne sais pas
-- "Unsure" : je n'ai pas compris, pardon, comment""",
+- "Unsure" : je n'ai pas compris, pardon, comment, hein""",
 
             "qualification": """Tu analyses la réponse aux questions de qualification.
 Réponds UNIQUEMENT en JSON : {"intent": "...", "confidence": 0.9}
@@ -107,8 +113,10 @@ Réponds UNIQUEMENT en JSON : {"intent": "...", "confidence": 0.9}
 Intents :
 - "Positif" : oui, j'ai, effectivement, bien sûr, tout à fait
 - "Négatif" : non, je n'ai pas, pas du tout, jamais
+- "Question" : pourquoi vous me demandez ça, c'est pour quoi faire, ça sert à quoi
+- "Objection" : ça ne vous regarde pas, je ne veux pas répondre, c'est privé
 - "Neutre" : je ne sais pas, peut-être, il faut voir, ça dépend
-- "Unsure" : je n'ai pas compris, pardon, comment""",
+- "Unsure" : je n'ai pas compris, pardon, comment, hein""",
 
             "final_offer": """Tu analyses la réponse à l'offre finale.
 Réponds UNIQUEMENT en JSON : {"intent": "...", "confidence": 0.9}
@@ -118,8 +126,10 @@ Le prospect répond à la proposition finale.
 Intents :
 - "Positif" : oui, d'accord, ok, parfait, allez-y, très bien
 - "Négatif" : non, pas intéressé, ça ne m'intéresse pas, merci mais non
+- "Question" : c'est combien, quelles sont les conditions, ça marche comment, vous avez des garanties
+- "Objection" : c'est trop cher, j'ai pas le budget, je dois demander à mon patron, j'ai déjà quelque chose
 - "Neutre" : oui mais plus tard, pas cette semaine, dans un mois, je réfléchis
-- "Unsure" : je n'ai pas compris, pardon, comment"""
+- "Unsure" : je n'ai pas compris, pardon, comment, hein"""
         }
 
         # Mots-clés pour fallback

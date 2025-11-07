@@ -151,6 +151,30 @@ CALL_TIMEOUT = int(os.getenv("CALL_TIMEOUT", "300"))  # secondes
 DELAY_BETWEEN_CALLS = float(os.getenv("DELAY_BETWEEN_CALLS", "2.0"))  # secondes
 
 # ============================================================================
+# BARGE-IN & BACKCHANNEL DETECTION
+# ============================================================================
+# Grace period (début audio - ignorer toute parole)
+GRACE_PERIOD_SECONDS = float(os.getenv("GRACE_PERIOD_SECONDS", "4.0"))  # 4 secondes
+
+# Backchannel detection (mots courts d'acquiescement à ignorer pendant audio bot)
+BACKCHANNEL_ENABLED = os.getenv("BACKCHANNEL_ENABLED", "true").lower() == "true"
+BACKCHANNEL_MIN_DURATION = float(os.getenv("BACKCHANNEL_MIN_DURATION", "1.0"))  # < 1s = toujours ignorer
+BACKCHANNEL_MAX_DURATION = float(os.getenv("BACKCHANNEL_MAX_DURATION", "2.5"))  # > 2.5s = toujours barge-in
+BACKCHANNEL_MAX_WORDS = int(os.getenv("BACKCHANNEL_MAX_WORDS", "2"))  # <= 2 mots pour être backchannel
+
+# Mots d'acquiescement (backchannels) à ignorer
+BACKCHANNEL_KEYWORDS = [
+    "oui", "ok", "d'accord", "ah", "oh", "hm", "mm", "hmm",
+    "voilà", "bien", "super", "parfait", "tout à fait", "exact"
+]
+
+# Mots de questions (toujours détecter comme vraie interruption)
+QUESTION_KEYWORDS = [
+    "qui", "quoi", "comment", "pourquoi", "où", "quand",
+    "combien", "quel", "quelle", "quels", "quelles"
+]
+
+# ============================================================================
 # GESTION FILE D'ATTENTE & BATCH
 # ============================================================================
 DEFAULT_BATCH_SIZE = int(os.getenv("DEFAULT_BATCH_SIZE", "5"))  # Appels par batch
@@ -249,6 +273,15 @@ class Config:
     MAX_CONCURRENT_CALLS = MAX_CONCURRENT_CALLS
     CALL_TIMEOUT = CALL_TIMEOUT
     DELAY_BETWEEN_CALLS = DELAY_BETWEEN_CALLS
+
+    # Barge-in & Backchannel
+    GRACE_PERIOD_SECONDS = GRACE_PERIOD_SECONDS
+    BACKCHANNEL_ENABLED = BACKCHANNEL_ENABLED
+    BACKCHANNEL_MIN_DURATION = BACKCHANNEL_MIN_DURATION
+    BACKCHANNEL_MAX_DURATION = BACKCHANNEL_MAX_DURATION
+    BACKCHANNEL_MAX_WORDS = BACKCHANNEL_MAX_WORDS
+    BACKCHANNEL_KEYWORDS = BACKCHANNEL_KEYWORDS
+    QUESTION_KEYWORDS = QUESTION_KEYWORDS
 
     # Queue & Batch
     DEFAULT_BATCH_SIZE = DEFAULT_BATCH_SIZE

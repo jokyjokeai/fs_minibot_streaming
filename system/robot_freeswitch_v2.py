@@ -137,7 +137,7 @@ class RobotFreeSwitchV2:
 
         # 3. AMD Service
         try:
-            self.amd_service = AMDService()
+            self.amd_service = AMDService(esl_conn=None)  # Will set after connection
             logger.info("✅ AMD Service loaded")
         except Exception as e:
             logger.error(f"❌ Failed to load AMD Service: {e}")
@@ -222,7 +222,11 @@ class RobotFreeSwitchV2:
                 
             logger.info("✅ ESL API connection established")
             logger.info(f"✅ Connected to FreeSWITCH ESL (2 connections)")
-            
+
+            # Pass ESL connection to AMD service
+            if self.amd_service:
+                self.amd_service.set_esl_connection(self.esl_conn_api)
+
             return True
             
         except Exception as e:
@@ -330,7 +334,12 @@ class RobotFreeSwitchV2:
         """Gère l'événement CHANNEL_HANGUP_COMPLETE"""
         hangup_cause = event.getHeader("Hangup-Cause") or "UNKNOWN"
         logger.info(f"📞 Call ended: {call_uuid} - {hangup_cause}")
-        
+
+        # Marquer comme raccroché pour que les threads en cours s'arrêtent
+        if call_uuid in self.streaming_sessions:
+            self.streaming_sessions[call_uuid]["hangup_detected"] = True
+            logger.debug(f"[{call_uuid[:8]}] Hangup flag set - threads will stop")
+
         # Cleanup
         self.active_calls.pop(call_uuid, None)
         self.call_threads.pop(call_uuid, None)
@@ -436,7 +445,9 @@ class RobotFreeSwitchV2:
             "last_transcription": None,
             "objection_matcher": None,
             "final_result": None,
-            "started_at": datetime.now()
+            "started_at": datetime.now(),
+            "speech_start_time": 0,  # Timestamp début parole (pour backchannel detection)
+            "audio_start_time": 0  # Timestamp début audio (pour grace period)
         }
         
         logger.debug(f"[{call_uuid[:8]}] Streaming session initialized")
@@ -474,15 +485,26 @@ class RobotFreeSwitchV2:
                 except Exception as e:
                     logger.warning(f"[{call_uuid[:8]}] AMD error: {e}")
             
+            # === ACTIVER STREAMING AUDIO ===
+            logger.debug(f"[{call_uuid[:8]}] Checking streaming: streaming_asr={self.streaming_asr is not None}, is_available={self.streaming_asr.is_available if self.streaming_asr else 'N/A'}")
+            if self.streaming_asr and self.streaming_asr.is_available:
+                streaming_enabled = self._enable_audio_streaming(call_uuid)
+                if streaming_enabled:
+                    logger.info(f"[{call_uuid[:8]}] ✅ Streaming audio WebSocket activé")
+                else:
+                    logger.warning(f"[{call_uuid[:8]}] ⚠️ Streaming audio échoué, mode record fallback")
+            else:
+                logger.warning(f"[{call_uuid[:8]}] ⚠️ Streaming NOT available - using fallback mode")
+
             # === ENREGISTRER CALLBACK STREAMING ===
             if self.streaming_asr and self.streaming_asr.is_available:
                 self.streaming_asr.register_callback(call_uuid, self._handle_streaming_event)
                 logger.debug(f"[{call_uuid[:8]}] Streaming callback registered")
-            
+
             # === BACKGROUND AUDIO (OPTIONNEL) ===
             # Désactivé pour l'instant - peut causer des conflits avec playback principal
             # self._start_background_audio(call_uuid)
-            
+
             # === EXÉCUTER SCÉNARIO ===
             if self.scenario_manager:
                 scenario_data = self.scenario_manager.load_scenario(scenario)
@@ -543,7 +565,13 @@ class RobotFreeSwitchV2:
         try:
             # Réinitialiser flag barge-in
             self.barge_in_active[call_uuid] = False
-            
+
+            # Timestamp début audio (pour grace period anti-faux positifs)
+            if call_uuid in self.streaming_sessions:
+                self.streaming_sessions[call_uuid]["audio_start_time"] = time.time()
+
+            logger.info(f"[{call_uuid[:8]}] 🎬 STATE: PLAYING_AUDIO (grace period: {config.GRACE_PERIOD_SECONDS:.1f}s, then backchannel filtering active)")
+
             # Commande uuid_broadcast pour playback
             # Syntaxe: uuid_broadcast <uuid> <path> [aleg|bleg|both]
             cmd = f"uuid_broadcast {call_uuid} {audio_file} aleg"
@@ -570,17 +598,29 @@ class RobotFreeSwitchV2:
             max_duration = audio_duration + 1.0  # Durée + 1s marge
             check_interval = 0.1  # 100ms
             elapsed = 0.0
-            
+
             while elapsed < max_duration:
+                # Vérifier hangup
+                if call_uuid not in self.streaming_sessions or self.streaming_sessions[call_uuid].get("hangup_detected", False):
+                    logger.warning(f"[{call_uuid[:8]}] 📞 Hangup detected - stopping audio playback")
+                    return False
+
                 # Vérifier barge-in
                 if self.barge_in_active.get(call_uuid, False):
                     logger.info(f"[{call_uuid[:8]}] ⏹️ Audio interrupted by barge-in after {elapsed:.1f}s")
+
+                    # STOPPER l'audio en cours avec uuid_break
+                    stop_cmd = f"uuid_break {call_uuid}"
+                    self.esl_conn_api.api(stop_cmd)
+                    logger.debug(f"[{call_uuid[:8]}] 🛑 Sent uuid_break to stop playback")
+
                     return False
-                
+
                 time.sleep(check_interval)
                 elapsed += check_interval
-            
+
             logger.debug(f"[{call_uuid[:8]}] ✅ Audio playback completed ({elapsed:.1f}s)")
+            logger.info(f"[{call_uuid[:8]}] 🎧 STATE: WAITING_RESPONSE (all speech will be captured, no backchannel filtering)")
             return True
             
         except Exception as e:
@@ -611,57 +651,56 @@ class RobotFreeSwitchV2:
 
     def _enable_audio_streaming(self, call_uuid: str) -> bool:
         """
-        Active le streaming audio FreeSWITCH → WebSocket
-        
-        CRITICAL: C'est ICI qu'on configure FreeSWITCH pour envoyer l'audio
-        vers notre serveur WebSocket StreamingASR
-        
-        Méthodes possibles:
-        1. mod_audio_stream (custom module - pas disponible)
-        2. uuid_record vers named pipe + lecture async
-        3. ESL myevents + CHANNEL_AUDIO (si disponible)
-        
-        Pour l'instant: uuid_record vers fichier temporaire puis transcription
-        (Simple et fiable, mais pas temps réel)
-        
+        Active le streaming audio FreeSWITCH → WebSocket avec mod_audio_stream
+
+        Utilise uuid_audio_stream pour envoyer l'audio RTP en temps réel
+        vers notre serveur WebSocket StreamingASR.
+
+        Paramètres streaming:
+        - Format: L16 PCM (Linear 16-bit)
+        - Sample rate: 16kHz (optimal pour Vosk)
+        - Mix: mono (caller only)
+        - URL: ws://127.0.0.1:8080/stream/{UUID}
+
         Args:
             call_uuid: UUID de l'appel
-            
+
         Returns:
-            True si streaming activé
+            True si streaming activé avec succès
         """
         if not self.esl_conn_api or not self.esl_conn_api.connected():
+            logger.error(f"[{call_uuid[:8]}] ESL API not connected")
             return False
-        
+
         try:
-            # TODO: Implémenter streaming audio réel
-            # Pour l'instant, on utilise uuid_record puis transcription post-call
-            
-            logger.debug(f"[{call_uuid[:8]}] Audio streaming: using record fallback mode")
-            
-            # Créer répertoire temp pour enregistrements
-            temp_dir = Path("/tmp/minibot_recordings")
-            temp_dir.mkdir(exist_ok=True)
-            
-            # Fichier temporaire pour cet appel
-            record_file = temp_dir / f"{call_uuid}.wav"
-            
-            # Commande uuid_record pour enregistrer l'audio entrant
-            # Format: uuid_record <uuid> start <path> [limit]
-            cmd = f"uuid_record {call_uuid} start {record_file} 300"  # Max 5 minutes
+            # URL WebSocket du serveur StreamingASR
+            websocket_url = f"ws://127.0.0.1:8080/stream/{call_uuid}"
+
+            # Paramètres streaming
+            mix_type = "mono"       # mono = caller only, mixed = both parties, stereo = separate
+            sampling_rate = "16000" # 16kHz pour Vosk (meilleur qualité/performance)
+            metadata = ""           # Métadonnées optionnelles JSON
+
+            # Commande uuid_audio_stream (mod_audio_stream requis)
+            # Format: uuid_audio_stream <uuid> start <wss-url> <mix-type> <sampling-rate> <metadata>
+            cmd = f"uuid_audio_stream {call_uuid} start {websocket_url} {mix_type} {sampling_rate} {metadata}"
+
+            logger.debug(f"[{call_uuid[:8]}] Executing: {cmd}")
             result = self.esl_conn_api.api(cmd)
-            
+
             result_str = result.getBody() if hasattr(result, 'getBody') else str(result)
-            
-            if "+OK" in result_str:
-                logger.debug(f"[{call_uuid[:8]}] ✅ Recording started: {record_file}")
+
+            if "+OK" in result_str or "success" in result_str.lower():
+                logger.info(f"[{call_uuid[:8]}] ✅ Audio streaming started to WebSocket (16kHz mono)")
+                logger.debug(f"[{call_uuid[:8]}]    URL: {websocket_url}")
                 return True
             else:
-                logger.warning(f"[{call_uuid[:8]}] ⚠️ Recording failed: {result_str}")
+                logger.error(f"[{call_uuid[:8]}] ❌ Audio streaming failed: {result_str}")
+                logger.warning(f"[{call_uuid[:8]}]    Vérifier que mod_audio_stream est chargé")
                 return False
-                
+
         except Exception as e:
-            logger.error(f"[{call_uuid[:8]}] Audio streaming error: {e}")
+            logger.error(f"[{call_uuid[:8]}] Audio streaming error: {e}", exc_info=True)
             return False
 
     def _start_background_audio(self, call_uuid: str, background_audio_path: Optional[str] = None):
@@ -763,16 +802,14 @@ class RobotFreeSwitchV2:
             return None
 
         try:
-            # POUR L'INSTANT: Toujours utiliser mode record
-            # Le mode streaming WebSocket nécessite mod_audio_stream ou uuid_audio_stream
-            # qui n'est pas encore installé/configuré
-
-            # TODO: Activer mode streaming quand mod_audio_stream sera installé
-            # if self.streaming_asr and self.streaming_asr.is_available and self.has_audio_stream_module:
-            #     return self._listen_streaming(call_uuid, timeout)
-
-            # Mode record (fallback fiable)
-            return self._listen_record_fallback(call_uuid, timeout)
+            # Mode streaming si StreamingASR disponible ET mod_audio_stream installé
+            if self.streaming_asr and self.streaming_asr.is_available:
+                logger.debug(f"[{call_uuid[:8]}] Using streaming mode for transcription")
+                return self._listen_streaming(call_uuid, timeout)
+            else:
+                # Fallback: mode record si streaming pas disponible
+                logger.debug(f"[{call_uuid[:8]}] Using record fallback mode for transcription")
+                return self._listen_record_fallback(call_uuid, timeout)
 
         except Exception as e:
             logger.error(f"[{call_uuid[:8]}] Listen error: {e}", exc_info=True)
@@ -781,33 +818,44 @@ class RobotFreeSwitchV2:
     def _listen_streaming(self, call_uuid: str, timeout: int) -> Optional[str]:
         """
         Écoute en mode streaming (temps réel via WebSocket)
-        
+
+        Attend que le client finisse de parler avant de retourner la transcription.
+        Le VAD détecte automatiquement la fin de parole (1.5s de silence).
+
         Args:
             call_uuid: UUID de l'appel
             timeout: Timeout en secondes
-            
+
         Returns:
             Transcription ou None
         """
         logger.debug(f"[{call_uuid[:8]}] 👂 Listening (streaming mode)...")
-        
-        # Réinitialiser transcription
+
+        # TOUJOURS effacer l'ancienne transcription pour éviter réutilisation
         self.streaming_sessions[call_uuid]["last_transcription"] = None
-        
-        # Attendre transcription ou timeout
+        self.streaming_sessions[call_uuid]["last_speech_time"] = 0
+
+        # Attendre nouvelle transcription (le client est en train de parler)
         start_time = time.time()
         check_interval = 0.1  # 100ms
-        
+
         while time.time() - start_time < timeout:
+            # Vérifier si hangup détecté
+            if call_uuid not in self.streaming_sessions or self.streaming_sessions[call_uuid].get("hangup_detected", False):
+                logger.warning(f"[{call_uuid[:8]}] 📞 Hangup detected - stopping listen")
+                return None
+
             # Vérifier si transcription disponible
             transcription = self.streaming_sessions[call_uuid].get("last_transcription")
-            
+
             if transcription:
                 logger.info(f"[{call_uuid[:8]}] ✅ Got transcription: {transcription}")
+                # Effacer pour éviter réutilisation
+                self.streaming_sessions[call_uuid]["last_transcription"] = None
                 return transcription
-            
+
             time.sleep(check_interval)
-        
+
         # Timeout sans transcription
         logger.warning(f"[{call_uuid[:8]}] ⏱️ Listen timeout ({timeout}s) - no response")
         return None
@@ -893,47 +941,150 @@ class RobotFreeSwitchV2:
             logger.error(f"[{call_uuid[:8]}] Record fallback error: {e}", exc_info=True)
             return None
 
-    def _handle_streaming_event(self, call_uuid: str, event_type: str, data: Any):
+    def _is_backchannel(self, call_uuid: str, transcription: str) -> bool:
+        """
+        Détermine si parole est un backchannel à ignorer (logique hybride durée + contenu)
+
+        Un backchannel = mot court d'acquiescement ("oui", "ok") dit PENDANT que bot parle,
+        qui ne nécessite PAS d'arrêter l'audio (juste acquiescement, pas vraie interruption).
+
+        Logique hybride:
+        1. Durée < 1s → TOUJOURS backchannel (ignorer)
+        2. Durée > 2.5s → TOUJOURS vraie interruption (barge-in)
+        3. Zone grise 1-2.5s → Analyser contenu (mots + intent)
+
+        Args:
+            call_uuid: UUID de l'appel
+            transcription: Texte transcrit
+
+        Returns:
+            True = Backchannel (ignorer), False = Vraie interruption (barge-in)
+        """
+        if not config.BACKCHANNEL_ENABLED:
+            return False  # Backchannel detection désactivé
+
+        # Calculer durée de parole
+        session = self.streaming_sessions.get(call_uuid, {})
+        speech_start_time = session.get("speech_start_time", 0)
+
+        if speech_start_time == 0:
+            # Pas de timestamp speech_start, on ne peut pas calculer durée
+            # Par sécurité, considérer comme vraie interruption
+            return False
+
+        speech_duration = time.time() - speech_start_time
+
+        # === CRITÈRE 1: Durée TRÈS courte ===
+        if speech_duration < config.BACKCHANNEL_MIN_DURATION:
+            logger.info(f"[{call_uuid[:8]}] 💬 BACKCHANNEL detected (duration < {config.BACKCHANNEL_MIN_DURATION}s: {speech_duration:.1f}s): '{transcription}'")
+            return True  # Ignorer
+
+        # === CRITÈRE 2: Durée LONGUE ===
+        if speech_duration > config.BACKCHANNEL_MAX_DURATION:
+            logger.info(f"[{call_uuid[:8]}] 🔊 REAL INTERRUPTION (duration > {config.BACKCHANNEL_MAX_DURATION}s: {speech_duration:.1f}s): '{transcription}'")
+            return False  # Barge-in
+
+        # === ZONE GRISE: 1-2.5s → Analyser contenu ===
+
+        words = transcription.lower().strip().split()
+        word_count = len(words)
+
+        # Critère 3: Nombre de mots
+        if word_count <= config.BACKCHANNEL_MAX_WORDS:
+            # 1-2 mots courts, vérifier si backchannels purs
+            if all(word in config.BACKCHANNEL_KEYWORDS for word in words):
+                logger.info(f"[{call_uuid[:8]}] 💬 BACKCHANNEL detected ({word_count} acknowledgment words, {speech_duration:.1f}s): '{transcription}'")
+                return True  # "oui oui", "ok d'accord" → Ignorer
+
+        # Critère 4: Mots interrogatifs (toujours vraie interruption)
+        if any(qword in words for qword in config.QUESTION_KEYWORDS):
+            logger.info(f"[{call_uuid[:8]}] 🔊 REAL INTERRUPTION (question word detected): '{transcription}'")
+            return False  # "oui mais vous êtes qui" → Barge-in
+
+        # Par défaut (doute), considérer comme vraie interruption
+        # Mieux vaut laisser parler que couper par erreur
+        logger.info(f"[{call_uuid[:8]}] 🔊 REAL INTERRUPTION (default: {word_count} words, {speech_duration:.1f}s): '{transcription}'")
+        return False
+
+    def _handle_streaming_event(self, event_data: Dict[str, Any]):
         """
         Callback pour événements streaming audio
-        
+
         Appelé par StreamingASR quand:
         - Transcription disponible (final)
         - VAD détecte parole (speech_start)
         - VAD détecte silence (speech_end)
-        
+
         Args:
-            call_uuid: UUID de l'appel
-            event_type: Type d'événement (transcription, speech_start, speech_end)
-            data: Données de l'événement
+            event_data: Dict contenant:
+                - event: Type d'événement (transcription, speech_start, speech_end)
+                - call_uuid: UUID de l'appel
+                - text: Texte transcrit (pour transcription)
+                - type: Type transcription (final/partial)
+                - latency_ms: Latence transcription
+                - timestamp: Timestamp événement
         """
-        if call_uuid not in self.streaming_sessions:
+        # Extraire les données de l'événement
+        event_type = event_data.get("event")
+        call_uuid = event_data.get("call_uuid")
+
+        if not call_uuid or call_uuid not in self.streaming_sessions:
             return
-        
+
         try:
             if event_type == "transcription":
-                # Transcription finale disponible
-                transcription = data.get("text", "").strip()
-                
-                if transcription:
-                    logger.debug(f"[{call_uuid[:8]}] 📝 Streaming transcription: {transcription}")
-                    
-                    # Sauvegarder dans session
+                # Transcription disponible
+                transcription = event_data.get("text", "").strip()
+                transcription_type = event_data.get("type", "")  # "final" ou "partial"
+
+                # Ne traiter que les transcriptions finales
+                if transcription and transcription_type == "final":
+                    logger.info(f"[{call_uuid[:8]}] 📝 Streaming transcription: '{transcription}'")
+
+                    # Sauvegarder dans session avec timestamp
                     self.streaming_sessions[call_uuid]["last_transcription"] = transcription
-                    
+                    self.streaming_sessions[call_uuid]["last_speech_time"] = time.time()
+
                     # Détecter barge-in (client parle pendant playback)
-                    if self.barge_in_active.get(call_uuid) is not None:
-                        self.barge_in_active[call_uuid] = True
-                        logger.debug(f"[{call_uuid[:8]}] 🔊 Barge-in detected")
-            
+                    # Vérifier si robot est EN TRAIN de jouer (barge_in_active = False)
+                    if call_uuid in self.barge_in_active and not self.barge_in_active[call_uuid]:
+                        # === BACKCHANNEL DETECTION (logique hybride) ===
+                        # Vérifier si c'est un backchannel à ignorer (ex: "oui", "ok")
+                        if self._is_backchannel(call_uuid, transcription):
+                            # Backchannel détecté → IGNORER, ne pas interrompre audio
+                            logger.info(f"[{call_uuid[:8]}] 💬 Backchannel ignoré (robot continue): '{transcription}'")
+                            # NE PAS set barge_in_active à True
+                            # Le robot continue de parler
+                        else:
+                            # Vraie interruption → BARGE-IN
+                            self.barge_in_active[call_uuid] = True
+                            logger.info(f"[{call_uuid[:8]}] 🔊 Barge-in detected!")
+
             elif event_type == "speech_start":
                 # Début de parole détecté
                 logger.debug(f"[{call_uuid[:8]}] 🎤 Speech started")
-            
+
+                # Tracker timestamp speech_start (pour calcul durée backchannel)
+                self.streaming_sessions[call_uuid]["speech_start_time"] = time.time()
+
+                # Grace period anti-faux positifs (ignorer barge-in dans les X premières secondes)
+                audio_start_time = self.streaming_sessions[call_uuid].get("audio_start_time", 0)
+                elapsed_since_audio_start = time.time() - audio_start_time if audio_start_time > 0 else 999
+
+                if elapsed_since_audio_start < config.GRACE_PERIOD_SECONDS:
+                    logger.debug(f"[{call_uuid[:8]}] 🚫 Speech ignored (grace period: {elapsed_since_audio_start:.1f}s < {config.GRACE_PERIOD_SECONDS:.1f}s)")
+                    return
+
+                # Détecter barge-in si robot est EN TRAIN de jouer (barge_in_active = False)
+                if call_uuid in self.barge_in_active and not self.barge_in_active[call_uuid]:
+                    self.barge_in_active[call_uuid] = True
+                    logger.info(f"[{call_uuid[:8]}] 🔊 Barge-in detected (speech_start)!")
+
             elif event_type == "speech_end":
                 # Fin de parole détectée
-                logger.debug(f"[{call_uuid[:8]}] 🔇 Speech ended")
-                
+                silence_duration = event_data.get("silence_duration", 0.0)
+                logger.debug(f"[{call_uuid[:8]}] 🔇 Speech ended (silence: {silence_duration:.1f}s)")
+
         except Exception as e:
             logger.error(f"[{call_uuid[:8]}] Streaming event error: {e}")
 
@@ -1036,42 +1187,42 @@ class RobotFreeSwitchV2:
             # Sauvegarder step courant
             if call_uuid in self.streaming_sessions:
                 self.streaming_sessions[call_uuid]["current_step"] = current_step
-            
-            # Vérifier si step terminal (avec résultat)
-            if "result" in step_config:
-                result = step_config["result"]
-                logger.info(f"[{call_uuid[:8]}] Scenario ended with result: {result}")
-                
-                # Sauvegarder résultat
-                if call_uuid in self.streaming_sessions:
-                    self.streaming_sessions[call_uuid]["final_result"] = result
-                
-                break
-            
+
             # === EXÉCUTER STEP SELON MODE ===
             if is_agent_mode:
                 # Mode agent autonome (avec objections)
                 next_step = self._execute_step_autonomous(
                     call_uuid, scenario, current_step, variables, call_history
                 )
-                
+
                 if next_step is None:
                     # 2 silences ou 3 no_match → terminé
                     logger.warning(f"[{call_uuid[:8]}] Autonomous step returned None → ending")
                     break
-                
+
                 current_step = next_step
             else:
                 # Mode classique (intent mapping simple)
                 next_step = self._execute_step_classic(
                     call_uuid, scenario, current_step, variables, call_history
                 )
-                
+
                 if next_step == "end" or not next_step:
                     logger.info(f"[{call_uuid[:8]}] Scenario ended")
                     break
-                
+
                 current_step = next_step
+
+            # Vérifier si step terminal (avec résultat) APRÈS l'avoir exécuté
+            if "result" in step_config:
+                result = step_config["result"]
+                logger.info(f"[{call_uuid[:8]}] Scenario ended with result: {result}")
+
+                # Sauvegarder résultat
+                if call_uuid in self.streaming_sessions:
+                    self.streaming_sessions[call_uuid]["final_result"] = result
+
+                break
         
         # Fin scénario
         self.hangup_call(call_uuid)
@@ -1113,7 +1264,7 @@ class RobotFreeSwitchV2:
         self._play_step_audio(call_uuid, step_config, variables, scenario)
         
         # 2. Écouter réponse
-        timeout = step_config.get("timeout", 10)
+        timeout = step_config.get("timeout", 4)  # 4s par défaut (réduit de 10s)
         transcription = self._listen_for_response(call_uuid, timeout)
         
         # 3. Analyser intent
@@ -1205,7 +1356,7 @@ class RobotFreeSwitchV2:
                 self._play_step_audio(call_uuid, step_config, variables, scenario)
             
             # 2. Écouter réponse
-            timeout = step_config.get("timeout", 10)
+            timeout = step_config.get("timeout", 4)  # 4s par défaut (réduit de 10s)
             transcription = self._listen_for_response(call_uuid, timeout)
             
             # === GESTION SILENCE ===
