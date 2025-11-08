@@ -472,22 +472,9 @@ class RobotFreeSwitchV2:
         """
         try:
             logger.info(f"[{call_uuid[:8]}] 🌊 Call thread started for {phone_number}")
-            
-            # === AMD DETECTION ===
-            if self.amd_service and config.AMD_ENABLED:
-                try:
-                    amd_result = self.amd_service.detect(call_uuid)
-                    logger.info(f"[{call_uuid[:8]}] AMD: {amd_result}")
-                    
-                    if amd_result == "MACHINE":
-                        logger.info(f"[{call_uuid[:8]}] Machine detected - hanging up")
-                        self.hangup_call(call_uuid)
-                        return
-                        
-                except Exception as e:
-                    logger.warning(f"[{call_uuid[:8]}] AMD error: {e}")
-            
-            # === ACTIVER STREAMING AUDIO ===
+
+            # === ACTIVER STREAMING AUDIO (AVANT AMD Phase 3) ===
+            # Phase 3: Streaming DOIT être actif AVANT AMD pour collecter transcriptions
             logger.debug(f"[{call_uuid[:8]}] Checking streaming: streaming_asr={self.streaming_asr is not None}, is_available={self.streaming_asr.is_available if self.streaming_asr else 'N/A'}")
             if self.streaming_asr and self.streaming_asr.is_available:
                 streaming_enabled = self._enable_audio_streaming(call_uuid)
@@ -502,6 +489,21 @@ class RobotFreeSwitchV2:
             if self.streaming_asr and self.streaming_asr.is_available:
                 self.streaming_asr.register_callback(call_uuid, self._handle_streaming_event)
                 logger.debug(f"[{call_uuid[:8]}] Streaming callback registered")
+
+            # === AMD DETECTION (Phase 3: après streaming activé) ===
+            if config.AMD_ENABLED:
+                try:
+                    amd_result = self._detect_answering_machine(call_uuid)
+                    logger.info(f"[{call_uuid[:8]}] AMD result: {amd_result}")
+
+                    if amd_result == "MACHINE":
+                        logger.info(f"[{call_uuid[:8]}] Machine detected - hanging up")
+                        self.hangup_call(call_uuid)
+                        return
+                    # Si HUMAN ou UNKNOWN, continuer normalement
+
+                except Exception as e:
+                    logger.warning(f"[{call_uuid[:8]}] AMD error: {e} - continuing anyway")
 
             # === BACKGROUND AUDIO (OPTIONNEL) ===
             # Désactivé pour l'instant - peut causer des conflits avec playback principal
@@ -525,6 +527,101 @@ class RobotFreeSwitchV2:
             # Cleanup
             self._stop_background_audio(call_uuid)
             logger.info(f"[{call_uuid[:8]}] Call thread ended")
+
+    def _detect_answering_machine(self, call_uuid: str) -> str:
+        """
+        Phase 3: Détecte si l'appelé est un humain ou un répondeur
+
+        Méthode: Écouter pendant 2.5 secondes AVANT de commencer à parler
+
+        Détection basée sur ce qui se passe pendant le délai initial:
+        - Silence total → Incertain (peut être retry_silence ou personne timide)
+        - "Allô" court (< 2s, < 3 mots) → Humain ✅
+        - Message long (> 5s) → Répondeur ❌
+        - Mots-clés typiques répondeur → Répondeur ❌
+        - BEEP détecté → Répondeur ❌
+
+        Args:
+            call_uuid: UUID de l'appel
+
+        Returns:
+            "HUMAN", "MACHINE", ou "UNKNOWN"
+        """
+        logger.info(f"[{call_uuid[:8]}] 🎧 AMD: Listening for {config.AMD_INITIAL_DELAY}s before speaking...")
+
+        # Timestamp début écoute
+        listen_start = time.time()
+
+        # Collecter transcriptions pendant le délai
+        collected_text = ""
+        speech_detected = False
+        total_speech_duration = 0.0
+
+        while time.time() - listen_start < config.AMD_INITIAL_DELAY:
+            # Vérifier si hangup
+            session = self.streaming_sessions.get(call_uuid, {})
+            if session.get("hangup_detected", False):
+                logger.info(f"[{call_uuid[:8]}] AMD: Call hung up during listening")
+                return "UNKNOWN"
+
+            # Récupérer dernière transcription
+            transcriptions = session.get("transcriptions", [])
+            if transcriptions:
+                latest = transcriptions[-1]
+                text = latest.get("text", "").strip()
+
+                if text and text not in collected_text:
+                    collected_text += " " + text
+                    speech_detected = True
+                    logger.debug(f"[{call_uuid[:8]}] AMD: Collected: '{text}'")
+
+            # Attendre un peu avant vérifier à nouveau
+            time.sleep(0.1)
+
+        # Analyser ce qui a été collecté
+        collected_text = collected_text.strip().lower()
+        word_count = len(collected_text.split()) if collected_text else 0
+
+        logger.info(f"[{call_uuid[:8]}] AMD: Listening complete. Text: '{collected_text}' ({word_count} words)")
+
+        # === ANALYSE ===
+
+        # 1. Silence total → UNKNOWN (peut être humain timide ou retry_silence)
+        if not speech_detected or not collected_text:
+            logger.info(f"[{call_uuid[:8]}] AMD: Silence detected → UNKNOWN (continuing anyway)")
+            return "UNKNOWN"
+
+        # 2. Très court (< 3 mots, typiquement "allô" ou "oui") → HUMAN
+        if word_count <= 3:
+            logger.info(f"[{call_uuid[:8]}] AMD: Short greeting ({word_count} words) → HUMAN ✅")
+            return "HUMAN"
+
+        # 3. Mots-clés typiques répondeur
+        machine_keywords = [
+            "bonjour vous êtes bien",
+            "laissez un message",
+            "veuillez laisser",
+            "après le bip",
+            "après le signal",
+            "notre bureau est fermé",
+            "nous sommes absents",
+            "bienvenue chez",
+            "merci d'avoir appelé"
+        ]
+
+        for keyword in machine_keywords:
+            if keyword in collected_text:
+                logger.info(f"[{call_uuid[:8]}] AMD: Keyword '{keyword}' detected → MACHINE ❌")
+                return "MACHINE"
+
+        # 4. Message long (> 10 mots) → Probablement répondeur
+        if word_count > 10:
+            logger.info(f"[{call_uuid[:8]}] AMD: Long message ({word_count} words) → MACHINE ❌")
+            return "MACHINE"
+
+        # 5. Sinon, considérer comme humain
+        logger.info(f"[{call_uuid[:8]}] AMD: Normal speech ({word_count} words) → HUMAN ✅")
+        return "HUMAN"
 
     def hangup_call(self, call_uuid: str):
         """

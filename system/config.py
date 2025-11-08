@@ -143,6 +143,15 @@ AMD_PYTHON_ENABLED = os.getenv("AMD_PYTHON_ENABLED", "true").lower() == "true"
 AMD_MACHINE_KEYWORDS = ["bonjour vous êtes bien", "laissez un message", "veuillez laisser"]
 AMD_MACHINE_SPEECH_DURATION_MIN = float(os.getenv("AMD_MACHINE_SPEECH_DURATION_MIN", "3.0"))
 
+# AMD Initial Listening Delay (Phase 3: Best practice 2025)
+# Laisser 2-3 secondes AVANT premier message pour détecter:
+# - Silence → Incertain (peut être retry_silence)
+# - "Allô" court → Humain ✅
+# - "Vous êtes sur le répondeur..." → Machine ❌
+# - BEEP → Machine ❌
+# - Parole longue (>5s) → Machine ❌
+AMD_INITIAL_DELAY = float(os.getenv("AMD_INITIAL_DELAY", "2.5"))  # 2.5 secondes
+
 # ============================================================================
 # LIMITES SYSTÈME
 # ============================================================================
@@ -291,6 +300,7 @@ class Config:
     AMD_PYTHON_ENABLED = AMD_PYTHON_ENABLED
     AMD_MACHINE_KEYWORDS = AMD_MACHINE_KEYWORDS
     AMD_MACHINE_SPEECH_DURATION_MIN = AMD_MACHINE_SPEECH_DURATION_MIN
+    AMD_INITIAL_DELAY = AMD_INITIAL_DELAY  # Phase 3
 
     # Limites
     MAX_CONCURRENT_CALLS = MAX_CONCURRENT_CALLS
