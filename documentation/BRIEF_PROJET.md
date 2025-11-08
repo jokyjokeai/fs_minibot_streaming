@@ -108,7 +108,7 @@
 
 | Composant | Technologie | Fonction |
 |-----------|-------------|----------|
-| **STT** | Vosk (vosk-model-small-fr-0.22) | Transcription audio → texte en temps réel |
+| **STT** | Vosk (vosk-model-fr-0.22-lgraph) | Transcription audio → texte en temps réel |
 | **NLP** | Ollama (mistral:7b ou llama3.2:1b/3b) | Analyse intent + sentiment des réponses |
 | **TTS** | Coqui XTTS v2 | Synthèse vocale avec clonage de voix |
 | **AMD** | Dual Layer (FreeSWITCH + Vosk) | Détection répondeur (16 patterns français) |

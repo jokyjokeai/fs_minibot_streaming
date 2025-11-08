@@ -114,9 +114,12 @@ FREESWITCH_HOST = FREESWITCH_ESL_HOST  # Alias pour robot
 # ============================================================================
 
 # Vosk (Speech-to-Text)
+# Phase 4: Upgrade to Large Graph model for better accuracy (+10-15%)
+# vosk-model-fr-0.22-lgraph (528 MB) - Meilleure précision conversationnelle
+# Alternative: vosk-model-small-fr-0.22 (40 MB) - Plus rapide mais moins précis
 VOSK_MODEL_PATH = os.getenv(
     "VOSK_MODEL_PATH",
-    str(BASE_DIR / "models" / "vosk-model-small-fr-0.22")
+    str(BASE_DIR / "models" / "vosk-model-fr-0.22-lgraph")
 )
 VOSK_SAMPLE_RATE = int(os.getenv("VOSK_SAMPLE_RATE", "16000"))
 

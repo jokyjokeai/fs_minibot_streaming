@@ -83,64 +83,54 @@ Ce document décrit comment configurer le streaming audio temps réel depuis Fre
 ```bash
 # Dépendances système
 sudo apt-get update
-sudo apt-get install -y libssl-dev zlib1g-dev libspeexdsp-dev cmake git
+sudo apt-get install -y libwebsockets-dev cmake git
 ```
 
 **Vérification**:
 ```bash
-dpkg -l | grep -E "libssl-dev|zlib1g-dev|libspeexdsp-dev|cmake"
+dpkg -l | grep -E "libwebsockets-dev|cmake"
 ```
 
 ### 2. Cloner le repository
 
 ```bash
-cd /tmp
-git clone https://github.com/sptmru/freeswitch_mod_audio_stream.git
-cd freeswitch_mod_audio_stream
-git submodule init
-git submodule update
+cd /usr/local/src
+sudo git clone https://github.com/davehorner/mod_audio_stream.git
+cd mod_audio_stream
+sudo git submodule update --init --recursive
 ```
 
-### 3. Créer freeswitch.pc (pkg-config)
+**Note importante**: Nous utilisons le repository de `davehorner` qui est compatible avec notre version de FreeSWITCH.
 
-FreeSWITCH ne fournit pas de fichier `.pc` par défaut. Il faut le créer manuellement:
+### 3. Configuration PKG_CONFIG_PATH
+
+FreeSWITCH installé dans `/usr/local/freeswitch` fournit un fichier pkg-config:
 
 ```bash
-cat > /tmp/freeswitch.pc <<EOF
-prefix=/usr/local/freeswitch
-exec_prefix=\${prefix}
-libdir=/usr/src/freeswitch/.libs
-includedir=/usr/src/freeswitch/src/include
-
-Name: freeswitch
-Description: FreeSWITCH
-Version: 1.10
-Libs: -L\${libdir} -lfreeswitch
-Cflags: -I\${includedir} -I/usr/src/freeswitch/libs/libteletone/src
-EOF
+export PKG_CONFIG_PATH=/usr/local/freeswitch/lib/pkgconfig:$PKG_CONFIG_PATH
 ```
 
-**Important**: Adapter les chemins selon votre installation:
-- `libdir`: Chemin vers libfreeswitch.so (généralement `/usr/src/freeswitch/.libs`)
-- `includedir`: Chemin vers les headers FreeSWITCH
-- Ajouter le chemin vers `libteletone/src` dans Cflags
+**Vérifier la configuration**:
+```bash
+pkg-config --cflags --libs freeswitch
+```
 
 ### 4. Compiler le module
 
 ```bash
-mkdir build && cd build
+cd /usr/local/src/mod_audio_stream
+sudo mkdir build
+cd build
 
 # Configurer avec cmake
-export PKG_CONFIG_PATH=/tmp:$PKG_CONFIG_PATH
-cmake -DCMAKE_BUILD_TYPE=Release ..
+sudo cmake ..
 
 # Compiler
-make -j$(nproc)
+sudo make
 ```
 
 **Sortie attendue**:
 ```
-[100%] Built target ixwebsocket
 [100%] Built target mod_audio_stream
 ```
 
@@ -152,11 +142,17 @@ Le fichier `mod_audio_stream.so` est généré dans `build/`.
 # Copier vers répertoire modules FreeSWITCH
 sudo cp mod_audio_stream.so /usr/local/freeswitch/lib/freeswitch/mod/
 
-# Définir permissions
+# Définir propriétaire et permissions
+sudo chown freeswitch:freeswitch /usr/local/freeswitch/lib/freeswitch/mod/mod_audio_stream.so
 sudo chmod 755 /usr/local/freeswitch/lib/freeswitch/mod/mod_audio_stream.so
 
 # Vérifier
 ls -la /usr/local/freeswitch/lib/freeswitch/mod/mod_audio_stream.so
+```
+
+**Sortie attendue**:
+```
+-rwxr-xr-x 1 freeswitch freeswitch 123456 Nov  7 10:00 mod_audio_stream.so
 ```
 
 ---
@@ -165,7 +161,7 @@ ls -la /usr/local/freeswitch/lib/freeswitch/mod/mod_audio_stream.so
 
 ### 1. Charger le module
 
-Éditer `/usr/local/freeswitch/etc/freeswitch/autoload_configs/modules.conf.xml`:
+Éditer `/usr/local/freeswitch/conf/vanilla/autoload_configs/modules.conf.xml`:
 
 ```xml
 <configuration name="modules.conf" description="Modules">
@@ -179,10 +175,14 @@ ls -la /usr/local/freeswitch/lib/freeswitch/mod/mod_audio_stream.so
 </configuration>
 ```
 
+**Chemin important**: Le fichier est dans `/usr/local/freeswitch/conf/vanilla/autoload_configs/` et NON dans `/usr/local/freeswitch/etc/`.
+
 ### 2. Redémarrer FreeSWITCH
 
 ```bash
 sudo systemctl restart freeswitch
+# OU
+sudo -S systemctl restart freeswitch
 ```
 
 ### 3. Vérifier le chargement
@@ -193,6 +193,15 @@ sudo systemctl restart freeswitch
 
 **Sortie attendue**: `true`
 
+Si le module n'est pas chargé:
+```bash
+# Charger manuellement
+/usr/local/freeswitch/bin/fs_cli -x "load mod_audio_stream"
+
+# Vérifier les erreurs dans les logs
+sudo tail -f /var/log/freeswitch/freeswitch.log | grep audio_stream
+```
+
 ### 4. Tester la commande
 
 ```bash
@@ -201,17 +210,19 @@ sudo systemctl restart freeswitch
 
 Puis dans fs_cli:
 ```
-uuid_audio_stream <UUID> help
+uuid_audio_stream help
 ```
 
 **Sortie attendue**:
 ```
 USAGE:
-  uuid_audio_stream <uuid> start <wss-url> <mix-type> <sampling-rate> <metadata>
-  uuid_audio_stream <uuid> send_text <metadata>
-  uuid_audio_stream <uuid> stop <metadata>
-  uuid_audio_stream <uuid> pause
-  uuid_audio_stream <uuid> resume
+  uuid_audio_stream <uuid> start <ws-url> [mono|mixed|stereo]
+  uuid_audio_stream <uuid> stop
+```
+
+**Note**: La syntaxe peut varier selon la version du module. Notre implémentation utilise:
+```
+uuid_audio_stream <UUID> start ws://127.0.0.1:8080/stream/<UUID>
 ```
 
 ---
@@ -231,9 +242,9 @@ system/services/streaming_asr.py
 - Protocole: WebSocket (ws://)
 - Callbacks: speech_start, speech_end, transcription
 
-### 2. Modifier _enable_audio_streaming()
+### 2. Implémentation _enable_audio_streaming()
 
-Dans `system/robot_freeswitch_v2.py`, ligne ~612:
+Dans `system/robot_freeswitch_v2.py`, ligne ~650:
 
 ```python
 def _enable_audio_streaming(self, call_uuid: str) -> bool:
@@ -250,25 +261,23 @@ def _enable_audio_streaming(self, call_uuid: str) -> bool:
         return False
 
     try:
-        # URL du serveur WebSocket StreamingASR
-        websocket_url = "ws://127.0.0.1:8080/stream/{call_uuid}"
+        # URL du serveur WebSocket StreamingASR avec call_uuid dans le path
+        websocket_url = f"ws://127.0.0.1:8080/stream/{call_uuid}"
 
-        # Paramètres streaming
-        mix_type = "mono"  # mono = caller only, mixed = both, stereo = separate
-        sampling_rate = "16000"  # 16kHz pour Vosk
-        metadata = ""  # Métadonnées optionnelles
-
-        # Commande uuid_audio_stream
-        cmd = f"uuid_audio_stream {call_uuid} start {websocket_url} {mix_type} {sampling_rate} {metadata}"
+        # Commande uuid_audio_stream (syntaxe simplifiée)
+        # Format audio: SLIN16 (Linear PCM 16-bit), 16kHz, mono
+        cmd = f"uuid_audio_stream {call_uuid} start {websocket_url}"
         result = self.esl_conn_api.api(cmd)
 
         result_str = result.getBody() if hasattr(result, 'getBody') else str(result)
 
-        if "+OK" in result_str:
-            logger.info(f"[{call_uuid[:8]}] ✅ Audio streaming started to WebSocket")
+        if "+OK" in result_str or "success" in result_str.lower():
+            logger.info(f"[{call_uuid[:8]}] ✅ Audio streaming started to WebSocket (16kHz mono)")
+            logger.debug(f"[{call_uuid[:8]}]    URL: {websocket_url}")
             return True
         else:
             logger.error(f"[{call_uuid[:8]}] ❌ Audio streaming failed: {result_str}")
+            logger.warning(f"[{call_uuid[:8]}]    Vérifier que mod_audio_stream est chargé")
             return False
 
     except Exception as e:
@@ -276,9 +285,14 @@ def _enable_audio_streaming(self, call_uuid: str) -> bool:
         return False
 ```
 
+**Points clés**:
+- L'URL inclut le `call_uuid` dans le path pour identifier le stream
+- Pas besoin de spécifier mix_type ou sampling_rate (valeurs par défaut)
+- Format audio automatique: SLIN16, 16kHz, mono
+
 ### 3. Activer le streaming au bon moment
 
-Dans `_handle_call()` (ligne ~461), AVANT d'exécuter le scénario:
+Dans `_handle_call()` (ligne ~443), APRÈS l'AMD et AVANT d'exécuter le scénario:
 
 ```python
 def _handle_call(self, call_uuid: str, phone_number: str, scenario: str, campaign_id: str):
@@ -288,31 +302,37 @@ def _handle_call(self, call_uuid: str, phone_number: str, scenario: str, campaig
 
         # === AMD DETECTION ===
         if self.amd_service and config.AMD_ENABLED:
-            # ... AMD code ...
+            amd_result = self.amd_service.detect(call_uuid)
+            logger.info(f"[{call_uuid[:8]}] AMD: {amd_result}")
 
         # === ACTIVER STREAMING AUDIO ===
-        if self.streaming_asr and self.streaming_asr.is_available:
-            streaming_ok = self._enable_audio_streaming(call_uuid)
-            if streaming_ok:
-                logger.info(f"[{call_uuid[:8]}] ✅ Streaming audio activé")
-            else:
-                logger.warning(f"[{call_uuid[:8]}] ⚠️ Streaming audio échoué, utilisation mode record")
-
-        # === ENREGISTRER CALLBACK STREAMING ===
-        if self.streaming_asr and self.streaming_asr.is_available:
-            self.streaming_asr.register_callback(call_uuid, self._handle_streaming_event)
+        streaming_enabled = self._enable_audio_streaming(call_uuid)
+        if streaming_enabled:
+            logger.info(f"[{call_uuid[:8]}] ✅ Streaming audio WebSocket activé")
+        else:
+            logger.warning(f"[{call_uuid[:8]}] ⚠️ Streaming échoué - fallback mode record")
 
         # === EXÉCUTER SCÉNARIO ===
         if self.scenario_manager:
             scenario_data = self.scenario_manager.load_scenario(scenario)
             if scenario_data:
                 self._execute_scenario(call_uuid, scenario, campaign_id)
-            # ...
+
+        # Hangup à la fin
+        self.hangup_call(call_uuid)
+
+    except Exception as e:
+        logger.error(f"[{call_uuid[:8]}] Call thread error: {e}", exc_info=True)
+        self.hangup_call(call_uuid)
+    finally:
+        logger.info(f"[{call_uuid[:8]}] Call thread ended")
 ```
 
-### 4. Réactiver le mode streaming dans _listen_for_response()
+**Note importante**: Le callback streaming est enregistré automatiquement dans `_init_streaming_session()` appelé lors du CHANNEL_ANSWER.
 
-Dans `_listen_for_response()` (ligne ~746), retirer le forçage du mode record:
+### 4. Utilisation du mode streaming dans _listen_for_response()
+
+Dans `_listen_for_response()` (ligne ~783):
 
 ```python
 def _listen_for_response(self, call_uuid: str, timeout: int = 10) -> Optional[str]:
@@ -322,17 +342,26 @@ def _listen_for_response(self, call_uuid: str, timeout: int = 10) -> Optional[st
         return None
 
     try:
-        # Mode streaming si disponible ET mod_audio_stream installé
+        # Mode streaming si StreamingASR disponible ET mod_audio_stream installé
         if self.streaming_asr and self.streaming_asr.is_available:
+            logger.debug(f"[{call_uuid[:8]}] Using streaming mode for transcription")
             return self._listen_streaming(call_uuid, timeout)
         else:
-            # Fallback: mode record
+            # Fallback: mode record si streaming pas disponible
+            logger.debug(f"[{call_uuid[:8]}] Using record fallback mode for transcription")
             return self._listen_record_fallback(call_uuid, timeout)
 
     except Exception as e:
         logger.error(f"[{call_uuid[:8]}] Listen error: {e}", exc_info=True)
         return None
 ```
+
+**Flux**:
+1. `_listen_streaming()` attend que le client parle
+2. Le VAD détecte début de parole → callback `speech_start`
+3. Vosk transcrit en temps réel → callback `transcription` (partiel + final)
+4. Le VAD détecte fin de parole (1.5s silence) → callback `speech_end`
+5. `_listen_streaming()` retourne la transcription finale
 
 ---
 
@@ -508,7 +537,7 @@ sudo tcpdump -i lo -A 'tcp port 8080'
 # Vérifier format audio avec test
 python3 -c "
 from vosk import Model, KaldiRecognizer
-model = Model('models/vosk-model-small-fr-0.22')
+model = Model('models/vosk-model-fr-0.22-lgraph')
 rec = KaldiRecognizer(model, 16000)
 print('✅ Vosk ready for 16kHz audio')
 "
@@ -539,15 +568,54 @@ print('✅ Vosk ready for 16kHz audio')
 
 ## Références
 
-- **mod_audio_stream**: https://github.com/sptmru/freeswitch_mod_audio_stream
-- **FreeSWITCH Media Bugs**: https://developer.signalwire.com/freeswitch/FreeSWITCH-Explained/Modules/
+### Modules et bibliothèques
+
+- **mod_audio_stream** (davehorner): https://github.com/davehorner/mod_audio_stream
+  - Module FreeSWITCH pour streaming audio vers WebSocket
+  - Alternative compatible à sptmru/freeswitch_mod_audio_stream
+
+- **FreeSWITCH**: https://freeswitch.org/
+  - Plateforme de téléphonie open-source
+  - Documentation Media Bugs: https://developer.signalwire.com/freeswitch/
+
 - **Vosk ASR**: https://alphacephei.com/vosk/
+  - Moteur de reconnaissance vocale offline
+  - Modèles français: https://alphacephei.com/vosk/models
+
 - **WebRTC VAD**: https://github.com/wiseman/py-webrtcvad
-- **IXWebSocket**: https://github.com/machinezone/IXWebSocket
+  - Voice Activity Detection pour Python
+  - Basé sur WebRTC de Google
+
+- **websockets**: https://websockets.readthedocs.io/
+  - Bibliothèque WebSocket pour Python (asyncio)
+
+- **libwebsockets**: https://libwebsockets.org/
+  - Bibliothèque C pour WebSocket (utilisée par mod_audio_stream)
+
+### Configuration système
+
+- **Dépendances**: libwebsockets-dev, cmake, git
+- **FreeSWITCH**: Installé dans `/usr/local/freeswitch`
+- **Configuration**: `/usr/local/freeswitch/conf/vanilla/`
+- **Modules**: `/usr/local/freeswitch/lib/freeswitch/mod/`
+- **Logs**: `/var/log/freeswitch/freeswitch.log`
+
+### Architecture projet
+
+- **Projet**: fs_minibot_streaming
+- **StreamingASR**: `system/services/streaming_asr.py`
+- **RobotFreeSwitchV2**: `system/robot_freeswitch_v2.py`
+- **Config**: `system/config.py`
+- **Logs**: `logs/misc/system.*.log`
 
 ---
 
 **Date de création**: 2025-11-06
-**Version**: 1.0
+**Dernière mise à jour**: 2025-11-07
+**Version**: 1.1
 **Auteur**: Claude (AI Assistant)
 **Projet**: fs_minibot_streaming
+
+**Changelog**:
+- v1.1 (2025-11-07): Mise à jour avec le processus exact d'installation (davehorner/mod_audio_stream)
+- v1.0 (2025-11-06): Version initiale

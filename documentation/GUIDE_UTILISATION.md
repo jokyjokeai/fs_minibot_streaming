@@ -47,7 +47,7 @@ fs_cli -x "status"
 psql -U minibot -d minibot_freeswitch -c "SELECT COUNT(*) FROM contacts;"
 
 # 3. Vérifier Vosk
-ls -la models/vosk-model-small-fr-0.22
+ls -la models/vosk-model-fr-0.22-lgraph
 
 # 4. Vérifier Ollama
 ollama list
@@ -182,7 +182,7 @@ AUDIO_BACKGROUND_REDUCTION=-10.0
 # VOSK (Speech-to-Text)
 # ============================================================
 # Chemin vers modèle Vosk français
-VOSK_MODEL_PATH=models/vosk-model-small-fr-0.22
+VOSK_MODEL_PATH=models/vosk-model-fr-0.22-lgraph
 
 # Sample rate pour Vosk (Hz)
 VOSK_SAMPLE_RATE=16000
@@ -635,7 +635,7 @@ D'après les lignes 445-498, le système transcrit automatiquement chaque audio 
 ```python
 def _transcribe_audio_with_vosk(audio_path):
     # 1. Charger modèle Vosk
-    model = Model("models/vosk-model-small-fr-0.22")
+    model = Model("models/vosk-model-fr-0.22-lgraph")
 
     # 2. Ouvrir fichier WAV
     wf = wave.open(audio_path, "rb")
@@ -1637,7 +1637,7 @@ SILENCE_THRESHOLD=1.0         # Plus permissif (défaut: 1.5)
 SPEECH_START_THRESHOLD=0.3    # Plus réactif (défaut: 0.5)
 
 # 3. Vérifier Vosk
-ls -la models/vosk-model-small-fr-0.22
+ls -la models/vosk-model-fr-0.22-lgraph
 
 # 4. Augmenter timeout
 LISTEN_TIMEOUT=10  # Au lieu de 4
@@ -1679,7 +1679,7 @@ INFO | 📝 Transcription: "" (vide)
 
 ```bash
 # 1. Vérifier modèle Vosk
-ls -la models/vosk-model-small-fr-0.22/
+ls -la models/vosk-model-fr-0.22-lgraph/
 # Doit contenir : am/, graph/, ivector/
 
 # 2. Vérifier sample rate audio
@@ -1694,7 +1694,7 @@ freeswitch> uuid_dump <UUID>
 # 4. Tester Vosk manuellement
 python
 >>> from vosk import Model, KaldiRecognizer
->>> model = Model("models/vosk-model-small-fr-0.22")
+>>> model = Model("models/vosk-model-fr-0.22-lgraph")
 >>> # Si erreur → modèle corrompu, re-télécharger
 ```
 

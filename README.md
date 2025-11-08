@@ -200,7 +200,7 @@ Détection rapide et fuzzy matching :
 
 ### Modèles IA
 
-- **Vosk** : `vosk-model-small-fr-0.22` (français, 40 MB, offline)
+- **Vosk** : `vosk-model-fr-0.22-lgraph` (français, 40 MB, offline)
 - **Ollama** : `mistral:7b` (recommandé) ou `llama3.2:1b` (plus rapide)
 - **Coqui** : `xtts_v2` (multilingual, clonage vocal)
 
@@ -538,12 +538,12 @@ python3 system/objections_database.py
 
 ```bash
 # Vérifier modèle
-ls -la models/vosk-model-small-fr-0.22/
+ls -la models/vosk-model-fr-0.22-lgraph/
 
 # Retélécharger
 cd models/
-wget https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip
-unzip vosk-model-small-fr-0.22.zip
+wget https://alphacephei.com/vosk/models/vosk-model-fr-0.22-lgraph.zip
+unzip vosk-model-fr-0.22-lgraph.zip
 ```
 
 ### Ollama timeout

@@ -446,9 +446,9 @@ Devrait afficher : `python-esl OK`
 cd /opt/fs_minibot_streaming
 mkdir -p models
 cd models
-wget https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip
-unzip vosk-model-small-fr-0.22.zip
-rm vosk-model-small-fr-0.22.zip
+wget https://alphacephei.com/vosk/models/vosk-model-fr-0.22-lgraph.zip
+unzip vosk-model-fr-0.22-lgraph.zip
+rm vosk-model-fr-0.22-lgraph.zip
 ```
 
 ### 11.2 Ollama NLP
@@ -503,7 +503,7 @@ FREESWITCH_ESL_PASSWORD=ClueCon
 FREESWITCH_CALLER_ID=+33123456789  # À MODIFIER
 
 # Vosk
-VOSK_MODEL_PATH=models/vosk-model-small-fr-0.22
+VOSK_MODEL_PATH=models/vosk-model-fr-0.22-lgraph
 
 # Ollama
 OLLAMA_URL=http://localhost:11434
@@ -817,7 +817,7 @@ import wave
 import json
 
 print("📥 Chargement modèle Vosk...")
-model = Model("models/vosk-model-small-fr-0.22")
+model = Model("models/vosk-model-fr-0.22-lgraph")
 
 # Ouvrir fichier audio test
 print("🎵 Lecture audio/test_audio.wav...")
@@ -1176,3 +1176,7 @@ for voice in voices:
 **✅ Installation terminée !**
 
 Documentation complète dans `/opt/fs_minibot_streaming/documentation/`
+
+
+mod audio stream a config et compiler aussi
+et freeswitch.pc??

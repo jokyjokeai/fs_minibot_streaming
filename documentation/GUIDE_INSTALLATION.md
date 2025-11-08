@@ -641,23 +641,24 @@ cd /opt/fs_minibot_streaming
 mkdir -p models
 cd models
 
-# Télécharger modèle français léger
-wget https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip
+# Télécharger modèle français Large Graph (RECOMMANDÉ pour précision optimale)
+wget https://alphacephei.com/vosk/models/vosk-model-fr-0.22-lgraph.zip
 
 # Décompresser
-unzip vosk-model-small-fr-0.22.zip
-rm vosk-model-small-fr-0.22.zip
+unzip vosk-model-fr-0.22-lgraph.zip
+rm vosk-model-fr-0.22-lgraph.zip
 
 # Vérifier
-ls -lh vosk-model-small-fr-0.22/
+ls -lh vosk-model-fr-0.22-lgraph/
 # Doit contenir : am/, conf/, graph/, ivector/
 
 cd ..
 ```
 
 **Modèles alternatifs** :
-- `vosk-model-fr-0.22` : Modèle complet (1.5 GB) - meilleure précision
-- `vosk-model-small-fr-0.22` : Modèle léger (40 MB) - plus rapide ✅
+- `vosk-model-fr-0.22-lgraph` : Modèle Large Graph (528 MB) - **RECOMMANDÉ** - Meilleure précision conversationnelle (+10-15% vs small) ✅
+- `vosk-model-small-fr-0.22` : Modèle léger (40 MB) - Plus rapide mais moins précis (pour tests uniquement)
+- `vosk-model-fr-0.22` : Modèle complet (1.5 GB) - Très précis mais plus lent (overkill pour temps réel)
 
 ### 8.2 Ollama NLP (Détection d'Intentions)
 
@@ -765,7 +766,7 @@ AUDIO_BACKGROUND_REDUCTION=-10.0
 # ═══════════════════════════════════════════════════════════════
 # VOSK STT (Speech-to-Text)
 # ═══════════════════════════════════════════════════════════════
-VOSK_MODEL_PATH=models/vosk-model-small-fr-0.22
+VOSK_MODEL_PATH=models/vosk-model-fr-0.22-lgraph
 VOSK_SAMPLE_RATE=16000
 
 # ═══════════════════════════════════════════════════════════════

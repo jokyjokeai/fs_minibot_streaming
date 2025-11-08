@@ -928,7 +928,7 @@ def section_12_project_config(has_gpu: bool):
         print(f"  • FREESWITCH_CALLER_ID: {caller_id}")
         print(f"  • API_PASSWORD: {api_password}")
         print(f"  • COQUI_USE_GPU: {'true' if has_gpu else 'false'}")
-        print(f"  • VOSK_MODEL_PATH: models/vosk-model-small-fr-0.22")
+        print(f"  • VOSK_MODEL_PATH: models/vosk-model-fr-0.22-lgraph")
         print(f"  • OLLAMA_URL: http://localhost:11434")
     else:
         print_warning(f".env.example non trouvé, création .env manuelle requise")
