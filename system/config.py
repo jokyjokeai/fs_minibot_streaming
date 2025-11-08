@@ -159,15 +159,16 @@ GRACE_PERIOD_SECONDS = float(os.getenv("GRACE_PERIOD_SECONDS", "2.5"))  # 2.5 se
 
 # Backchannel detection (mots courts d'acquiescement à ignorer pendant audio bot)
 BACKCHANNEL_ENABLED = os.getenv("BACKCHANNEL_ENABLED", "true").lower() == "true"
-BACKCHANNEL_MIN_DURATION = float(os.getenv("BACKCHANNEL_MIN_DURATION", "1.0"))  # < 1s = toujours ignorer
-BACKCHANNEL_MAX_DURATION = float(os.getenv("BACKCHANNEL_MAX_DURATION", "2.5"))  # > 2.5s = toujours barge-in
+# Optimisé Phase 1: Augmentation seuils pour réduire faux positifs (basé tests réels + recherche 2025)
+BACKCHANNEL_MIN_DURATION = float(os.getenv("BACKCHANNEL_MIN_DURATION", "1.5"))  # < 1.5s = toujours ignorer (était 1.0s)
+BACKCHANNEL_MAX_DURATION = float(os.getenv("BACKCHANNEL_MAX_DURATION", "3.5"))  # > 3.5s = toujours barge-in (était 2.5s)
 BACKCHANNEL_MAX_WORDS = int(os.getenv("BACKCHANNEL_MAX_WORDS", "2"))  # <= 2 mots pour être backchannel
 
 # Two-stage barge-in (basé recherche 2025: séparer speech_start de transcription)
-BACKCHANNEL_SPEECH_START_THRESHOLD = float(os.getenv("BACKCHANNEL_SPEECH_START_THRESHOLD", "0.8"))  # < 0.8s sur speech_start = potential backchannel
+BACKCHANNEL_SPEECH_START_THRESHOLD = float(os.getenv("BACKCHANNEL_SPEECH_START_THRESHOLD", "1.2"))  # < 1.2s sur speech_start = potential backchannel (était 0.8s)
 
 # Mots d'acquiescement (backchannels) à ignorer
-# Basé sur recherche industrie 2025 (Deepgram Flux, AssemblyAI)
+# Basé sur recherche industrie 2025 (Deepgram Flux, AssemblyAI) + tests réels
 BACKCHANNEL_KEYWORDS = [
     # Acquiescements
     "oui", "ok", "d'accord", "ah", "oh", "hm", "mm", "hmm",
@@ -177,7 +178,12 @@ BACKCHANNEL_KEYWORDS = [
     # Mots de continuite
     "ça", "vas-y", "allez", "continue", "je vois", "compris",
     # Hésitations (basé tests réels)
-    "alors", "bah", "euh", "ben", "donc"
+    "alors", "bah", "euh", "ben", "donc",
+    # Phase 1B: Ajout mots manquants (recherche 2025 + analyse logs)
+    "hein", "quoi", "comment", "pardon",  # Demandes répétition courtes
+    "m", "mh", "mouais", "moui",  # Variations acquiescement
+    "certes", "effectivement", "entendu",  # Acquiescements formels
+    "hop", "allez-y", "go"  # Encouragements
 ]
 
 # Mots de questions (toujours détecter comme vraie interruption)
