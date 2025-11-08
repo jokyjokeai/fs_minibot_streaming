@@ -726,6 +726,10 @@ class RobotFreeSwitchV2:
                         self.streaming_sessions[call_uuid]["barge_in_detected_time"] = 0
                         logger.debug(f"[{call_uuid[:8]}] 🔄 Barge-in flag reset for next audio")
 
+                        # BUFFER VOSK: Vider le buffer audio pour éviter accumulation transcriptions
+                        if self.streaming_asr and self.streaming_asr.is_available:
+                            self.streaming_asr.reset_recognizer(call_uuid)
+
                         return False
                     else:
                         # Smooth delay en cours, robot continue de parler

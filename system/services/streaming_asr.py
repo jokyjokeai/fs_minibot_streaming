@@ -406,6 +406,31 @@ class StreamingASR:
             del self.callbacks[call_uuid]
             logger.debug(f"❌ Callback unregistered for {call_uuid[:8]}")
 
+    def reset_recognizer(self, call_uuid: str):
+        """
+        Réinitialise le recognizer Vosk pour vider le buffer audio
+
+        Utilisé après un barge-in pour éviter l'accumulation de transcriptions partielles.
+        Basé sur la méthode Reset() de KaldiRecognizer (vosk-api).
+
+        Args:
+            call_uuid: UUID de l'appel
+        """
+        if call_uuid in self.recognizers:
+            try:
+                self.recognizers[call_uuid].Reset()
+                logger.info(f"[{call_uuid[:8]}] 🔄 Vosk recognizer reset (buffer cleared)")
+
+                # Réinitialiser aussi les transcriptions partielles dans stream_info
+                if call_uuid in self.active_streams:
+                    self.active_streams[call_uuid]["partial_transcription"] = ""
+                    self.active_streams[call_uuid]["final_transcription"] = ""
+
+            except Exception as e:
+                logger.error(f"[{call_uuid[:8]}] ❌ Failed to reset recognizer: {e}")
+        else:
+            logger.warning(f"[{call_uuid[:8]}] ⚠️ Cannot reset - recognizer not found")
+
     def _cleanup_stream(self, call_uuid: str):
         """Nettoie un stream"""
         if call_uuid in self.active_streams:
