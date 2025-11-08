@@ -283,8 +283,12 @@ class StreamingASR:
                     # Vérifier si fin de parole
                     if stream_info["current_silence_duration"] >= self.silence_threshold:
                         stream_info["in_speech"] = False
-                        logger.debug(f"🤐 Speech END detected: {call_uuid[:8]} (silence: {stream_info['current_silence_duration']:.1f}s)")
+                        logger.info(f"🤐 Speech END detected: {call_uuid[:8]} (silence: {stream_info['current_silence_duration']:.1f}s, threshold: {self.silence_threshold}s)")
                         await self._notify_speech_end(call_uuid)
+                    else:
+                        # Log progression du silence
+                        if stream_info["current_silence_duration"] % 0.5 < frame_duration_s:  # Log tous les 0.5s
+                            logger.debug(f"⏱️ Silence accumulating: {call_uuid[:8]} ({stream_info['current_silence_duration']:.1f}s / {self.silence_threshold}s)")
 
             # ASR - Transcription streaming
             if recognizer.AcceptWaveform(frame_bytes):
@@ -299,7 +303,9 @@ class StreamingASR:
                     latency_ms = (time.time() - start_time) * 1000
                     self._update_latency_stats(latency_ms)
 
-                    logger.info(f"📝 FINAL transcription [{call_uuid[:8]}]: '{text}' ({latency_ms:.1f}ms)")
+                    # Log avec info sur in_speech state
+                    in_speech_state = "IN_SPEECH" if stream_info["in_speech"] else "SILENCE"
+                    logger.info(f"📝 FINAL transcription [{call_uuid[:8]}]: '{text}' ({latency_ms:.1f}ms) [VAD state: {in_speech_state}, silence_duration: {stream_info['current_silence_duration']:.1f}s]")
                     await self._notify_transcription(call_uuid, text, "final", latency_ms)
 
             else:

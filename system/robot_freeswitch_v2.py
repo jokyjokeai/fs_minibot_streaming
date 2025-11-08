@@ -1119,7 +1119,8 @@ class RobotFreeSwitchV2:
         # Sinon utiliser speech_start_time (fallback pour compatibilité)
         if robot_end_time > 0 and speech_start_time >= robot_end_time:
             # Client a commencé à parler APRÈS que robot finit
-            speech_duration = current_time - speech_start_time
+            # Durée = temps écoulé depuis que robot a fini de parler
+            speech_duration = current_time - robot_end_time
         elif robot_end_time > 0:
             # Client parlait déjà quand robot a fini (barge-in pendant audio)
             speech_duration = current_time - robot_end_time
