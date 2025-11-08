@@ -82,9 +82,9 @@ class StreamingASR:
         self.frame_duration_ms = 30  # 30ms frames
         self.frame_size = int(self.sample_rate * self.frame_duration_ms / 1000)
 
-        # Seuils (optimisés pour réactivité)
-        self.silence_threshold = 2.5  # 2.5 secondes de silence = fin de parole (augmenté pour laisser client finir)
-        self.speech_start_threshold = 0.5  # 500ms de parole = début détecté (augmenté de 0.2s pour éviter faux positifs)
+        # Seuils (optimisés pour réactivité, basé recherche 2025)
+        self.silence_threshold = 0.8  # 800ms de silence = fin de parole (standard 2025: 500-800ms)
+        self.speech_start_threshold = 0.5  # 500ms de parole = début détecté (éviter faux positifs)
 
         # Modèle Vosk
         self.model = None

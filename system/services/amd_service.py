@@ -36,9 +36,10 @@ class AMDService:
     Combine détection FreeSWITCH (rapide) et analyse Python (précise).
     """
 
-    def __init__(self):
+    def __init__(self, esl_conn=None):
         logger.info("Initializing AMDService...")
         self.is_available = config.AMD_ENABLED
+        self.esl_conn = esl_conn
 
         # Mots-clés typiques de répondeurs (français)
         self.machine_keywords = [
@@ -199,3 +200,52 @@ class AMDService:
 
         # Fallback: utiliser uniquement résultat FreeSWITCH
         return fs_result
+
+    def set_esl_connection(self, esl_conn):
+        """
+        Définit la connexion ESL pour les commandes AMD FreeSWITCH
+
+        Args:
+            esl_conn: Connexion ESL API
+        """
+        self.esl_conn = esl_conn
+        logger.debug("ESL connection set for AMD service")
+
+    def detect(self, call_uuid: str) -> str:
+        """
+        Détecte si l'appelé est une machine ou un humain
+
+        Args:
+            call_uuid: UUID de l'appel
+
+        Returns:
+            "HUMAN", "MACHINE", ou "UNKNOWN"
+        """
+        if not self.is_available or not self.esl_conn:
+            logger.warning("AMD detection unavailable - returning HUMAN")
+            return "HUMAN"
+
+        try:
+            # Utiliser AMD FreeSWITCH (commande amd)
+            # Note: Cette commande doit être exécutée immédiatement après réponse
+            cmd = f"uuid_amd {call_uuid}"
+            result = self.esl_conn.api(cmd)
+
+            if result:
+                amd_result = result.getBody().strip()
+                logger.debug(f"AMD raw result for {call_uuid[:8]}: {amd_result}")
+
+                # Parser le résultat AMD
+                if "MACHINE" in amd_result.upper():
+                    return "MACHINE"
+                elif "HUMAN" in amd_result.upper():
+                    return "HUMAN"
+                else:
+                    return "UNKNOWN"
+            else:
+                logger.warning(f"AMD command failed for {call_uuid[:8]}")
+                return "HUMAN"  # Par défaut, considérer comme humain
+
+        except Exception as e:
+            logger.error(f"AMD detection error: {e}")
+            return "HUMAN"  # Par défaut en cas d'erreur
