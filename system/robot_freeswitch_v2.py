@@ -722,6 +722,10 @@ class RobotFreeSwitchV2:
                         self.esl_conn_api.api(stop_cmd)
                         logger.debug(f"[{call_uuid[:8]}] 🛑 Sent uuid_break to stop playback")
 
+                        # CRITIQUE: Réinitialiser le flag barge-in pour le prochain audio
+                        self.streaming_sessions[call_uuid]["barge_in_detected_time"] = 0
+                        logger.debug(f"[{call_uuid[:8]}] 🔄 Barge-in flag reset for next audio")
+
                         return False
                     else:
                         # Smooth delay en cours, robot continue de parler
