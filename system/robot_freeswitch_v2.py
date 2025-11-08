@@ -447,7 +447,9 @@ class RobotFreeSwitchV2:
             "final_result": None,
             "started_at": datetime.now(),
             "speech_start_time": 0,  # Timestamp début parole (pour backchannel detection)
-            "audio_start_time": 0  # Timestamp début audio (pour grace period)
+            "prev_speech_start_time": 0,  # Timestamp previous speech_start (pour calcul durée)
+            "audio_start_time": 0,  # Timestamp début audio (pour grace period)
+            "barge_in_detected_time": 0  # Phase 2: Timestamp détection barge-in (pour smooth delay)
         }
         
         logger.debug(f"[{call_uuid[:8]}] Streaming session initialized")
@@ -605,8 +607,32 @@ class RobotFreeSwitchV2:
                     logger.warning(f"[{call_uuid[:8]}] 📞 Hangup detected - stopping audio playback")
                     return False
 
-                # Vérifier barge-in
-                if self.barge_in_active.get(call_uuid, False):
+                # Phase 2: Vérifier barge-in avec smooth delay
+                session = self.streaming_sessions.get(call_uuid, {})
+                barge_in_time = session.get("barge_in_detected_time", 0)
+
+                if barge_in_time > 0:
+                    # Barge-in détecté, vérifier si smooth delay écoulé
+                    time_since_detection = time.time() - barge_in_time
+
+                    if time_since_detection >= config.BARGE_IN_SMOOTH_DELAY:
+                        # Smooth delay écoulé → Couper MAINTENANT
+                        self.barge_in_active[call_uuid] = True
+                        logger.info(f"[{call_uuid[:8]}] ⏹️ Audio interrupted by barge-in after {elapsed:.1f}s (smooth delay {config.BARGE_IN_SMOOTH_DELAY}s elapsed)")
+
+                        # STOPPER l'audio en cours avec uuid_break
+                        stop_cmd = f"uuid_break {call_uuid}"
+                        self.esl_conn_api.api(stop_cmd)
+                        logger.debug(f"[{call_uuid[:8]}] 🛑 Sent uuid_break to stop playback")
+
+                        return False
+                    else:
+                        # Smooth delay en cours, robot continue de parler
+                        remaining = config.BARGE_IN_SMOOTH_DELAY - time_since_detection
+                        logger.debug(f"[{call_uuid[:8]}] 🔄 Barge-in smooth delay active (remaining: {remaining:.1f}s)")
+
+                # Ancienne logique (fallback si pas de smooth delay)
+                elif self.barge_in_active.get(call_uuid, False):
                     logger.info(f"[{call_uuid[:8]}] ⏹️ Audio interrupted by barge-in after {elapsed:.1f}s")
 
                     # STOPPER l'audio en cours avec uuid_break
@@ -1059,9 +1085,11 @@ class RobotFreeSwitchV2:
                             # NE PAS set barge_in_active à True
                             # Le robot continue de parler
                         else:
-                            # Vraie interruption → BARGE-IN
-                            self.barge_in_active[call_uuid] = True
-                            logger.info(f"[{call_uuid[:8]}] 🔊 Barge-in detected!")
+                            # Vraie interruption → BARGE-IN (Phase 2: avec smooth delay)
+                            logger.info(f"[{call_uuid[:8]}] 🔊 Barge-in detected! (smooth delay: {config.BARGE_IN_SMOOTH_DELAY}s before stopping)")
+
+                            # Marquer timestamp détection pour smooth delay
+                            self.streaming_sessions[call_uuid]["barge_in_detected_time"] = time.time()
 
             elif event_type == "speech_start":
                 # Début de parole détecté
@@ -1092,23 +1120,24 @@ class RobotFreeSwitchV2:
 
                     # STAGE 1: Vérification durée immédiate (sans attendre transcription)
                     if speech_duration > 0:  # On a déjà un speech en cours (calcul entre 2 speech_start)
-                        # Si parole très longue (>2.5s), barge-in immédiat
+                        # Si parole très longue (>3.5s), barge-in avec smooth delay (Phase 2)
                         if speech_duration > config.BACKCHANNEL_MAX_DURATION:
-                            self.barge_in_active[call_uuid] = True
-                            logger.info(f"[{call_uuid[:8]}] 🔊 Barge-in detected (speech_start, duration > {config.BACKCHANNEL_MAX_DURATION}s: {speech_duration:.1f}s)")
+                            logger.info(f"[{call_uuid[:8]}] 🔊 Barge-in detected (speech_start, duration > {config.BACKCHANNEL_MAX_DURATION}s: {speech_duration:.1f}s, smooth delay: {config.BARGE_IN_SMOOTH_DELAY}s)")
+                            # Marquer timestamp pour smooth delay
+                            self.streaming_sessions[call_uuid]["barge_in_detected_time"] = time.time()
                             return
 
-                        # Si parole très courte (<0.8s), probable backchannel → ATTENDRE transcription
+                        # Si parole très courte (<1.2s Phase 1), probable backchannel → ATTENDRE transcription
                         if speech_duration < config.BACKCHANNEL_SPEECH_START_THRESHOLD:
                             logger.debug(f"[{call_uuid[:8]}] ⏳ Potential backchannel (duration < {config.BACKCHANNEL_SPEECH_START_THRESHOLD}s: {speech_duration:.1f}s) - waiting for transcription")
                             # Marquer comme "potential backchannel" mais NE PAS trigger barge-in
                             # La transcription décidera (STAGE 2)
                             return
 
-                    # Durée moyenne (0.8-2.5s) ou pas de last_speech → Trigger barge-in par défaut
+                    # Durée moyenne (1.2-3.5s Phase 1) ou pas de last_speech → Marquer détection (smooth delay Phase 2)
                     # (La transcription peut override si backchannel détecté)
-                    self.barge_in_active[call_uuid] = True
-                    logger.info(f"[{call_uuid[:8]}] 🔊 Barge-in detected (speech_start)!")
+                    logger.info(f"[{call_uuid[:8]}] 🔊 Barge-in detected (speech_start, smooth delay: {config.BARGE_IN_SMOOTH_DELAY}s)")
+                    self.streaming_sessions[call_uuid]["barge_in_detected_time"] = time.time()
 
             elif event_type == "speech_end":
                 # Fin de parole détectée

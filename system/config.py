@@ -167,6 +167,11 @@ BACKCHANNEL_MAX_WORDS = int(os.getenv("BACKCHANNEL_MAX_WORDS", "2"))  # <= 2 mot
 # Two-stage barge-in (basé recherche 2025: séparer speech_start de transcription)
 BACKCHANNEL_SPEECH_START_THRESHOLD = float(os.getenv("BACKCHANNEL_SPEECH_START_THRESHOLD", "1.2"))  # < 1.2s sur speech_start = potential backchannel (était 0.8s)
 
+# Barge-in smooth delay (Phase 2: recherche 2025 - rendre interruption plus naturelle)
+# Robot continue de parler X secondes après détection barge-in avant de couper
+# Rend conversation plus humaine (vs coupure instantanée = robotique)
+BARGE_IN_SMOOTH_DELAY = float(os.getenv("BARGE_IN_SMOOTH_DELAY", "1.0"))  # 1 seconde
+
 # Mots d'acquiescement (backchannels) à ignorer
 # Basé sur recherche industrie 2025 (Deepgram Flux, AssemblyAI) + tests réels
 BACKCHANNEL_KEYWORDS = [
