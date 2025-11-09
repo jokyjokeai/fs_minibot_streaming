@@ -904,7 +904,11 @@ class RobotFreeSwitchV3:
             websocket_url = f"ws://127.0.0.1:8080/stream/{call_uuid}"
 
             # Paramètres streaming
-            mix_type = "mono"       # mono = caller only, mixed = both parties, stereo = separate
+            # V3 FIX CRITIQUE: Utiliser "read" pour écouter SEULEMENT le client
+            # - "read" = Audio entrant (client uniquement) ✅
+            # - "write" = Audio sortant (robot uniquement)
+            # - "mono" = Audio mixé (robot + client) ❌ CAUSAIT FAUX BARGE-INS
+            mix_type = "read"
             sampling_rate = "16000" # 16kHz pour Vosk (meilleur qualité/performance)
             metadata = ""           # Métadonnées optionnelles JSON
 
