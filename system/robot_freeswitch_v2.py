@@ -1084,15 +1084,10 @@ class RobotFreeSwitchV2:
 
     def _is_backchannel(self, call_uuid: str, transcription: str) -> bool:
         """
-        Détermine si parole est un backchannel à ignorer (logique hybride durée + contenu)
+        RÈGLE SIMPLE: Utilise la durée RÉELLE de parole (calculée par VAD speech_end)
 
-        Un backchannel = mot court d'acquiescement ("oui", "ok") dit PENDANT que bot parle,
-        qui ne nécessite PAS d'arrêter l'audio (juste acquiescement, pas vraie interruption).
-
-        Logique hybride:
-        1. Durée < 1s → TOUJOURS backchannel (ignorer)
-        2. Durée > 2.5s → TOUJOURS vraie interruption (barge-in)
-        3. Zone grise 1-2.5s → Analyser contenu (mots + intent)
+        - PLAYING_AUDIO: Si durée < 2s → Ignorer (backchannel)
+        - WAITING_RESPONSE: JAMAIS ignorer (toujours capturer la réponse)
 
         Args:
             call_uuid: UUID de l'appel
@@ -1104,64 +1099,34 @@ class RobotFreeSwitchV2:
         if not config.BACKCHANNEL_ENABLED:
             return False  # Backchannel detection désactivé
 
-        # Calculer durée de parole CLIENT (depuis fin parole robot, pas depuis speech_start)
-        session = self.streaming_sessions.get(call_uuid, {})
-        robot_end_time = session.get("robot_speech_end_time", 0)
-        speech_start_time = session.get("speech_start_time", 0)
-        current_time = time.time()
+        # Vérifier si on est en PLAYING_AUDIO ou WAITING_RESPONSE
+        # barge_in_active = False → PLAYING_AUDIO (filtrage backchannel actif)
+        # barge_in_active = True → WAITING_RESPONSE (capture tout)
+        is_playing_audio = not self.barge_in_active.get(call_uuid, True)
 
-        if speech_start_time == 0:
-            # Pas de timestamp speech_start, on ne peut pas calculer durée
-            # Par sécurité, considérer comme vraie interruption
+        if not is_playing_audio:
+            # WAITING_RESPONSE: Toujours capturer, jamais ignorer
+            logger.debug(f"[{call_uuid[:8]}] 🎧 WAITING_RESPONSE mode - capturing all speech: '{transcription}'")
             return False
 
-        # Si robot a fini de parler (robot_end_time > 0), calculer depuis ce moment
-        # Sinon utiliser speech_start_time (fallback pour compatibilité)
-        if robot_end_time > 0 and speech_start_time >= robot_end_time:
-            # Client a commencé à parler APRÈS que robot finit
-            # Durée = temps écoulé depuis que robot a fini de parler
-            speech_duration = current_time - robot_end_time
-        elif robot_end_time > 0:
-            # Client parlait déjà quand robot a fini (barge-in pendant audio)
-            speech_duration = current_time - robot_end_time
-        else:
-            # Fallback: robot n'a pas encore fini (ne devrait pas arriver car barge_in_active vérifie état)
-            speech_duration = current_time - speech_start_time
+        # PLAYING_AUDIO: Utiliser la durée RÉELLE de parole
+        session = self.streaming_sessions.get(call_uuid, {})
+        speech_duration = session.get("last_speech_duration", 0.0)
 
-        # === CRITÈRE 1: Durée TRÈS courte ===
-        if speech_duration < config.BACKCHANNEL_MIN_DURATION:
-            logger.info(f"[{call_uuid[:8]}] 💬 BACKCHANNEL detected (duration < {config.BACKCHANNEL_MIN_DURATION}s: {speech_duration:.1f}s): '{transcription}'")
+        # Si on n'a pas encore la durée (speech_end pas encore arrivé), attendre
+        if speech_duration == 0.0:
+            logger.debug(f"[{call_uuid[:8]}] ⏳ No speech duration yet - waiting for speech_end")
+            return True  # Par défaut ignorer si on n'a pas la durée
+
+        # RÈGLE SIMPLE: < 2 secondes = backchannel, >= 2 secondes = barge-in
+        DURATION_THRESHOLD = 2.0  # secondes
+
+        if speech_duration < DURATION_THRESHOLD:
+            logger.info(f"[{call_uuid[:8]}] 💬 BACKCHANNEL (duration {speech_duration:.2f}s < {DURATION_THRESHOLD}s): '{transcription}'")
             return True  # Ignorer
-
-        # === CRITÈRE 2: Durée LONGUE ===
-        if speech_duration > config.BACKCHANNEL_MAX_DURATION:
-            logger.info(f"[{call_uuid[:8]}] 🔊 REAL INTERRUPTION (duration > {config.BACKCHANNEL_MAX_DURATION}s: {speech_duration:.1f}s): '{transcription}'")
-            return False  # Barge-in
-
-        # === ZONE GRISE: 1-2.5s → Analyser contenu ===
-
-        words = transcription.lower().strip().split()
-        word_count = len(words)
-
-        # Critère 3: Nombre de mots ET présence mot backchannel
-        # Basé sur recherche 2025: any() plus flexible que all()
-        # "oui allô" (contient "oui") → backchannel ✅
-        # "peut-être demain" (pas de mot backchannel) → interruption ✅
-        if word_count <= config.BACKCHANNEL_MAX_WORDS:
-            # 1-2 mots courts, vérifier si AU MOINS UN mot est backchannel
-            if any(word in config.BACKCHANNEL_KEYWORDS for word in words):
-                logger.info(f"[{call_uuid[:8]}] 💬 BACKCHANNEL detected ({word_count} words with backchannel keyword, {speech_duration:.1f}s): '{transcription}'")
-                return True  # "oui allô", "ok merci", "d'accord oui" → Ignorer
-
-        # Critère 4: Mots interrogatifs (toujours vraie interruption)
-        if any(qword in words for qword in config.QUESTION_KEYWORDS):
-            logger.info(f"[{call_uuid[:8]}] 🔊 REAL INTERRUPTION (question word detected): '{transcription}'")
-            return False  # "oui mais vous êtes qui" → Barge-in
-
-        # Par défaut (doute), considérer comme vraie interruption
-        # Mieux vaut laisser parler que couper par erreur
-        logger.info(f"[{call_uuid[:8]}] 🔊 REAL INTERRUPTION (default: {word_count} words, {speech_duration:.1f}s): '{transcription}'")
-        return False
+        else:
+            logger.info(f"[{call_uuid[:8]}] 🔊 BARGE-IN (duration {speech_duration:.2f}s >= {DURATION_THRESHOLD}s): '{transcription}'")
+            return False  # Vraie interruption
 
     def _handle_streaming_event(self, event_data: Dict[str, Any]):
         """
@@ -1264,9 +1229,16 @@ class RobotFreeSwitchV2:
                     logger.debug(f"[{call_uuid[:8]}] ⏳ Speech detected ({speech_duration:.1f}s since robot finished) - waiting for transcription")
 
             elif event_type == "speech_end":
-                # Fin de parole détectée
-                silence_duration = event_data.get("silence_duration", 0.0)
-                logger.debug(f"[{call_uuid[:8]}] 🔇 Speech ended (silence: {silence_duration:.1f}s)")
+                # Fin de parole détectée - tracker timestamp pour calcul durée réelle
+                current_time = time.time()
+                self.streaming_sessions[call_uuid]["speech_end_time"] = current_time
+
+                # Calculer durée réelle de la parole
+                speech_start_time = self.streaming_sessions[call_uuid].get("speech_start_time", 0)
+                if speech_start_time > 0:
+                    speech_duration = current_time - speech_start_time
+                    self.streaming_sessions[call_uuid]["last_speech_duration"] = speech_duration
+                    logger.info(f"[{call_uuid[:8]}] 🔇 Speech ended (duration: {speech_duration:.2f}s)")
 
         except Exception as e:
             logger.error(f"[{call_uuid[:8]}] Streaming event error: {e}")
