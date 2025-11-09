@@ -69,9 +69,11 @@ class StreamingASRV3:
             return
 
         # Configuration VAD
-        self.vad = webrtcvad.Vad(2)  # Mode 2 = balance qualité/réactivité
+        # Mode 3 = très agressif (recommandé pour téléphonie avec bruit ambiant)
+        # Source: WebRTC VAD best practices 2024
+        self.vad = webrtcvad.Vad(3)  # Mode 3 pour téléphonie (vs 2 avant)
         self.sample_rate = config.VOSK_SAMPLE_RATE  # 16000 Hz
-        self.frame_duration_ms = 30  # 30ms frames
+        self.frame_duration_ms = 30  # 30ms frames (peut être 20ms pour plus de réactivité)
         self.frame_size = int(self.sample_rate * self.frame_duration_ms / 1000)
 
         # Seuils V3 (depuis config_v3)
@@ -388,7 +390,7 @@ class StreamingASRV3:
 
     async def _notify_speech_end(self, call_uuid: str, duration: float):
         """
-        V3: Notifie fin de parole AVEC durée incluse
+        V3: Notifie fin de parole AVEC durée incluse + FORCE FLUSH Vosk
 
         Événement envoyé:
         {
@@ -398,6 +400,25 @@ class StreamingASRV3:
             "timestamp": float
         }
         """
+        # 🎯 FIX CRITIQUE: Forcer FinalResult() pour flush buffers Vosk
+        # Après speech_end, Vosk peut avoir des frames en buffer
+        # On force le flush pour obtenir la transcription finale
+        recognizer = self.recognizers.get(call_uuid)
+        if recognizer:
+            try:
+                final_result = json.loads(recognizer.FinalResult())
+                final_text = final_result.get("text", "").strip()
+
+                if final_text:
+                    logger.info(f"🔥 FinalResult() after speech_end [{call_uuid[:8]}]: '{final_text}'")
+
+                    # Envoyer comme transcription finale
+                    await self._notify_transcription(call_uuid, final_text, "final", duration, 0.0)
+
+            except Exception as e:
+                logger.error(f"❌ FinalResult() error for {call_uuid[:8]}: {e}")
+
+        # Ensuite notifier speech_end normalement
         if call_uuid in self.callbacks:
             try:
                 callback = self.callbacks[call_uuid]

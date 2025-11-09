@@ -96,11 +96,11 @@ class BargeInDetector:
     V3: Détecteur de barge-in ULTRA SIMPLE
 
     Une seule règle:
-    - PLAYING_AUDIO + durée >= 2s + pas grace period = BARGE-IN
+    - PLAYING_AUDIO + durée >= 2.5s + pas grace period = BARGE-IN
     - WAITING_RESPONSE = Toujours capturer (pas de barge-in)
     """
 
-    DURATION_THRESHOLD = 2.0  # secondes
+    DURATION_THRESHOLD = 2.5  # secondes (augmenté de 2.0s pour plus de naturel)
 
     def should_trigger(
         self,
@@ -201,7 +201,7 @@ class RobotFreeSwitchV3:
 
         # === V3: BARGE-IN DETECTOR ===
         self.barge_in_detector = BargeInDetector()
-        logger.info("✅ V3 BargeInDetector initialized (threshold: 2.0s)")
+        logger.info(f"✅ V3 BargeInDetector initialized (threshold: {BargeInDetector.DURATION_THRESHOLD}s)")
 
         # === SERVICES INITIALIZATION ===
         logger.info("🤖 Loading AI services V3...")
@@ -531,13 +531,18 @@ class RobotFreeSwitchV3:
             "consecutive_no_match": 0,
             "autonomous_turns": 0,
             "last_transcription": None,
+            "last_partial_transcription": None,  # Backup sécurité
+            "barge_in_transcription": None,  # Transcription sauvegardée du barge-in
             "objection_matcher": None,
             "final_result": None,
             "started_at": datetime.now(),
             "speech_start_time": 0,  # Timestamp début parole (pour backchannel detection)
             "prev_speech_start_time": 0,  # Timestamp previous speech_start (pour calcul durée)
             "audio_start_time": 0,  # Timestamp début audio (pour grace period)
-            "barge_in_detected_time": 0  # Phase 2: Timestamp détection barge-in (pour smooth delay)
+            "barge_in_detected_time": 0,  # Phase 2: Timestamp détection barge-in (pour smooth delay)
+            "audio_state": "IDLE",  # IDLE | PLAYING_AUDIO | WAITING_RESPONSE
+            "speech_ended": False,  # Flag pour attendre fin parole client
+            "hangup_detected": False  # Flag pour détecter hangup
         }
         
         logger.debug(f"[{call_uuid[:8]}] Streaming session initialized")
@@ -764,8 +769,11 @@ class RobotFreeSwitchV3:
                 # NOUVEAU: Marquer que le robot est en train de parler + durée estimée
                 self.streaming_sessions[call_uuid]["robot_playing_audio"] = True
                 self.streaming_sessions[call_uuid]["robot_audio_end_expected"] = time.time() + audio_duration
+                # V3: État explicite PLAYING_AUDIO
+                self.streaming_sessions[call_uuid]["audio_state"] = "PLAYING_AUDIO"
+                self.streaming_sessions[call_uuid]["speech_ended"] = False  # Reset flag
 
-            logger.info(f"[{call_uuid[:8]}] 🎬 STATE: PLAYING_AUDIO (duration: {audio_duration:.1f}s, ignoring speech detection until finished)")
+            logger.info(f"[{call_uuid[:8]}] 🎬 STATE: PLAYING_AUDIO (duration: {audio_duration:.1f}s, barge-in possible if speech >= 2.5s)")
 
             # Commande uuid_broadcast pour playback
             # Syntaxe: uuid_broadcast <uuid> <path> [aleg|bleg|both]
@@ -830,6 +838,15 @@ class RobotFreeSwitchV3:
                         # NOUVEAU: Marquer que le robot a fini de parler (interrompu)
                         self.streaming_sessions[call_uuid]["robot_playing_audio"] = False
 
+                        # 🔥 FIX CRITIQUE: Sauvegarder la transcription du BARGE-IN
+                        # Cette transcription sera retournée IMMÉDIATEMENT par _listen_streaming()
+                        # au lieu d'attendre une nouvelle parole !
+                        barge_in_transcription = self.streaming_sessions[call_uuid].get("last_transcription")
+                        self.streaming_sessions[call_uuid]["barge_in_transcription"] = barge_in_transcription
+
+                        logger.info(f"[{call_uuid[:8]}] 💾 Barge-in transcription saved: '{barge_in_transcription}'")
+                        logger.info(f"[{call_uuid[:8]}] 🎧 STATE: BARGE_IN_COMPLETED (transcription ready)")
+
                         return False
                     else:
                         # Smooth delay en cours, robot continue de parler
@@ -857,8 +874,11 @@ class RobotFreeSwitchV3:
                 self.streaming_sessions[call_uuid]["robot_speech_end_time"] = time.time()
                 # NOUVEAU: Marquer que le robot a fini de parler
                 self.streaming_sessions[call_uuid]["robot_playing_audio"] = False
+                # V3: Passer en mode WAITING_RESPONSE
+                self.streaming_sessions[call_uuid]["audio_state"] = "WAITING_RESPONSE"
+                self.streaming_sessions[call_uuid]["speech_ended"] = False  # Reset pour nouvelle écoute
 
-            logger.info(f"[{call_uuid[:8]}] 🎧 STATE: WAITING_RESPONSE (all speech will be captured, no backchannel filtering)")
+            logger.info(f"[{call_uuid[:8]}] 🎧 STATE: WAITING_RESPONSE (listening for complete client response)")
             return True
             
         except Exception as e:
@@ -1066,48 +1086,122 @@ class RobotFreeSwitchV3:
 
     def _listen_streaming(self, call_uuid: str, timeout: int) -> Optional[str]:
         """
-        Écoute en mode streaming (temps réel via WebSocket)
+        Écoute en mode streaming avec 2 MODES DISTINCTS :
 
-        Attend que le client finisse de parler avant de retourner la transcription.
-        Le VAD détecte automatiquement la fin de parole (1.5s de silence).
+        MODE 1 - APRÈS BARGE-IN :
+        - La transcription qui a déclenché le barge-in est DÉJÀ disponible
+        - On la retourne IMMÉDIATEMENT sans attendre
+        - Pas de speech_ended à attendre !
+
+        MODE 2 - WAITING_RESPONSE NORMAL :
+        - Robot a fini de parler normalement (pas de barge-in)
+        - Attendre que client parle et finisse (speech_end)
+        - Workflow classique avec transcription parallèle
 
         Args:
             call_uuid: UUID de l'appel
-            timeout: Timeout en secondes
+            timeout: Timeout global en secondes
 
         Returns:
-            Transcription ou None
+            Transcription finale ou None
         """
-        logger.debug(f"[{call_uuid[:8]}] 👂 Listening (streaming mode)...")
+        session = self.streaming_sessions.get(call_uuid)
+        if not session:
+            logger.warning(f"[{call_uuid[:8]}] No streaming session")
+            return None
+
+        # 🔥 MODE 1: APRÈS BARGE-IN → Retour IMMÉDIAT
+        barge_in_transcription = session.get("barge_in_transcription")
+        if barge_in_transcription:
+            logger.info(f"[{call_uuid[:8]}] ⚡ BARGE-IN MODE: Returning saved transcription immediately: '{barge_in_transcription}'")
+            # Effacer pour éviter réutilisation
+            session["barge_in_transcription"] = None
+            session["last_transcription"] = None
+            session["last_partial_transcription"] = None
+            return barge_in_transcription
+
+        # 🔥 MODE 2: WAITING_RESPONSE NORMAL
+        logger.debug(f"[{call_uuid[:8]}] 👂 WAITING_RESPONSE MODE: Listening for client to speak...")
 
         # TOUJOURS effacer l'ancienne transcription pour éviter réutilisation
-        self.streaming_sessions[call_uuid]["last_transcription"] = None
-        self.streaming_sessions[call_uuid]["last_speech_time"] = 0
+        session["last_transcription"] = None
+        session["last_partial_transcription"] = None
+        session["speech_ended"] = False
 
-        # Attendre nouvelle transcription (le client est en train de parler)
+        # PHASE 1: Attendre que le client finisse de parler (speech_end)
         start_time = time.time()
         check_interval = 0.1  # 100ms
 
+        logger.debug(f"[{call_uuid[:8]}] ⏳ Waiting for client to finish speaking...")
+
         while time.time() - start_time < timeout:
             # Vérifier si hangup détecté
-            if call_uuid not in self.streaming_sessions or self.streaming_sessions[call_uuid].get("hangup_detected", False):
+            if session.get("hangup_detected", False):
                 logger.warning(f"[{call_uuid[:8]}] 📞 Hangup detected - stopping listen")
                 return None
 
-            # Vérifier si transcription disponible
-            transcription = self.streaming_sessions[call_uuid].get("last_transcription")
+            # Vérifier si client a fini de parler
+            if session.get("speech_ended", False):
+                speech_end_time = time.time()
+                elapsed_to_end = speech_end_time - start_time
+                logger.info(f"[{call_uuid[:8]}] ✅ Client finished speaking after {elapsed_to_end:.1f}s (speech_end detected)")
 
-            if transcription:
-                logger.info(f"[{call_uuid[:8]}] ✅ Got transcription: {transcription}")
-                # Effacer pour éviter réutilisation
-                self.streaming_sessions[call_uuid]["last_transcription"] = None
-                return transcription
+                # Debug: Vérifier si transcription déjà disponible
+                existing_transcription = session.get("last_transcription")
+                existing_partial = session.get("last_partial_transcription")
+                logger.debug(f"[{call_uuid[:8]}] 📝 At speech_end: FINAL='{existing_transcription}' PARTIAL='{existing_partial}'")
+
+                # OPTIMISATION: Si transcription FINALE déjà disponible → retour immédiat !
+                if existing_transcription:
+                    logger.info(f"[{call_uuid[:8]}] ⚡ FINAL transcription already available: {existing_transcription} (instant!)")
+                    session["last_transcription"] = None
+                    return existing_transcription
+
+                break
 
             time.sleep(check_interval)
+        else:
+            # Timeout global sans que client ait parlé
+            logger.warning(f"[{call_uuid[:8]}] ⏱️ Listen timeout ({timeout}s) - no speech detected")
+            return None
 
-        # Timeout sans transcription
-        logger.warning(f"[{call_uuid[:8]}] ⏱️ Listen timeout ({timeout}s) - no response")
-        return None
+        # PHASE 2: Attendre transcription FINALE (max 1s après speech_end)
+        # Pendant que client parlait, Vosk transcrivait EN PARALLÈLE
+        # → Transcription finale arrive généralement en < 500ms !
+        # Si pas de transcription en 1s → utiliser PARTIAL backup
+
+        final_wait_timeout = 1.0  # 1s max pour transcription finale (réduit de 2s)
+        final_wait_start = time.time()
+
+        logger.debug(f"[{call_uuid[:8]}] ⏳ Waiting for FINAL transcription (max {final_wait_timeout}s)...")
+
+        while time.time() - final_wait_start < final_wait_timeout:
+            # Vérifier si hangup
+            if session.get("hangup_detected", False):
+                logger.warning(f"[{call_uuid[:8]}] 📞 Hangup detected during transcription wait")
+                return None
+
+            # Vérifier si transcription finale disponible
+            transcription = session.get("last_transcription")
+
+            if transcription:
+                latency = (time.time() - speech_end_time) * 1000  # ms
+                logger.info(f"[{call_uuid[:8]}] ✅ Got FINAL transcription: {transcription} (latency: {latency:.0f}ms)")
+                # Effacer pour éviter réutilisation
+                session["last_transcription"] = None
+                return transcription
+
+            time.sleep(0.05)  # 50ms check plus fréquent
+
+        # PHASE 3: Timeout transcription finale → Backup avec dernière PARTIAL
+        partial = session.get("last_partial_transcription")
+        if partial:
+            logger.warning(f"[{call_uuid[:8]}] ⚠️ FINAL timeout ({final_wait_timeout}s) - using last PARTIAL: {partial}")
+            session["last_partial_transcription"] = None
+            return partial
+        else:
+            logger.warning(f"[{call_uuid[:8]}] ❌ No transcription available (neither FINAL nor PARTIAL)")
+            return None
 
     def _listen_record_fallback(self, call_uuid: str, timeout: int) -> Optional[str]:
         """
@@ -1246,9 +1340,11 @@ class RobotFreeSwitchV3:
                 # Sauvegarder durée pour debug
                 session["last_speech_duration"] = duration
 
-                # Déterminer audio_state
-                is_playing_audio = not self.barge_in_active.get(call_uuid, True)
-                audio_state = "PLAYING_AUDIO" if is_playing_audio else "WAITING_RESPONSE"
+                # Marquer que client a fini de parler (pour _listen_streaming)
+                session["speech_ended"] = True
+
+                # Récupérer audio_state depuis session (plus fiable)
+                audio_state = session.get("audio_state", "IDLE")
 
                 # Vérifier grace period (COURT au début de l'audio seulement)
                 #
@@ -1289,7 +1385,7 @@ class RobotFreeSwitchV3:
                 transcription_type = event_data.get("transcription_type", "")  # V3: transcription_type
                 duration = event_data.get("duration", 0.0)  # ← NOUVEAU V3
 
-                # Ne traiter que finales
+                # Traiter FINAL (pour NLP)
                 if text and transcription_type == "final":
                     logger.info(
                         f"[{call_uuid[:8]}] 📝 V3 FINAL transcription: '{text}' "
@@ -1302,6 +1398,11 @@ class RobotFreeSwitchV3:
 
                     # NOTE V3: Barge-in déjà décidé sur speech_end
                     # Cette transcription est juste pour NLP
+
+                # Sauvegarder aussi PARTIAL (backup sécurité)
+                elif text and transcription_type == "partial":
+                    session["last_partial_transcription"] = text
+                    logger.debug(f"[{call_uuid[:8]}] 📝 V3 PARTIAL: '{text}' (backup)")
 
         except Exception as e:
             logger.error(f"[{call_uuid[:8]}] V3 Streaming event error: {e}", exc_info=True)

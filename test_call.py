@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Script de test pour lancer un appel simple - VERSION V3
+Script de test pour lancer un appel simple - VERSION V3 OPTIMISÉE
 
 Utilise robot_freeswitch_v3.py avec:
-- Barge-in simplifié (durée >= 2s)
-- Pas de crash Vosk (reset_recognizer supprimé)
-- Pas de race conditions (durée dans événements)
-- Logs debug détaillés
+- Barge-in simplifié (durée >= 2.5s)
+- Transcription parallèle (latence < 500ms)
+- États PLAYING_AUDIO / WAITING_RESPONSE séparés
+- Pas de backchannel keywords (juste durée)
 """
 import time
 import threading
@@ -14,7 +14,7 @@ from system.robot_freeswitch_v3 import RobotFreeSwitchV3 as RobotFreeSWITCH
 
 def main():
     print("="*60)
-    print("🚀 TEST V3 - Initialisation du robot...")
+    print("🚀 TEST V3 OPTIMISÉ - Initialisation du robot...")
     print("="*60)
     robot = RobotFreeSWITCH()
     robot.connect()
@@ -39,17 +39,20 @@ def main():
         print("💡 Vérifier les logs dans logs/errors/system.robot_freeswitch_errors.log")
 
     # Attendre la fin de la conversation
-    print("\n⏳ V3 Conversation en cours (120 secondes)...")
+    print("\n⏳ V3 OPTIMISÉ Conversation en cours (120 secondes)...")
     print("   📊 Surveillez les logs V3:")
-    print("   tail -f logs/misc/system.robot_freeswitch_*.log")
-    print("\n   🔍 Cherchez les logs V3 avec:")
-    print("   grep 'V3' logs/misc/system.robot_freeswitch_*.log")
+    print("   tail -f logs/misc/system.robot_freeswitch_v3_*.log")
+    print("\n   🔍 Nouveaux logs à surveiller:")
+    print("   - 'threshold: 2.5s' (nouveau seuil barge-in)")
+    print("   - 'STATE: PLAYING_AUDIO' (état explicite)")
+    print("   - 'STATE: WAITING_RESPONSE' (état explicite)")
+    print("   - 'latency: XXXms' (latence transcription finale)")
     print()
     time.sleep(120)
 
     print("\n🛑 Arrêt du robot V3...")
     robot.stop()
-    print("✅ V3 Test terminé")
+    print("✅ V3 OPTIMISÉ Test terminé")
     print("="*60)
 
 if __name__ == "__main__":
