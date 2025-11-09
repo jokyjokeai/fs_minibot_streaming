@@ -197,13 +197,17 @@ class StreamingASRV3:
                         stereo_frame = audio_buffer[:bytes_per_frame_stereo]
                         audio_buffer = audio_buffer[bytes_per_frame_stereo:]
 
-                        # Extraire canal gauche (caller) uniquement
+                        # Extraire canal CLIENT uniquement
+                        # IMPORTANT: En mode ORIGINATE, les canaux sont inversés !
+                        # - A-leg (L) = FreeSWITCH (robot)
+                        # - B-leg (R) = Numéro appelé (client)
+                        # → On veut le canal DROIT (client), pas gauche !
                         mono_frame = bytearray()
                         for i in range(0, len(stereo_frame), 4):  # Chaque 4 bytes = 1 sample stereo
-                            if i + 1 < len(stereo_frame):
-                                # Prendre les 2 premiers bytes (canal gauche = caller)
-                                mono_frame.extend(stereo_frame[i:i+2])
-                                # Ignorer les 2 bytes suivants (canal droit = robot)
+                            if i + 3 < len(stereo_frame):
+                                # Ignorer les 2 premiers bytes (canal gauche = robot)
+                                # Prendre les 2 bytes suivants (canal droit = client)
+                                mono_frame.extend(stereo_frame[i+2:i+4])
 
                         # Debug: Log première fois pour vérifier extraction
                         if not hasattr(self, '_stereo_extraction_logged'):

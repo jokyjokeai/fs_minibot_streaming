@@ -654,7 +654,8 @@ class RobotFreeSwitchV3:
                 return "UNKNOWN"
 
             # V3 FIX: Récupérer dernière transcription depuis "last_transcription" (pas "transcriptions")
-            text = session.get("last_transcription", "").strip()
+            text = session.get("last_transcription") or ""
+            text = text.strip() if text else ""
 
             if text and text != last_seen_transcription:
                 collected_text += " " + text
