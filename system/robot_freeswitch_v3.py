@@ -753,13 +753,19 @@ class RobotFreeSwitchV3:
             # Réinitialiser flag barge-in
             self.barge_in_active[call_uuid] = False
 
+            # Calculer durée audio AVANT de commencer (pour ignorer détections pendant playback)
+            audio_duration = self._get_audio_duration(audio_file)
+
             # Timestamp début audio (pour grace period anti-faux positifs)
             if call_uuid in self.streaming_sessions:
                 self.streaming_sessions[call_uuid]["audio_start_time"] = time.time()
                 # Reset robot_speech_end_time car robot commence à parler
                 self.streaming_sessions[call_uuid]["robot_speech_end_time"] = 0
+                # NOUVEAU: Marquer que le robot est en train de parler + durée estimée
+                self.streaming_sessions[call_uuid]["robot_playing_audio"] = True
+                self.streaming_sessions[call_uuid]["robot_audio_end_expected"] = time.time() + audio_duration
 
-            logger.info(f"[{call_uuid[:8]}] 🎬 STATE: PLAYING_AUDIO (grace period: {config.GRACE_PERIOD_SECONDS:.1f}s, then backchannel filtering active)")
+            logger.info(f"[{call_uuid[:8]}] 🎬 STATE: PLAYING_AUDIO (duration: {audio_duration:.1f}s, ignoring speech detection until finished)")
 
             # Commande uuid_broadcast pour playback
             # Syntaxe: uuid_broadcast <uuid> <path> [aleg|bleg|both]
@@ -821,6 +827,8 @@ class RobotFreeSwitchV3:
 
                         # Tracker quand robot finit de parler (interrompu par barge-in)
                         self.streaming_sessions[call_uuid]["robot_speech_end_time"] = time.time()
+                        # NOUVEAU: Marquer que le robot a fini de parler (interrompu)
+                        self.streaming_sessions[call_uuid]["robot_playing_audio"] = False
 
                         return False
                     else:
@@ -847,6 +855,8 @@ class RobotFreeSwitchV3:
             # Tracker quand robot finit de parler (audio terminé normalement)
             if call_uuid in self.streaming_sessions:
                 self.streaming_sessions[call_uuid]["robot_speech_end_time"] = time.time()
+                # NOUVEAU: Marquer que le robot a fini de parler
+                self.streaming_sessions[call_uuid]["robot_playing_audio"] = False
 
             logger.info(f"[{call_uuid[:8]}] 🎧 STATE: WAITING_RESPONSE (all speech will be captured, no backchannel filtering)")
             return True
@@ -907,10 +917,16 @@ class RobotFreeSwitchV3:
             # Paramètres streaming
             # V3 FIX: Utiliser STEREO pour séparer complètement les canaux
             # Logs prouvent que "mono" capte AUSSI le robot (écho/loopback)
-            # - "mono" = BUGGÉ - capte robot + client (transcriptions merdiques)
-            # - "mixed" = Les deux parties mixées (pire)
-            # - "stereo" = L=caller uniquement, R=callee uniquement ✅ SOLUTION
-            mix_type = "stereo"
+            # Mix types (selon doc FreeSWITCH):
+            # - "mono" = SMBF_READ_STREAM uniquement = audio REÇU par FS (client parle)
+            # - "mixed" = SMBF_WRITE_STREAM = audio ENVOYÉ par FS (robot + echo client)
+            # - "stereo" = L=WRITE (robot), R=READ (client + echo robot)
+            #
+            # PROBLÈME: En mode ORIGINATE, le téléphone renvoie l'echo du robot
+            # donc READ stream contient client + echo robot!
+            #
+            # SOLUTION TEMPORAIRE: Tester "mono" (READ seul) et voir si l'echo est gérable
+            mix_type = "mono"
             sampling_rate = "16000" # 16kHz pour Vosk (meilleur qualité/performance)
             metadata = ""           # Métadonnées optionnelles JSON
 
@@ -1234,7 +1250,15 @@ class RobotFreeSwitchV3:
                 is_playing_audio = not self.barge_in_active.get(call_uuid, True)
                 audio_state = "PLAYING_AUDIO" if is_playing_audio else "WAITING_RESPONSE"
 
-                # Vérifier grace period
+                # Vérifier grace period (COURT au début de l'audio seulement)
+                #
+                # LOGIQUE: Le grace period sert à ignorer l'écho acoustique du robot
+                # au DÉBUT de la lecture. Après 2-3s, on autorise le barge-in même
+                # si le robot parle encore, sinon pas de barge-in possible!
+                #
+                # Le mode "mono" de mod_audio_stream capture le READ stream (client)
+                # MAIS il y a un écho acoustique du robot (téléphone capte le son)
+                # qu'on ne peut pas annuler côté FreeSWITCH (AEC doit être côté client)
                 audio_start_time = session.get("audio_start_time", 0)
                 current_time = time.time()
                 elapsed_since_audio = current_time - audio_start_time if audio_start_time > 0 else 999

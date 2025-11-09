@@ -183,39 +183,31 @@ class StreamingASRV3:
                     # Audio brut (SLIN16, 16kHz, stereo ou mono, 16-bit)
                     audio_buffer += message
 
-                    # V3 FIX: Si stereo, extraire seulement canal gauche (caller)
-                    # Stereo = 2 canaux entrelacés: L R L R L R...
-                    # On veut: L _ L _ L _ (seulement caller)
+                    # DEBUG: Log audio reception
+                    if not hasattr(self, f'_audio_received_{call_uuid}'):
+                        setattr(self, f'_audio_received_{call_uuid}', True)
+                        logger.info(f"🎤 [{call_uuid[:8]}] First audio chunk received: {len(message)} bytes")
 
-                    # Traiter par frames
-                    # Stereo: 2 bytes par sample * 2 canaux = 4 bytes par sample
-                    # Mono: 2 bytes par sample
-                    bytes_per_stereo_sample = 4  # L(2 bytes) + R(2 bytes)
-                    bytes_per_frame_stereo = self.frame_size * bytes_per_stereo_sample
+                    # V3: Traiter l'audio en MONO (SMBF_READ_STREAM)
+                    # Le mode "mono" de mod_audio_stream envoie seulement le READ stream
+                    # = audio REÇU par FreeSWITCH (client qui parle)
+                    #
+                    # Format: SLIN16, 16kHz, mono, 16-bit
+                    # = 2 bytes par sample
+                    bytes_per_sample = 2
+                    bytes_per_frame = self.frame_size * bytes_per_sample
 
-                    while len(audio_buffer) >= bytes_per_frame_stereo:
-                        stereo_frame = audio_buffer[:bytes_per_frame_stereo]
-                        audio_buffer = audio_buffer[bytes_per_frame_stereo:]
+                    # DEBUG: Log frame calculations once
+                    if not hasattr(self, f'_frame_calc_logged_{call_uuid}'):
+                        setattr(self, f'_frame_calc_logged_{call_uuid}', True)
+                        logger.info(f"📊 [{call_uuid[:8]}] MONO mode: frame_size={self.frame_size}, bytes_per_frame={bytes_per_frame}, buffer_size={len(audio_buffer)}")
 
-                        # Extraire canal CLIENT uniquement
-                        # IMPORTANT: En mode ORIGINATE, les canaux sont inversés !
-                        # - A-leg (L) = FreeSWITCH (robot)
-                        # - B-leg (R) = Numéro appelé (client)
-                        # → On veut le canal DROIT (client), pas gauche !
-                        mono_frame = bytearray()
-                        for i in range(0, len(stereo_frame), 4):  # Chaque 4 bytes = 1 sample stereo
-                            if i + 3 < len(stereo_frame):
-                                # Ignorer les 2 premiers bytes (canal gauche = robot)
-                                # Prendre les 2 bytes suivants (canal droit = client)
-                                mono_frame.extend(stereo_frame[i+2:i+4])
+                    while len(audio_buffer) >= bytes_per_frame:
+                        mono_frame = audio_buffer[:bytes_per_frame]
+                        audio_buffer = audio_buffer[bytes_per_frame:]
 
-                        # Debug: Log première fois pour vérifier extraction
-                        if not hasattr(self, '_stereo_extraction_logged'):
-                            self._stereo_extraction_logged = True
-                            logger.info(f"🎧 STEREO extraction active: {len(stereo_frame)} bytes stereo → {len(mono_frame)} bytes mono (caller only)")
-
-                        # Traitement temps réel avec audio MONO du caller uniquement
-                        await self._process_audio_frame(call_uuid, bytes(mono_frame))
+                        # Traitement temps réel avec audio MONO du client (READ stream)
+                        await self._process_audio_frame(call_uuid, mono_frame)
 
         except websockets.exceptions.ConnectionClosed:
             if call_uuid:
