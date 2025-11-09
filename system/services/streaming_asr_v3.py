@@ -287,6 +287,9 @@ class StreamingASRV3:
                         logger.info(f"🤐 Speech END detected: {call_uuid[:8]} (durée: {speech_duration:.2f}s, silence: {stream_info['current_silence_duration']:.1f}s)")
                         await self._notify_speech_end(call_uuid, speech_duration)
 
+                        # V3 FIX: Réinitialiser speech_start_time pour éviter accumulation
+                        stream_info["speech_start_time"] = 0.0
+
             # ASR - Transcription streaming
             if recognizer.AcceptWaveform(frame_bytes):
                 # Transcription finale

@@ -816,9 +816,8 @@ class RobotFreeSwitchV3:
                         self.streaming_sessions[call_uuid]["barge_in_detected_time"] = 0
                         logger.debug(f"[{call_uuid[:8]}] 🔄 Barge-in flag reset for next audio")
 
-                        # BUFFER VOSK: Vider le buffer audio pour éviter accumulation transcriptions
-                        if self.streaming_asr and self.streaming_asr.is_available:
-                            self.streaming_asr.reset_recognizer(call_uuid)
+                        # V3: reset_recognizer() supprimé (causait crash Vosk)
+                        # Le buffer Vosk se vide automatiquement après speech_end
 
                         # Tracker quand robot finit de parler (interrompu par barge-in)
                         self.streaming_sessions[call_uuid]["robot_speech_end_time"] = time.time()
