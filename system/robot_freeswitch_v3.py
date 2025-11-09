@@ -923,7 +923,7 @@ class RobotFreeSwitchV3:
             result_str = result.getBody() if hasattr(result, 'getBody') else str(result)
 
             if "+OK" in result_str or "success" in result_str.lower():
-                logger.info(f"[{call_uuid[:8]}] ✅ Audio streaming started to WebSocket (16kHz mono)")
+                logger.info(f"[{call_uuid[:8]}] ✅ Audio streaming started to WebSocket (16kHz {mix_type})")
                 logger.debug(f"[{call_uuid[:8]}]    URL: {websocket_url}")
                 return True
             else:

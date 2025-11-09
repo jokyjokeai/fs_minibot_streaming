@@ -205,6 +205,11 @@ class StreamingASRV3:
                                 mono_frame.extend(stereo_frame[i:i+2])
                                 # Ignorer les 2 bytes suivants (canal droit = robot)
 
+                        # Debug: Log première fois pour vérifier extraction
+                        if not hasattr(self, '_stereo_extraction_logged'):
+                            self._stereo_extraction_logged = True
+                            logger.info(f"🎧 STEREO extraction active: {len(stereo_frame)} bytes stereo → {len(mono_frame)} bytes mono (caller only)")
+
                         # Traitement temps réel avec audio MONO du caller uniquement
                         await self._process_audio_frame(call_uuid, bytes(mono_frame))
 
