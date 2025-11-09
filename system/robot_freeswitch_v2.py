@@ -1167,22 +1167,8 @@ class RobotFreeSwitchV2:
                     self.streaming_sessions[call_uuid]["last_transcription"] = transcription
                     self.streaming_sessions[call_uuid]["last_speech_time"] = time.time()
 
-                    # Détecter barge-in (client parle pendant playback)
-                    # Vérifier si robot est EN TRAIN de jouer (barge_in_active = False)
-                    if call_uuid in self.barge_in_active and not self.barge_in_active[call_uuid]:
-                        # === BACKCHANNEL DETECTION (logique hybride) ===
-                        # Vérifier si c'est un backchannel à ignorer (ex: "oui", "ok")
-                        if self._is_backchannel(call_uuid, transcription):
-                            # Backchannel détecté → IGNORER, ne pas interrompre audio
-                            logger.info(f"[{call_uuid[:8]}] 💬 Backchannel ignoré (robot continue): '{transcription}'")
-                            # NE PAS set barge_in_active à True
-                            # Le robot continue de parler
-                        else:
-                            # Vraie interruption → BARGE-IN (Phase 2: avec smooth delay)
-                            logger.info(f"[{call_uuid[:8]}] 🔊 Barge-in detected! (smooth delay: {config.BARGE_IN_SMOOTH_DELAY}s before stopping)")
-
-                            # Marquer timestamp détection pour smooth delay
-                            self.streaming_sessions[call_uuid]["barge_in_detected_time"] = time.time()
+                    # NOTE : Barge-in est maintenant décidé sur SPEECH_END, pas sur transcription
+                    # Les transcriptions sont uniquement utilisées pour NLP APRÈS barge-in
 
             elif event_type == "speech_start":
                 # Début de parole détecté
@@ -1239,6 +1225,30 @@ class RobotFreeSwitchV2:
                     speech_duration = current_time - speech_start_time
                     self.streaming_sessions[call_uuid]["last_speech_duration"] = speech_duration
                     logger.info(f"[{call_uuid[:8]}] 🔇 Speech ended (duration: {speech_duration:.2f}s)")
+
+                    # ========== DÉCISION BARGE-IN SUR SPEECH_END (PAS SUR TRANSCRIPTION) ==========
+                    # Vérifier si robot est EN TRAIN de jouer (barge_in_active = False)
+                    if call_uuid in self.barge_in_active and not self.barge_in_active[call_uuid]:
+                        # PLAYING_AUDIO : Vérifier si durée >= 2s pour barge-in
+
+                        # Vérifier grace period
+                        audio_start_time = self.streaming_sessions[call_uuid].get("audio_start_time", 0)
+                        elapsed_since_audio_start = current_time - audio_start_time if audio_start_time > 0 else 999
+
+                        if elapsed_since_audio_start < config.GRACE_PERIOD_SECONDS:
+                            logger.debug(f"[{call_uuid[:8]}] 🚫 Speech ignored (grace period: {elapsed_since_audio_start:.1f}s < {config.GRACE_PERIOD_SECONDS:.1f}s)")
+                        else:
+                            # RÈGLE SIMPLE : durée >= 2s = BARGE-IN, < 2s = BACKCHANNEL
+                            DURATION_THRESHOLD = 2.0
+
+                            if speech_duration >= DURATION_THRESHOLD:
+                                # BARGE-IN IMMÉDIAT (pas d'attente transcription!)
+                                logger.info(f"[{call_uuid[:8]}] 🔊 BARGE-IN sur speech_end (durée {speech_duration:.2f}s >= {DURATION_THRESHOLD}s)")
+                                self.streaming_sessions[call_uuid]["barge_in_detected_time"] = current_time
+                            else:
+                                # Backchannel - ignorer
+                                logger.info(f"[{call_uuid[:8]}] 💬 BACKCHANNEL sur speech_end (durée {speech_duration:.2f}s < {DURATION_THRESHOLD}s) - ignoré")
+                    # ========================================================================
 
         except Exception as e:
             logger.error(f"[{call_uuid[:8]}] Streaming event error: {e}")
