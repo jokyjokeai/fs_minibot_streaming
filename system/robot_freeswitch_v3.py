@@ -644,6 +644,7 @@ class RobotFreeSwitchV3:
         collected_text = ""
         speech_detected = False
         total_speech_duration = 0.0
+        last_seen_transcription = ""
 
         while time.time() - listen_start < config.AMD_INITIAL_DELAY:
             # Vérifier si hangup
@@ -652,16 +653,14 @@ class RobotFreeSwitchV3:
                 logger.info(f"[{call_uuid[:8]}] AMD: Call hung up during listening")
                 return "UNKNOWN"
 
-            # Récupérer dernière transcription
-            transcriptions = session.get("transcriptions", [])
-            if transcriptions:
-                latest = transcriptions[-1]
-                text = latest.get("text", "").strip()
+            # V3 FIX: Récupérer dernière transcription depuis "last_transcription" (pas "transcriptions")
+            text = session.get("last_transcription", "").strip()
 
-                if text and text not in collected_text:
-                    collected_text += " " + text
-                    speech_detected = True
-                    logger.debug(f"[{call_uuid[:8]}] AMD: Collected: '{text}'")
+            if text and text != last_seen_transcription:
+                collected_text += " " + text
+                last_seen_transcription = text
+                speech_detected = True
+                logger.debug(f"[{call_uuid[:8]}] AMD: Collected: '{text}'")
 
             # Attendre un peu avant vérifier à nouveau
             time.sleep(0.1)
