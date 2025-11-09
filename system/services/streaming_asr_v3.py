@@ -180,18 +180,33 @@ class StreamingASRV3:
 
             async for message in websocket:
                 if isinstance(message, bytes):
-                    # Audio brut (SLIN16, 16kHz, mono, 16-bit)
+                    # Audio brut (SLIN16, 16kHz, stereo ou mono, 16-bit)
                     audio_buffer += message
 
-                    # Traiter par frames de 30ms
-                    bytes_per_frame = self.frame_size * 2  # 2 bytes par sample
+                    # V3 FIX: Si stereo, extraire seulement canal gauche (caller)
+                    # Stereo = 2 canaux entrelacés: L R L R L R...
+                    # On veut: L _ L _ L _ (seulement caller)
 
-                    while len(audio_buffer) >= bytes_per_frame:
-                        frame_bytes = audio_buffer[:bytes_per_frame]
-                        audio_buffer = audio_buffer[bytes_per_frame:]
+                    # Traiter par frames
+                    # Stereo: 2 bytes par sample * 2 canaux = 4 bytes par sample
+                    # Mono: 2 bytes par sample
+                    bytes_per_stereo_sample = 4  # L(2 bytes) + R(2 bytes)
+                    bytes_per_frame_stereo = self.frame_size * bytes_per_stereo_sample
 
-                        # Traitement temps réel
-                        await self._process_audio_frame(call_uuid, frame_bytes)
+                    while len(audio_buffer) >= bytes_per_frame_stereo:
+                        stereo_frame = audio_buffer[:bytes_per_frame_stereo]
+                        audio_buffer = audio_buffer[bytes_per_frame_stereo:]
+
+                        # Extraire canal gauche (caller) uniquement
+                        mono_frame = bytearray()
+                        for i in range(0, len(stereo_frame), 4):  # Chaque 4 bytes = 1 sample stereo
+                            if i + 1 < len(stereo_frame):
+                                # Prendre les 2 premiers bytes (canal gauche = caller)
+                                mono_frame.extend(stereo_frame[i:i+2])
+                                # Ignorer les 2 bytes suivants (canal droit = robot)
+
+                        # Traitement temps réel avec audio MONO du caller uniquement
+                        await self._process_audio_frame(call_uuid, bytes(mono_frame))
 
         except websockets.exceptions.ConnectionClosed:
             if call_uuid:

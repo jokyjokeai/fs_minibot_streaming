@@ -904,11 +904,12 @@ class RobotFreeSwitchV3:
             websocket_url = f"ws://127.0.0.1:8080/stream/{call_uuid}"
 
             # Paramètres streaming
-            # V3: Options mod_audio_stream (doc vérifiée)
-            # - "mono" = Seulement le CALLER (client) - audio entrant uniquement ✅
-            # - "mixed" = Les deux parties (robot + client) mixées ensemble
-            # - "stereo" = Deux canaux séparés (L=caller, R=callee)
-            mix_type = "mono"
+            # V3 FIX: Utiliser STEREO pour séparer complètement les canaux
+            # Logs prouvent que "mono" capte AUSSI le robot (écho/loopback)
+            # - "mono" = BUGGÉ - capte robot + client (transcriptions merdiques)
+            # - "mixed" = Les deux parties mixées (pire)
+            # - "stereo" = L=caller uniquement, R=callee uniquement ✅ SOLUTION
+            mix_type = "stereo"
             sampling_rate = "16000" # 16kHz pour Vosk (meilleur qualité/performance)
             metadata = ""           # Métadonnées optionnelles JSON
 
