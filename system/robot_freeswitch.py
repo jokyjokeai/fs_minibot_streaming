@@ -822,6 +822,14 @@ class RobotFreeSWITCH:
                         # Stopper recording
                         self.esl_conn_api.api(f"uuid_record {call_uuid} stop {record_file}")
 
+                        # Attendre que FreeSWITCH finalise le fichier WAV
+                        time.sleep(0.3)
+
+                        # IMPORTANT: Sauvegarder le chemin du fichier barge-in pour transcription
+                        if call_uuid in self.call_sessions:
+                            self.call_sessions[call_uuid]["last_barge_in_file"] = str(record_file)
+                            logger.debug(f"[{call_uuid[:8]}] Saved barge-in file: {Path(record_file).name}")
+
                         # Reset flag
                         self.call_sessions[call_uuid]["barge_in_detected_time"] = 0
                         self.barge_in_active[call_uuid] = True
@@ -1105,8 +1113,8 @@ class RobotFreeSWITCH:
         Écoute et transcrit la réponse du client (MODE FICHIER)
 
         Workflow:
-        1. Enregistre audio client avec uuid_record
-        2. Transcrit le fichier avec Vosk (gros modèle)
+        1. Si barge-in: Transcrire le fichier barge-in existant
+        2. Sinon: Enregistre audio client avec uuid_record puis transcrit
         3. Retourne la transcription
 
         Args:
@@ -1121,12 +1129,79 @@ class RobotFreeSWITCH:
             return None
 
         try:
-            # Mode fichier uniquement
-            logger.debug(f"[{call_uuid[:8]}] Using file mode for transcription")
-            return self._listen_record_fallback(call_uuid, timeout)
+            session = self.call_sessions[call_uuid]
+
+            # Si barge-in détecté, utiliser le fichier déjà enregistré
+            if "last_barge_in_file" in session:
+                barge_in_file = session["last_barge_in_file"]
+                logger.info(f"[{call_uuid[:8]}] 🎤 Transcribing barge-in file: {Path(barge_in_file).name}")
+
+                # Transcrire immédiatement
+                transcription = self._transcribe_file(call_uuid, barge_in_file)
+
+                # Nettoyer
+                del session["last_barge_in_file"]
+
+                return transcription
+            else:
+                # Pas de barge-in, enregistrer normalement
+                logger.debug(f"[{call_uuid[:8]}] Using file mode for transcription")
+                return self._listen_record_fallback(call_uuid, timeout)
 
         except Exception as e:
             logger.error(f"[{call_uuid[:8]}] Listen error: {e}", exc_info=True)
+            return None
+
+    def _transcribe_file(self, call_uuid: str, audio_file: str) -> Optional[str]:
+        """
+        Transcrit un fichier audio WAV avec Vosk
+
+        Args:
+            call_uuid: UUID appel
+            audio_file: Chemin vers fichier WAV
+
+        Returns:
+            Transcription ou None
+        """
+        try:
+            audio_path = Path(audio_file)
+
+            # Vérifier existence
+            if not audio_path.exists():
+                logger.debug(f"[{call_uuid[:8]}] File not found: {audio_path}")
+                return None
+
+            # Vérifier taille
+            file_size = audio_path.stat().st_size
+            logger.debug(f"[{call_uuid[:8]}] File size: {file_size} bytes")
+
+            if file_size < 1000:
+                logger.debug(f"[{call_uuid[:8]}] File too small (silence)")
+                return None
+
+            # Transcrire
+            if not self.stt_service:
+                logger.error(f"[{call_uuid[:8]}] STT service not available")
+                return None
+
+            logger.debug(f"[{call_uuid[:8]}] Transcribing: {audio_path.name}")
+            result = self.stt_service.transcribe_file(str(audio_path))
+
+            # Le service Vosk retourne un dict avec "text"
+            if isinstance(result, dict):
+                transcription = result.get("text", "").strip()
+            else:
+                transcription = str(result).strip() if result else ""
+
+            if transcription:
+                logger.info(f"[{call_uuid[:8]}] ✅ Transcription: '{transcription}'")
+                return transcription
+            else:
+                logger.debug(f"[{call_uuid[:8]}] No speech detected")
+                return None
+
+        except Exception as e:
+            logger.error(f"[{call_uuid[:8]}] Transcription error: {e}", exc_info=True)
             return None
 
     def _listen_record_fallback(self, call_uuid: str, timeout: int) -> Optional[str]:
@@ -1170,28 +1245,8 @@ class RobotFreeSWITCH:
             # Petite attente pour flush du fichier
             time.sleep(0.2)
 
-            # Vérifier si fichier existe et a du contenu
-            if not record_file.exists():
-                logger.debug(f"[{call_uuid[:8]}] No recording file created (silence)")
-                return None
-
-            file_size = record_file.stat().st_size
-            logger.debug(f"[{call_uuid[:8]}] Recording file size: {file_size} bytes")
-
-            # Taille minimale: ~1KB pour avoir du contenu audio
-            if file_size < 1000:
-                logger.debug(f"[{call_uuid[:8]}] Recording too small (silence)")
-                record_file.unlink()
-                return None
-
-            # Transcrire avec Vosk
-            if not self.stt_service:
-                logger.error(f"[{call_uuid[:8]}] STT service not available")
-                record_file.unlink()
-                return None
-
-            logger.debug(f"[{call_uuid[:8]}] Transcribing recording...")
-            transcription = self.stt_service.transcribe_file(str(record_file))
+            # Transcrire avec la nouvelle fonction unifiée
+            transcription = self._transcribe_file(call_uuid, str(record_file))
 
             # Cleanup
             try:
@@ -1199,12 +1254,7 @@ class RobotFreeSWITCH:
             except:
                 pass
 
-            if transcription:
-                logger.info(f"[{call_uuid[:8]}] ✅ Transcription: '{transcription}'")
-                return transcription
-            else:
-                logger.debug(f"[{call_uuid[:8]}] No speech detected in recording")
-                return None
+            return transcription
 
         except Exception as e:
             logger.error(f"[{call_uuid[:8]}] Record fallback error: {e}", exc_info=True)
