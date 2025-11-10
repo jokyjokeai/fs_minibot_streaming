@@ -38,6 +38,8 @@ Utilisation:
 import json
 import time
 import wave
+import struct
+import tempfile
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -65,6 +67,52 @@ class FasterWhisperSTT:
     Service de transcription Faster-Whisper.
     API compatible VoskSTT pour drop-in replacement.
     """
+
+    @staticmethod
+    def _extract_left_channel(stereo_wav_path: str, output_wav_path: str) -> bool:
+        """
+        Extrait le canal gauche (client) d'un fichier WAV stereo.
+
+        Args:
+            stereo_wav_path: Chemin fichier WAV stereo source
+            output_wav_path: Chemin fichier WAV mono destination
+
+        Returns:
+            True si succès, False sinon
+        """
+        try:
+            # Lire WAV stereo
+            with wave.open(stereo_wav_path, 'rb') as wf_in:
+                if wf_in.getnchannels() != 2:
+                    logger.warning(f"File is not stereo ({wf_in.getnchannels()} channels), skipping extraction")
+                    return False
+
+                params = wf_in.getparams()
+                frames = wf_in.readframes(wf_in.getnframes())
+
+                # Convertir bytes → array int16
+                num_samples = len(frames) // 2
+                stereo_samples = struct.unpack(f'<{num_samples}h', frames)
+
+                # Extraire canal gauche (indices pairs: 0,2,4,6...)
+                left_samples = stereo_samples[::2]
+
+                # Reconvertir → bytes
+                left_frames = struct.pack(f'<{len(left_samples)}h', *left_samples)
+
+            # Écrire WAV mono
+            with wave.open(output_wav_path, 'wb') as wf_out:
+                wf_out.setnchannels(1)  # MONO
+                wf_out.setsampwidth(params.sampwidth)
+                wf_out.setframerate(params.framerate)
+                wf_out.writeframes(left_frames)
+
+            logger.debug(f"✅ Extracted left channel: {stereo_wav_path} → {output_wav_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Error extracting left channel: {e}")
+            return False
 
     def __init__(
         self,
@@ -224,17 +272,30 @@ class FasterWhisperSTT:
             # Log info audio
             logger.debug(f"Audio: {num_channels}ch, {sample_rate}Hz, {audio_path.name}")
 
-            # Si STEREO: extraire canal gauche (client) comme Vosk
+            # Si STEREO: extraire canal gauche (client) AVANT transcription
+            # Fix critical bug: Faster-Whisper moyenne les canaux par défaut → transcrit robot + client
+            # On doit extraire SEULEMENT le canal gauche (client)
+            transcribe_path = audio_path
+            temp_file = None
+
             if num_channels == 2:
-                logger.info(f"Stereo audio detected → Will extract left channel (client)")
+                logger.info(f"Stereo audio detected → Extracting left channel (client)")
 
-            # Transcription avec Faster-Whisper
-            # Note: Faster-Whisper gère automatiquement stereo→mono (average channels)
-            # Pour extraire SEULEMENT canal gauche, on utiliserait ffmpeg preprocessing
-            # Mais pour compatibilité drop-in, on accepte le comportement par défaut
+                # Créer fichier temporaire pour canal gauche
+                temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+                temp_path = temp_file.name
+                temp_file.close()
 
+                # Extraire canal gauche
+                if self._extract_left_channel(str(audio_path), temp_path):
+                    transcribe_path = Path(temp_path)
+                    logger.debug(f"Using extracted left channel: {temp_path}")
+                else:
+                    logger.warning("Failed to extract left channel, using original stereo file")
+
+            # Transcription avec Faster-Whisper (sur fichier MONO maintenant!)
             segments, info = self.model.transcribe(
-                str(audio_path),
+                str(transcribe_path),
                 language="fr",  # Force français
                 beam_size=5,    # Default beam search
                 vad_filter=False,  # Pas de VAD (on a déjà géré avec FreeSWITCH)
@@ -266,6 +327,15 @@ class FasterWhisperSTT:
             logger.info(f"Transcribed {audio_path.name} in {transcription_time:.2f}s: {transcription[:100]}")
             logger.debug(f"Confidence: {avg_confidence:.2f} | Language: {info.language} (prob: {info.language_probability:.2f})")
 
+            # Cleanup fichier temporaire si créé
+            if temp_file:
+                try:
+                    import os
+                    os.unlink(transcribe_path)
+                    logger.debug(f"Cleaned up temp file: {transcribe_path}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to cleanup temp file: {cleanup_error}")
+
             return {
                 "text": transcription,
                 "confidence": avg_confidence,
@@ -277,6 +347,15 @@ class FasterWhisperSTT:
 
         except Exception as e:
             logger.error(f"Transcription error: {e}", exc_info=True)
+
+            # Cleanup fichier temporaire en cas d'erreur
+            if temp_file:
+                try:
+                    import os
+                    os.unlink(transcribe_path)
+                except:
+                    pass
+
             return {"text": "", "confidence": 0.0, "error": str(e)}
 
     def cleanup(self):
