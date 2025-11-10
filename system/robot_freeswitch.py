@@ -632,11 +632,15 @@ class RobotFreeSWITCH:
         timestamp = int(time.time() * 1000)
         record_file = str(config.RECORDINGS_DIR / f"amd_{call_uuid}_{timestamp}.wav")
 
-        # Attendre que media soit établi (crucial pour appels sortants)
-        # Sans ce délai, uuid_record démarre avant que RTP soit prêt → fichier vide
-        # 1.5s nécessaire pour SIP négociation + RTP establishment
-        time.sleep(1.5)
-        logger.info(f"[{call_uuid[:8]}] AMD: Media path ready, starting recording...")
+        # Attendre établissement SIP
+        time.sleep(0.3)
+
+        # CRITICAL: Jouer un silence court pour "amorcer" le RTP stream
+        # FreeSWITCH n'établit le media qu'après le premier audio joué
+        silence_cmd = f"uuid_broadcast {call_uuid} silence_stream://100 both"
+        self.esl_conn_api.api(silence_cmd)
+        time.sleep(0.2)  # Laisser le silence s'établir
+        logger.info(f"[{call_uuid[:8]}] AMD: Media primed, starting recording...")
 
         # Activer stereo (Left=client, Right=robot)
         self.esl_conn_api.api(f"uuid_setvar {call_uuid} RECORD_STEREO true")
