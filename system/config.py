@@ -189,7 +189,7 @@ WEBSOCKET_PORT = int(os.getenv("WEBSOCKET_PORT", "8080"))
 # MODE 1: AMD (Answering Machine Detection)
 # Objectif: Détecter HUMAN vs MACHINE rapidement
 # Comportement: Transcrire TOUT (même "allô", bip, silence), pas de seuil minimum
-AMD_TIMEOUT = 1.4  # secondes (optimisé pour meilleur contexte NLP)
+AMD_TIMEOUT = 1.3  # secondes (ultra rapide)
 AMD_MIN_SPEECH_DURATION = 0.3  # secondes - Détecter dès 300ms de parole
 AMD_TRANSCRIBE_ALL = True  # Tout transcrire pour NLP
 
@@ -204,10 +204,10 @@ PLAYING_SMOOTH_DELAY = 1.0  # secondes - Délai avant interruption (finir phrase
 
 # MODE 3: WAITING_RESPONSE (End-of-speech detection)
 # Objectif: Détecter début/fin de parole, transcrire réponse complète
-# Comportement: Détecter début parole dès 300ms, fin si silence >= 0.7s
+# Comportement: Détecter début parole dès 300ms, fin si silence >= 0.6s
 WAITING_TIMEOUT = 10.0  # secondes - Timeout total avant retry_silence
 WAITING_MIN_SPEECH_DURATION = 0.3  # secondes - Détecter début parole
-WAITING_END_OF_SPEECH_SILENCE = 0.7  # secondes - Silence pour fin de parole (optimisé réactivité +0.1s)
+WAITING_END_OF_SPEECH_SILENCE = 0.6  # secondes - Silence pour fin de parole (ultra réactif)
 WAITING_TRANSCRIBE_CONTINUOUS = True  # Transcrire pendant que client parle (latence minimale)
 
 # Compatibilité ancienne config (DEPRECATED - utiliser configs spécifiques ci-dessus)
