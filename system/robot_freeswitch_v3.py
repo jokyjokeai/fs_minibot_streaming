@@ -1,30 +1,30 @@
 """
-RobotFreeSWITCH V3 - ARCHITECTURE SIMPLIFIÉE
-=============================================
+RobotFreeSWITCH V3 - MODE FICHIER + BARGE-IN VAD
+=================================================
 
-Version V3 avec barge-in ultra simplifié et sans bugs:
+Version V3 avec mode fichier fiable et barge-in VAD:
 
-Changements V3:
-- ✅ Barge-in SIMPLE: durée >= 2s = interruption (pas de keywords)
-- ✅ Durée incluse dans événements streaming (pas de race condition)
-- ❌ SUPPRIMÉ: backchannel keywords, background music
-- ✅ Grace period 2.0s (réduit de 2.5s)
-- ✅ Smooth delay 1.0s (conservé)
-- ✅ Logs debug détaillés partout
+Changements V3 (refonte complète):
+- ✅ MODE FICHIER: Enregistrement + transcription (comme Asterisk)
+- ✅ BARGE-IN VAD: Détection parole >= 2.5s SANS transcription
+- ✅ Transcription avec GROS modèle Vosk (meilleure qualité)
+- ❌ SUPPRIMÉ: Streaming temps réel (trop instable)
+- ✅ Workflow simple: Enregistrer → Détecter VAD → Transcrire si besoin
+- ✅ Fiable et rapide
 
-Architecture conservée:
+Architecture simplifiée:
     1. ESL Connection Management (dual connections)
     2. Call Thread Management (one thread per call)
     3. Audio Playback System (uuid_broadcast)
-    4. Audio Streaming System (FreeSWITCH → WebSocket)
-    5. Speech Recognition (Vosk via StreamingASR V3)
+    4. Audio Recording System (uuid_record) + VAD barge-in
+    5. Speech Recognition (Vosk fichier - gros modèle)
     6. NLP Intent Analysis (Ollama)
     7. Scenario Execution Engine
     8. Autonomous Agent Mode (objections handler) ← CONSERVÉ
 
 Author: MiniBotPanel Team
 Version: 3.0.0
-Date: 2025-11-09
+Date: 2025-11-10
 """
 
 import time
@@ -46,7 +46,16 @@ except ImportError:
 from system.services.vosk_stt import VoskSTT
 from system.services.ollama_nlp import OllamaNLP
 from system.services.amd_service import AMDService
-from system.services.streaming_asr_v3 import StreamingASRV3  # ← V3
+# StreamingASR V3 SUPPRIMÉ - Mode fichier uniquement
+
+# VAD pour barge-in (détection parole sans transcription)
+try:
+    import webrtcvad
+    import wave
+    import struct
+    VAD_AVAILABLE = True
+except ImportError:
+    VAD_AVAILABLE = False
 
 # Scenario & Config V3
 from system.scenarios import ScenarioManager
@@ -196,8 +205,8 @@ class RobotFreeSwitchV3:
         self.barge_in_active = {}  # {call_uuid: bool}
         self.background_audio_active = {}  # {call_uuid: bool}
 
-        # === STREAMING SESSIONS ===
-        self.streaming_sessions = {}  # {call_uuid: session_data}
+        # === CALL SESSIONS (ex-call_sessions) ===
+        self.call_sessions = {}  # {call_uuid: session_data}
 
         # === V3: BARGE-IN DETECTOR ===
         self.barge_in_detector = BargeInDetector()
@@ -206,10 +215,10 @@ class RobotFreeSwitchV3:
         # === SERVICES INITIALIZATION ===
         logger.info("🤖 Loading AI services V3...")
 
-        # 1. Vosk STT (legacy - pour tests sans streaming)
+        # 1. Vosk STT (mode fichier - gros modèle)
         try:
             self.stt_service = VoskSTT()
-            logger.info("✅ Vosk STT loaded")
+            logger.info("✅ Vosk STT loaded (file mode with large model)")
         except Exception as e:
             logger.error(f"❌ Failed to load Vosk STT: {e}")
             self.stt_service = None
@@ -230,29 +239,17 @@ class RobotFreeSwitchV3:
             logger.error(f"❌ Failed to load AMD Service: {e}")
             self.amd_service = None
 
-        # 4. Streaming ASR V3 (WebSocket server)
-        try:
-            self.streaming_asr = StreamingASRV3()  # ← V3
-            logger.info("✅ StreamingASR V3 loaded")
-
-            # Démarrer serveur WebSocket en arrière-plan
-            if self.streaming_asr.is_available:
-                import asyncio
-                loop = asyncio.new_event_loop()
-
-                def start_asr_server():
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(self.streaming_asr.start_server())
-
-                asr_thread = threading.Thread(target=start_asr_server, daemon=True)
-                asr_thread.start()
-                time.sleep(0.5)  # Laisser temps au serveur de démarrer
-                logger.info(f"✅ StreamingASR V3 server started (port {config.WEBSOCKET_PORT})")
-            else:
-                logger.warning("⚠️ StreamingASR V3 not available - missing dependencies")
-        except Exception as e:
-            logger.error(f"❌ Streaming V3 server error: {e}")
-            self.streaming_asr = None
+        # 4. VAD pour barge-in (détection parole sans transcription)
+        if VAD_AVAILABLE:
+            try:
+                self.vad = webrtcvad.Vad(2)  # Mode 2 (compromis réactivité/précision)
+                logger.info("✅ WebRTC VAD loaded for barge-in detection")
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize VAD: {e}")
+                self.vad = None
+        else:
+            logger.warning("⚠️ WebRTC VAD not available - barge-in disabled")
+            self.vad = None
 
         # 5. Scenario Manager
         try:
@@ -406,8 +403,8 @@ class RobotFreeSwitchV3:
         
         logger.info(f"📞 New call: {phone_number} | UUID: {call_uuid} | Scenario: {scenario}")
         
-        # Créer session streaming
-        self._init_streaming_session(call_uuid, phone_number, scenario)
+        # Créer session d'appel
+        self._init_call_session(call_uuid, phone_number, scenario)
         
         # Lancer thread de traitement appel
         call_thread = threading.Thread(
@@ -424,14 +421,14 @@ class RobotFreeSwitchV3:
         logger.info(f"📞 Call ended: {call_uuid} - {hangup_cause}")
 
         # Marquer comme raccroché pour que les threads en cours s'arrêtent
-        if call_uuid in self.streaming_sessions:
-            self.streaming_sessions[call_uuid]["hangup_detected"] = True
+        if call_uuid in self.call_sessions:
+            self.call_sessions[call_uuid]["hangup_detected"] = True
             logger.debug(f"[{call_uuid[:8]}] Hangup flag set - threads will stop")
 
         # Cleanup
         self.active_calls.pop(call_uuid, None)
         self.call_threads.pop(call_uuid, None)
-        self.streaming_sessions.pop(call_uuid, None)
+        self.call_sessions.pop(call_uuid, None)
         self.call_sequences.pop(call_uuid, None)
         self.barge_in_active.pop(call_uuid, None)
         self.background_audio_active.pop(call_uuid, None)
@@ -512,16 +509,16 @@ class RobotFreeSwitchV3:
             logger.error(f"❌ Originate error: {e}")
             return None
 
-    def _init_streaming_session(self, call_uuid: str, phone_number: str, scenario: str):
+    def _init_call_session(self, call_uuid: str, phone_number: str, scenario: str):
         """
-        Initialise la session streaming pour un appel
-        
+        Initialise la session d'appel (mode fichier)
+
         Args:
             call_uuid: UUID de l'appel
             phone_number: Numéro appelé
             scenario: Nom du scénario
         """
-        self.streaming_sessions[call_uuid] = {
+        self.call_sessions[call_uuid] = {
             "phone_number": phone_number,
             "scenario": scenario,
             "current_step": None,
@@ -530,22 +527,15 @@ class RobotFreeSwitchV3:
             "consecutive_silences": 0,
             "consecutive_no_match": 0,
             "autonomous_turns": 0,
-            "last_transcription": None,
-            "last_partial_transcription": None,  # Backup sécurité
-            "barge_in_transcription": None,  # Transcription sauvegardée du barge-in
             "objection_matcher": None,
             "final_result": None,
             "started_at": datetime.now(),
-            "speech_start_time": 0,  # Timestamp début parole (pour backchannel detection)
-            "prev_speech_start_time": 0,  # Timestamp previous speech_start (pour calcul durée)
-            "audio_start_time": 0,  # Timestamp début audio (pour grace period)
-            "barge_in_detected_time": 0,  # Phase 2: Timestamp détection barge-in (pour smooth delay)
-            "audio_state": "IDLE",  # IDLE | PLAYING_AUDIO | WAITING_RESPONSE
-            "speech_ended": False,  # Flag pour attendre fin parole client
+            "barge_in_detected_time": 0,  # Timestamp détection barge-in (pour smooth delay)
+            "recording_file": None,  # Fichier d'enregistrement en cours
             "hangup_detected": False  # Flag pour détecter hangup
         }
-        
-        logger.debug(f"[{call_uuid[:8]}] Streaming session initialized")
+
+        logger.debug(f"[{call_uuid[:8]}] Call session initialized (file mode)")
 
     def _handle_call(self, call_uuid: str, phone_number: str, scenario: str, campaign_id: str):
         """
@@ -566,22 +556,8 @@ class RobotFreeSwitchV3:
         try:
             logger.info(f"[{call_uuid[:8]}] 🌊 Call thread started for {phone_number}")
 
-            # === ACTIVER STREAMING AUDIO (AVANT AMD Phase 3) ===
-            # Phase 3: Streaming DOIT être actif AVANT AMD pour collecter transcriptions
-            logger.debug(f"[{call_uuid[:8]}] Checking streaming: streaming_asr={self.streaming_asr is not None}, is_available={self.streaming_asr.is_available if self.streaming_asr else 'N/A'}")
-            if self.streaming_asr and self.streaming_asr.is_available:
-                streaming_enabled = self._enable_audio_streaming(call_uuid)
-                if streaming_enabled:
-                    logger.info(f"[{call_uuid[:8]}] ✅ Streaming audio WebSocket activé")
-                else:
-                    logger.warning(f"[{call_uuid[:8]}] ⚠️ Streaming audio échoué, mode record fallback")
-            else:
-                logger.warning(f"[{call_uuid[:8]}] ⚠️ Streaming NOT available - using fallback mode")
-
-            # === ENREGISTRER CALLBACK STREAMING ===
-            if self.streaming_asr and self.streaming_asr.is_available:
-                self.streaming_asr.register_callback(call_uuid, self._handle_streaming_event)
-                logger.debug(f"[{call_uuid[:8]}] Streaming callback registered")
+            # === MODE FICHIER (pas de streaming) ===
+            logger.info(f"[{call_uuid[:8]}] 📁 File mode enabled (record + transcribe)")
 
             # === AMD DETECTION (Phase 3: après streaming activé) ===
             if config.AMD_ENABLED:
@@ -653,7 +629,7 @@ class RobotFreeSwitchV3:
 
         while time.time() - listen_start < config.AMD_INITIAL_DELAY:
             # Vérifier si hangup
-            session = self.streaming_sessions.get(call_uuid, {})
+            session = self.call_sessions.get(call_uuid, {})
             if session.get("hangup_detected", False):
                 logger.info(f"[{call_uuid[:8]}] AMD: Call hung up during listening")
                 return "UNKNOWN"
@@ -740,150 +716,252 @@ class RobotFreeSwitchV3:
 
     def _play_audio(self, call_uuid: str, audio_file: str) -> bool:
         """
-        Joue un fichier audio sur l'appel avec support barge-in
-        
-        Utilise uuid_broadcast (pas uuid_playback qui n'existe pas)
-        
+        Joue un fichier audio avec barge-in VAD
+
+        NOUVEAU WORKFLOW (mode fichier + VAD):
+        1. Lancer uuid_broadcast (robot parle)
+        2. EN PARALLÈLE: uuid_record (enregistrer client)
+        3. EN PARALLÈLE: Thread VAD (détecter parole >= 2.5s)
+        4. Si barge-in détecté → uuid_break après smooth delay 1s
+        5. Stopper recording, retourner False (interrupted)
+
         Args:
             call_uuid: UUID de l'appel
             audio_file: Chemin absolu vers fichier audio
-            
+
         Returns:
-            True si lecture complète, False si interrompu
+            True si lecture complète, False si interrompu par barge-in
         """
         if not self.esl_conn_api or not self.esl_conn_api.connected():
             return False
-        
+
         try:
             # Réinitialiser flag barge-in
             self.barge_in_active[call_uuid] = False
 
-            # Calculer durée audio AVANT de commencer (pour ignorer détections pendant playback)
+            # Calculer durée audio
             audio_duration = self._get_audio_duration(audio_file)
 
-            # Timestamp début audio (pour grace period anti-faux positifs)
-            if call_uuid in self.streaming_sessions:
-                self.streaming_sessions[call_uuid]["audio_start_time"] = time.time()
-                # Reset robot_speech_end_time car robot commence à parler
-                self.streaming_sessions[call_uuid]["robot_speech_end_time"] = 0
-                # NOUVEAU: Marquer que le robot est en train de parler + durée estimée
-                self.streaming_sessions[call_uuid]["robot_playing_audio"] = True
-                self.streaming_sessions[call_uuid]["robot_audio_end_expected"] = time.time() + audio_duration
-                # V3: État explicite PLAYING_AUDIO
-                self.streaming_sessions[call_uuid]["audio_state"] = "PLAYING_AUDIO"
-                self.streaming_sessions[call_uuid]["speech_ended"] = False  # Reset flag
+            # Marquer session
+            if call_uuid in self.call_sessions:
+                self.call_sessions[call_uuid]["barge_in_detected_time"] = 0
 
-            logger.info(f"[{call_uuid[:8]}] 🎬 STATE: PLAYING_AUDIO (duration: {audio_duration:.1f}s, barge-in possible if speech >= 2.5s)")
+            logger.info(f"[{call_uuid[:8]}] 🎬 PLAYING_AUDIO (duration: {audio_duration:.1f}s, barge-in VAD if >= 2.5s)")
 
-            # Commande uuid_broadcast pour playback
-            # Syntaxe: uuid_broadcast <uuid> <path> [aleg|bleg|both]
+            # 1. Lancer uuid_broadcast (robot parle)
             cmd = f"uuid_broadcast {call_uuid} {audio_file} aleg"
             result = self.esl_conn_api.api(cmd)
-            
             result_str = result.getBody() if hasattr(result, 'getBody') else str(result)
-            
+
             if "+OK" not in result_str:
                 logger.error(f"[{call_uuid[:8]}] Playback failed: {result_str}")
                 return False
-            
-            # Calculer durée audio (avec fallback si format inconnu)
-            audio_duration = self._get_audio_duration(audio_file)
+
             logger.debug(f"[{call_uuid[:8]}] 🔊 Playing: {Path(audio_file).name} (duration: {audio_duration:.1f}s)")
-            
+
             # Auto-tracking
             self.call_sequences[call_uuid].append({
                 "type": "audio",
                 "file": audio_file,
                 "timestamp": datetime.now()
             })
-            
-            # Surveiller barge-in pendant playback
-            max_duration = audio_duration + 1.0  # Durée + 1s marge
-            check_interval = 0.1  # 100ms
+
+            # 2. Lancer uuid_record EN PARALLÈLE (enregistrer client)
+            record_file = config.RECORDINGS_DIR / f"bargein_{call_uuid}_{int(time.time())}.wav"
+            record_cmd = f"uuid_record {call_uuid} start {record_file}"
+            self.esl_conn_api.api(record_cmd)
+            logger.debug(f"[{call_uuid[:8]}] 📝 Recording started for barge-in detection: {record_file.name}")
+
+            # Sauvegarder dans session
+            if call_uuid in self.call_sessions:
+                self.call_sessions[call_uuid]["recording_file"] = str(record_file)
+
+            # 3. Lancer thread VAD barge-in detection
+            vad_thread = threading.Thread(
+                target=self._monitor_barge_in_vad,
+                args=(call_uuid, str(record_file), audio_duration),
+                daemon=True
+            )
+            vad_thread.start()
+
+            # 4. Surveiller si barge-in détecté
+            max_duration = audio_duration + 1.0
+            check_interval = 0.1
             elapsed = 0.0
 
             while elapsed < max_duration:
                 # Vérifier hangup
-                if call_uuid not in self.streaming_sessions or self.streaming_sessions[call_uuid].get("hangup_detected", False):
-                    logger.warning(f"[{call_uuid[:8]}] 📞 Hangup detected - stopping audio playback")
+                if call_uuid not in self.call_sessions or self.call_sessions[call_uuid].get("hangup_detected", False):
+                    logger.warning(f"[{call_uuid[:8]}] 📞 Hangup - stopping playback & recording")
+                    self.esl_conn_api.api(f"uuid_break {call_uuid}")
+                    self.esl_conn_api.api(f"uuid_record {call_uuid} stop {record_file}")
                     return False
 
-                # Phase 2: Vérifier barge-in avec smooth delay
-                session = self.streaming_sessions.get(call_uuid, {})
+                # Vérifier si barge-in détecté par VAD
+                session = self.call_sessions.get(call_uuid, {})
                 barge_in_time = session.get("barge_in_detected_time", 0)
 
                 if barge_in_time > 0:
-                    # Barge-in détecté, vérifier si smooth delay écoulé
+                    # Barge-in détecté ! Vérifier smooth delay
                     time_since_detection = time.time() - barge_in_time
 
                     if time_since_detection >= config.BARGE_IN_SMOOTH_DELAY:
-                        # Smooth delay écoulé → Couper MAINTENANT
+                        # Smooth delay écoulé → Couper audio
+                        logger.info(f"[{call_uuid[:8]}] ⏹️ BARGE-IN! Interrupting audio (smooth delay {config.BARGE_IN_SMOOTH_DELAY}s)")
+
+                        # Stopper audio
+                        self.esl_conn_api.api(f"uuid_break {call_uuid}")
+
+                        # Stopper recording
+                        self.esl_conn_api.api(f"uuid_record {call_uuid} stop {record_file}")
+
+                        # Reset flag
+                        self.call_sessions[call_uuid]["barge_in_detected_time"] = 0
                         self.barge_in_active[call_uuid] = True
-                        logger.info(f"[{call_uuid[:8]}] ⏹️ Audio interrupted by barge-in after {elapsed:.1f}s (smooth delay {config.BARGE_IN_SMOOTH_DELAY}s elapsed)")
 
-                        # STOPPER l'audio en cours avec uuid_break
-                        stop_cmd = f"uuid_break {call_uuid}"
-                        self.esl_conn_api.api(stop_cmd)
-                        logger.debug(f"[{call_uuid[:8]}] 🛑 Sent uuid_break to stop playback")
-
-                        # CRITIQUE: Réinitialiser le flag barge-in pour le prochain audio
-                        self.streaming_sessions[call_uuid]["barge_in_detected_time"] = 0
-                        logger.debug(f"[{call_uuid[:8]}] 🔄 Barge-in flag reset for next audio")
-
-                        # V3: reset_recognizer() supprimé (causait crash Vosk)
-                        # Le buffer Vosk se vide automatiquement après speech_end
-
-                        # Tracker quand robot finit de parler (interrompu par barge-in)
-                        self.streaming_sessions[call_uuid]["robot_speech_end_time"] = time.time()
-                        # NOUVEAU: Marquer que le robot a fini de parler (interrompu)
-                        self.streaming_sessions[call_uuid]["robot_playing_audio"] = False
-
-                        # 🔥 FIX CRITIQUE: Sauvegarder la transcription du BARGE-IN
-                        # Cette transcription sera retournée IMMÉDIATEMENT par _listen_streaming()
-                        # au lieu d'attendre une nouvelle parole !
-                        barge_in_transcription = self.streaming_sessions[call_uuid].get("last_transcription")
-                        self.streaming_sessions[call_uuid]["barge_in_transcription"] = barge_in_transcription
-
-                        logger.info(f"[{call_uuid[:8]}] 💾 Barge-in transcription saved: '{barge_in_transcription}'")
-                        logger.info(f"[{call_uuid[:8]}] 🎧 STATE: BARGE_IN_COMPLETED (transcription ready)")
-
+                        logger.info(f"[{call_uuid[:8]}] 🎧 Barge-in completed - recording saved")
                         return False
-                    else:
-                        # Smooth delay en cours, robot continue de parler
-                        remaining = config.BARGE_IN_SMOOTH_DELAY - time_since_detection
-                        logger.debug(f"[{call_uuid[:8]}] 🔄 Barge-in smooth delay active (remaining: {remaining:.1f}s)")
-
-                # Ancienne logique (fallback si pas de smooth delay)
-                elif self.barge_in_active.get(call_uuid, False):
-                    logger.info(f"[{call_uuid[:8]}] ⏹️ Audio interrupted by barge-in after {elapsed:.1f}s")
-
-                    # STOPPER l'audio en cours avec uuid_break
-                    stop_cmd = f"uuid_break {call_uuid}"
-                    self.esl_conn_api.api(stop_cmd)
-                    logger.debug(f"[{call_uuid[:8]}] 🛑 Sent uuid_break to stop playback")
-
-                    return False
 
                 time.sleep(check_interval)
                 elapsed += check_interval
 
-            logger.debug(f"[{call_uuid[:8]}] ✅ Audio playback completed ({elapsed:.1f}s)")
+            # Audio terminé normalement - stopper recording
+            logger.debug(f"[{call_uuid[:8]}] ✅ Audio completed - stopping recording")
+            self.esl_conn_api.api(f"uuid_record {call_uuid} stop {record_file}")
 
-            # Tracker quand robot finit de parler (audio terminé normalement)
-            if call_uuid in self.streaming_sessions:
-                self.streaming_sessions[call_uuid]["robot_speech_end_time"] = time.time()
-                # NOUVEAU: Marquer que le robot a fini de parler
-                self.streaming_sessions[call_uuid]["robot_playing_audio"] = False
-                # V3: Passer en mode WAITING_RESPONSE
-                self.streaming_sessions[call_uuid]["audio_state"] = "WAITING_RESPONSE"
-                self.streaming_sessions[call_uuid]["speech_ended"] = False  # Reset pour nouvelle écoute
+            # Supprimer fichier (pas de barge-in)
+            try:
+                if record_file.exists():
+                    record_file.unlink()
+            except:
+                pass
 
-            logger.info(f"[{call_uuid[:8]}] 🎧 STATE: WAITING_RESPONSE (listening for complete client response)")
             return True
             
         except Exception as e:
             logger.error(f"[{call_uuid[:8]}] Playback error: {e}")
             return False
+
+        def _monitor_barge_in_vad(self, call_uuid: str, record_file: str, max_duration: float):
+            """
+            Thread VAD: Surveille fichier enregistrement et détecte parole >= 2.5s
+    
+            Workflow:
+            1. Attendre que fichier existe et commence à s'écrire
+            2. Lire fichier frame par frame (30ms) avec VAD
+            3. Si parole détectée >= 2.5s → Marquer barge_in_detected_time
+            4. Thread principal détectera le flag et coupera audio
+    
+            Args:
+                call_uuid: UUID appel
+                record_file: Chemin fichier .wav en cours d'écriture
+                max_duration: Durée max à surveiller
+            """
+            if not self.vad:
+                logger.warning(f"[{call_uuid[:8]}] VAD not available - barge-in disabled")
+                return
+    
+            try:
+                import wave
+                import struct
+    
+                # Attendre que fichier existe (max 2s)
+                wait_start = time.time()
+                while not Path(record_file).exists():
+                    if time.time() - wait_start > 2.0:
+                        logger.warning(f"[{call_uuid[:8]}] Recording file not created - VAD aborted")
+                        return
+                    time.sleep(0.1)
+    
+                logger.debug(f"[{call_uuid[:8]}] VAD monitoring started on {Path(record_file).name}")
+    
+                # Config VAD
+                sample_rate = 16000  # uuid_record en 16kHz
+                frame_duration_ms = 30  # 30ms frames
+                frame_size = int(sample_rate * frame_duration_ms / 1000)  # 480 samples
+                bytes_per_frame = frame_size * 2  # 16-bit = 2 bytes
+    
+                # État VAD
+                speech_frames = 0
+                silence_frames = 0
+                speech_start_time = None
+                total_speech_duration = 0.0
+    
+                start_time = time.time()
+    
+                while time.time() - start_time < max_duration:
+                    # Vérifier si hangup ou audio terminé
+                    session = self.call_sessions.get(call_uuid)
+                    if not session or session.get("hangup_detected", False):
+                        logger.debug(f"[{call_uuid[:8]}] VAD: Hangup detected - stopping")
+                        break
+    
+                    # Lire fichier WAV
+                    try:
+                        with wave.open(record_file, 'rb') as wav:
+                            # Vérifier format
+                            if wav.getnchannels() != 1 or wav.getsampwidth() != 2:
+                                logger.error(f"[{call_uuid[:8]}] VAD: Invalid WAV format")
+                                break
+    
+                            # Lire toutes les frames disponibles
+                            audio_data = wav.readframes(wav.getnframes())
+    
+                            # Traiter par frames de 30ms
+                            offset = 0
+                            while offset + bytes_per_frame <= len(audio_data):
+                                frame = audio_data[offset:offset + bytes_per_frame]
+                                offset += bytes_per_frame
+    
+                                # VAD sur cette frame
+                                is_speech = self.vad.is_speech(frame, sample_rate)
+    
+                                if is_speech:
+                                    speech_frames += 1
+                                    silence_frames = 0
+    
+                                    if speech_start_time is None:
+                                        speech_start_time = time.time()
+    
+                                    # Calculer durée parole
+                                    if speech_start_time:
+                                        total_speech_duration = time.time() - speech_start_time
+    
+                                        # BARGE-IN si >= 2.5s !
+                                        if total_speech_duration >= config.BARGE_IN_DURATION_THRESHOLD:
+                                            logger.info(f"[{call_uuid[:8]}] 🎙️ VAD: Speech detected >= {config.BARGE_IN_DURATION_THRESHOLD}s → BARGE-IN!")
+    
+                                            # Marquer timestamp barge-in
+                                            if call_uuid in self.call_sessions:
+                                                self.call_sessions[call_uuid]["barge_in_detected_time"] = time.time()
+    
+                                            return  # Thread terminé
+    
+                                else:
+                                    # Silence
+                                    silence_frames += 1
+    
+                                    # Reset si silence > 0.8s (800ms)
+                                    if silence_frames > int(800 / frame_duration_ms):
+                                        if speech_start_time and total_speech_duration > 0:
+                                            logger.debug(f"[{call_uuid[:8]}] VAD: Speech ended ({total_speech_duration:.2f}s < threshold)")
+    
+                                        speech_frames = 0
+                                        speech_start_time = None
+                                        total_speech_duration = 0.0
+    
+                    except Exception as e:
+                        # Fichier pas encore prêt ou en cours d'écriture
+                        pass
+    
+                    time.sleep(0.05)  # Check toutes les 50ms
+    
+                logger.debug(f"[{call_uuid[:8]}] VAD monitoring ended (no barge-in)")
+    
+            except Exception as e:
+                logger.error(f"[{call_uuid[:8]}] VAD error: {e}", exc_info=True)
+    
+    
 
     def _get_audio_duration(self, audio_file: str) -> float:
         """
@@ -906,71 +984,6 @@ class RobotFreeSwitchV3:
             # Format WAV non standard (mu-law, etc.) - utiliser durée par défaut
             logger.debug(f"Could not read audio duration from {Path(audio_file).name}: {e}")
             return 60.0  # Fallback
-
-    def _enable_audio_streaming(self, call_uuid: str) -> bool:
-        """
-        Active le streaming audio FreeSWITCH → WebSocket avec mod_audio_stream
-
-        Utilise uuid_audio_stream pour envoyer l'audio RTP en temps réel
-        vers notre serveur WebSocket StreamingASR.
-
-        Paramètres streaming:
-        - Format: L16 PCM (Linear 16-bit)
-        - Sample rate: 16kHz (optimal pour Vosk)
-        - Mix: mono (caller only)
-        - URL: ws://127.0.0.1:8080/stream/{UUID}
-
-        Args:
-            call_uuid: UUID de l'appel
-
-        Returns:
-            True si streaming activé avec succès
-        """
-        if not self.esl_conn_api or not self.esl_conn_api.connected():
-            logger.error(f"[{call_uuid[:8]}] ESL API not connected")
-            return False
-
-        try:
-            # URL WebSocket du serveur StreamingASR
-            websocket_url = f"ws://127.0.0.1:8080/stream/{call_uuid}"
-
-            # Paramètres streaming
-            # V3 FIX: Utiliser STEREO pour séparer complètement les canaux
-            # Logs prouvent que "mono" capte AUSSI le robot (écho/loopback)
-            # Mix types (selon doc FreeSWITCH):
-            # - "mono" = SMBF_READ_STREAM uniquement = audio REÇU par FS (client parle)
-            # - "mixed" = SMBF_WRITE_STREAM = audio ENVOYÉ par FS (robot + echo client)
-            # - "stereo" = L=WRITE (robot), R=READ (client + echo robot)
-            #
-            # PROBLÈME: En mode ORIGINATE, le téléphone renvoie l'echo du robot
-            # donc READ stream contient client + echo robot!
-            #
-            # SOLUTION TEMPORAIRE: Tester "mono" (READ seul) et voir si l'echo est gérable
-            mix_type = "mono"
-            sampling_rate = "16000" # 16kHz pour Vosk (meilleur qualité/performance)
-            metadata = ""           # Métadonnées optionnelles JSON
-
-            # Commande uuid_audio_stream (mod_audio_stream requis)
-            # Format: uuid_audio_stream <uuid> start <wss-url> <mix-type> <sampling-rate> <metadata>
-            cmd = f"uuid_audio_stream {call_uuid} start {websocket_url} {mix_type} {sampling_rate} {metadata}"
-
-            logger.debug(f"[{call_uuid[:8]}] Executing: {cmd}")
-            result = self.esl_conn_api.api(cmd)
-
-            result_str = result.getBody() if hasattr(result, 'getBody') else str(result)
-
-            if "+OK" in result_str or "success" in result_str.lower():
-                logger.info(f"[{call_uuid[:8]}] ✅ Audio streaming started to WebSocket (16kHz {mix_type})")
-                logger.debug(f"[{call_uuid[:8]}]    URL: {websocket_url}")
-                return True
-            else:
-                logger.error(f"[{call_uuid[:8]}] ❌ Audio streaming failed: {result_str}")
-                logger.warning(f"[{call_uuid[:8]}]    Vérifier que mod_audio_stream est chargé")
-                return False
-
-        except Exception as e:
-            logger.error(f"[{call_uuid[:8]}] Audio streaming error: {e}", exc_info=True)
-            return False
 
     def _start_background_audio(self, call_uuid: str, background_audio_path: Optional[str] = None):
         """
@@ -1053,11 +1066,12 @@ class RobotFreeSwitchV3:
 
     def _listen_for_response(self, call_uuid: str, timeout: int = 10) -> Optional[str]:
         """
-        Écoute et transcrit la réponse du client
+        Écoute et transcrit la réponse du client (MODE FICHIER)
 
-        Modes:
-        1. Streaming (WebSocket) - Si StreamingASR disponible ET mod_audio_stream installé
-        2. Record fallback - Enregistre puis transcrit (mode par défaut)
+        Workflow:
+        1. Enregistre audio client avec uuid_record
+        2. Transcrit le fichier avec Vosk (gros modèle)
+        3. Retourne la transcription
 
         Args:
             call_uuid: UUID de l'appel
@@ -1066,141 +1080,17 @@ class RobotFreeSwitchV3:
         Returns:
             Transcription texte ou None si silence/timeout
         """
-        if call_uuid not in self.streaming_sessions:
-            logger.warning(f"[{call_uuid[:8]}] No streaming session")
+        if call_uuid not in self.call_sessions:
+            logger.warning(f"[{call_uuid[:8]}] No call session")
             return None
 
         try:
-            # Mode streaming si StreamingASR disponible ET mod_audio_stream installé
-            if self.streaming_asr and self.streaming_asr.is_available:
-                logger.debug(f"[{call_uuid[:8]}] Using streaming mode for transcription")
-                return self._listen_streaming(call_uuid, timeout)
-            else:
-                # Fallback: mode record si streaming pas disponible
-                logger.debug(f"[{call_uuid[:8]}] Using record fallback mode for transcription")
-                return self._listen_record_fallback(call_uuid, timeout)
+            # Mode fichier uniquement
+            logger.debug(f"[{call_uuid[:8]}] Using file mode for transcription")
+            return self._listen_record_fallback(call_uuid, timeout)
 
         except Exception as e:
             logger.error(f"[{call_uuid[:8]}] Listen error: {e}", exc_info=True)
-            return None
-
-    def _listen_streaming(self, call_uuid: str, timeout: int) -> Optional[str]:
-        """
-        Écoute en mode streaming avec 2 MODES DISTINCTS :
-
-        MODE 1 - APRÈS BARGE-IN :
-        - La transcription qui a déclenché le barge-in est DÉJÀ disponible
-        - On la retourne IMMÉDIATEMENT sans attendre
-        - Pas de speech_ended à attendre !
-
-        MODE 2 - WAITING_RESPONSE NORMAL :
-        - Robot a fini de parler normalement (pas de barge-in)
-        - Attendre que client parle et finisse (speech_end)
-        - Workflow classique avec transcription parallèle
-
-        Args:
-            call_uuid: UUID de l'appel
-            timeout: Timeout global en secondes
-
-        Returns:
-            Transcription finale ou None
-        """
-        session = self.streaming_sessions.get(call_uuid)
-        if not session:
-            logger.warning(f"[{call_uuid[:8]}] No streaming session")
-            return None
-
-        # 🔥 MODE 1: APRÈS BARGE-IN → Retour IMMÉDIAT
-        barge_in_transcription = session.get("barge_in_transcription")
-        if barge_in_transcription:
-            logger.info(f"[{call_uuid[:8]}] ⚡ BARGE-IN MODE: Returning saved transcription immediately: '{barge_in_transcription}'")
-            # Effacer pour éviter réutilisation
-            session["barge_in_transcription"] = None
-            session["last_transcription"] = None
-            session["last_partial_transcription"] = None
-            return barge_in_transcription
-
-        # 🔥 MODE 2: WAITING_RESPONSE NORMAL
-        logger.debug(f"[{call_uuid[:8]}] 👂 WAITING_RESPONSE MODE: Listening for client to speak...")
-
-        # TOUJOURS effacer l'ancienne transcription pour éviter réutilisation
-        session["last_transcription"] = None
-        session["last_partial_transcription"] = None
-        session["speech_ended"] = False
-
-        # PHASE 1: Attendre que le client finisse de parler (speech_end)
-        start_time = time.time()
-        check_interval = 0.1  # 100ms
-
-        logger.debug(f"[{call_uuid[:8]}] ⏳ Waiting for client to finish speaking...")
-
-        while time.time() - start_time < timeout:
-            # Vérifier si hangup détecté
-            if session.get("hangup_detected", False):
-                logger.warning(f"[{call_uuid[:8]}] 📞 Hangup detected - stopping listen")
-                return None
-
-            # Vérifier si client a fini de parler
-            if session.get("speech_ended", False):
-                speech_end_time = time.time()
-                elapsed_to_end = speech_end_time - start_time
-                logger.info(f"[{call_uuid[:8]}] ✅ Client finished speaking after {elapsed_to_end:.1f}s (speech_end detected)")
-
-                # Debug: Vérifier si transcription déjà disponible
-                existing_transcription = session.get("last_transcription")
-                existing_partial = session.get("last_partial_transcription")
-                logger.debug(f"[{call_uuid[:8]}] 📝 At speech_end: FINAL='{existing_transcription}' PARTIAL='{existing_partial}'")
-
-                # OPTIMISATION: Si transcription FINALE déjà disponible → retour immédiat !
-                if existing_transcription:
-                    logger.info(f"[{call_uuid[:8]}] ⚡ FINAL transcription already available: {existing_transcription} (instant!)")
-                    session["last_transcription"] = None
-                    return existing_transcription
-
-                break
-
-            time.sleep(check_interval)
-        else:
-            # Timeout global sans que client ait parlé
-            logger.warning(f"[{call_uuid[:8]}] ⏱️ Listen timeout ({timeout}s) - no speech detected")
-            return None
-
-        # PHASE 2: Attendre transcription FINALE (max 1s après speech_end)
-        # Pendant que client parlait, Vosk transcrivait EN PARALLÈLE
-        # → Transcription finale arrive généralement en < 500ms !
-        # Si pas de transcription en 1s → utiliser PARTIAL backup
-
-        final_wait_timeout = 1.0  # 1s max pour transcription finale (réduit de 2s)
-        final_wait_start = time.time()
-
-        logger.debug(f"[{call_uuid[:8]}] ⏳ Waiting for FINAL transcription (max {final_wait_timeout}s)...")
-
-        while time.time() - final_wait_start < final_wait_timeout:
-            # Vérifier si hangup
-            if session.get("hangup_detected", False):
-                logger.warning(f"[{call_uuid[:8]}] 📞 Hangup detected during transcription wait")
-                return None
-
-            # Vérifier si transcription finale disponible
-            transcription = session.get("last_transcription")
-
-            if transcription:
-                latency = (time.time() - speech_end_time) * 1000  # ms
-                logger.info(f"[{call_uuid[:8]}] ✅ Got FINAL transcription: {transcription} (latency: {latency:.0f}ms)")
-                # Effacer pour éviter réutilisation
-                session["last_transcription"] = None
-                return transcription
-
-            time.sleep(0.05)  # 50ms check plus fréquent
-
-        # PHASE 3: Timeout transcription finale → Backup avec dernière PARTIAL
-        partial = session.get("last_partial_transcription")
-        if partial:
-            logger.warning(f"[{call_uuid[:8]}] ⚠️ FINAL timeout ({final_wait_timeout}s) - using last PARTIAL: {partial}")
-            session["last_partial_transcription"] = None
-            return partial
-        else:
-            logger.warning(f"[{call_uuid[:8]}] ❌ No transcription available (neither FINAL nor PARTIAL)")
             return None
 
     def _listen_record_fallback(self, call_uuid: str, timeout: int) -> Optional[str]:
@@ -1294,124 +1184,6 @@ class RobotFreeSwitchV3:
     # - Pas de variables globales éparpillées
     # ============================================================================
 
-    def _handle_streaming_event(self, event_data: Dict[str, Any]):
-        """
-        V3: Callback pour événements streaming audio - VERSION SIMPLIFIÉE
-
-        Appelé par StreamingASR V3 quand:
-        - speech_start: Début de parole (avec durée = 0)
-        - speech_end: Fin de parole (avec durée incluse ← NOUVEAU V3)
-        - transcription: Texte disponible (avec durée incluse ← NOUVEAU V3)
-
-        Args:
-            event_data: Dict contenant:
-                - type: "speech_start" | "speech_end" | "transcription"
-                - call_uuid: UUID de l'appel
-                - duration: Durée de parole en secondes (speech_end, transcription)
-                - text: Texte transcrit (transcription)
-                - transcription_type: "final" | "partial" (transcription)
-                - timestamp: Timestamp événement
-        """
-        # Extraire données (V3: "type" au lieu de "event")
-        event_type = event_data.get("type")
-        call_uuid = event_data.get("call_uuid")
-
-        if not call_uuid or call_uuid not in self.streaming_sessions:
-            logger.debug(f"[V3] Event ignored - call_uuid not in active sessions: {call_uuid}")
-            return
-
-        session = self.streaming_sessions[call_uuid]
-
-        try:
-            # ================================================================
-            # SPEECH_START
-            # ================================================================
-            if event_type == "speech_start":
-                logger.debug(f"[{call_uuid[:8]}] 🗣️ V3 Speech START detected")
-                session["speech_start_time"] = time.time()
-
-            # ================================================================
-            # SPEECH_END - DÉCISION BARGE-IN ICI (PAS SUR TRANSCRIPTION)
-            # ================================================================
-            elif event_type == "speech_end":
-                duration = event_data.get("duration", 0.0)  # ← NOUVEAU V3
-                logger.info(f"[{call_uuid[:8]}] 🤐 V3 Speech END (durée: {duration:.2f}s)")
-
-                # Sauvegarder durée pour debug
-                session["last_speech_duration"] = duration
-
-                # Marquer que client a fini de parler (pour _listen_streaming)
-                session["speech_ended"] = True
-
-                # Récupérer audio_state depuis session (plus fiable)
-                audio_state = session.get("audio_state", "IDLE")
-
-                # Vérifier grace period (COURT au début de l'audio seulement)
-                #
-                # LOGIQUE: Le grace period sert à ignorer l'écho acoustique du robot
-                # au DÉBUT de la lecture. Après 2-3s, on autorise le barge-in même
-                # si le robot parle encore, sinon pas de barge-in possible!
-                #
-                # Le mode "mono" de mod_audio_stream capture le READ stream (client)
-                # MAIS il y a un écho acoustique du robot (téléphone capte le son)
-                # qu'on ne peut pas annuler côté FreeSWITCH (AEC doit être côté client)
-                audio_start_time = session.get("audio_start_time", 0)
-                current_time = time.time()
-                elapsed_since_audio = current_time - audio_start_time if audio_start_time > 0 else 999
-                grace_period_active = elapsed_since_audio < config.GRACE_PERIOD_SECONDS
-
-                # V3: Utiliser BargeInDetector
-                should_barge_in = self.barge_in_detector.should_trigger(
-                    audio_state=audio_state,
-                    speech_duration=duration,
-                    grace_period_active=grace_period_active
-                )
-
-                if should_barge_in:
-                    # BARGE-IN IMMÉDIAT
-                    session["barge_in_detected_time"] = current_time
-                    logger.info(f"[{call_uuid[:8]}] ✅ V3 BARGE-IN triggered on speech_end")
-
-                    # V3: Smooth delay optionnel (1s)
-                    if config.SMOOTH_DELAY_SECONDS > 0:
-                        logger.debug(f"[{call_uuid[:8]}] ⏱️ V3 Smooth delay: {config.SMOOTH_DELAY_SECONDS}s")
-                        time.sleep(config.SMOOTH_DELAY_SECONDS)
-
-            # ================================================================
-            # TRANSCRIPTION - LOGGING SEULEMENT (PAS DE DÉCISION BARGE-IN)
-            # ================================================================
-            elif event_type == "transcription":
-                text = event_data.get("text", "").strip()
-                transcription_type = event_data.get("transcription_type", "")  # V3: transcription_type
-                duration = event_data.get("duration", 0.0)  # ← NOUVEAU V3
-
-                # Traiter FINAL (pour NLP)
-                if text and transcription_type == "final":
-                    logger.info(
-                        f"[{call_uuid[:8]}] 📝 V3 FINAL transcription: '{text}' "
-                        f"(durée: {duration:.2f}s)"
-                    )
-
-                    # Sauvegarder pour NLP
-                    session["last_transcription"] = text
-                    session["last_speech_time"] = time.time()
-
-                    # NOTE V3: Barge-in déjà décidé sur speech_end
-                    # Cette transcription est juste pour NLP
-
-                # Sauvegarder aussi PARTIAL (backup sécurité)
-                elif text and transcription_type == "partial":
-                    session["last_partial_transcription"] = text
-                    logger.debug(f"[{call_uuid[:8]}] 📝 V3 PARTIAL: '{text}' (backup)")
-
-        except Exception as e:
-            logger.error(f"[{call_uuid[:8]}] V3 Streaming event error: {e}", exc_info=True)
-
-
-    # ========================================================================
-    # SECTION 6: SCENARIO EXECUTION ENGINE
-    # ========================================================================
-
     def _execute_scenario(self, call_uuid: str, scenario_name: str, campaign_id: str):
         """
         Point d'entrée principal pour exécution d'un scénario
@@ -1440,8 +1212,8 @@ class RobotFreeSwitchV3:
             return
         
         # Sauvegarder dans session
-        if call_uuid in self.streaming_sessions:
-            self.streaming_sessions[call_uuid]["scenario_data"] = scenario
+        if call_uuid in self.call_sessions:
+            self.call_sessions[call_uuid]["scenario_data"] = scenario
         
         # Vérifier mode agent autonome
         is_agent_mode = self.scenario_manager.is_agent_mode(scenario)
@@ -1458,7 +1230,7 @@ class RobotFreeSwitchV3:
                     matcher = ObjectionMatcher.load_objections_from_file(theme_file)
                     
                     if matcher:
-                        self.streaming_sessions[call_uuid]["objection_matcher"] = matcher
+                        self.call_sessions[call_uuid]["objection_matcher"] = matcher
                         logger.info(f"[{call_uuid[:8]}] ✅ Objection matcher loaded ({theme_file})")
                     else:
                         logger.warning(f"[{call_uuid[:8]}] ⚠️ Failed to load objection matcher")
@@ -1504,8 +1276,8 @@ class RobotFreeSwitchV3:
                 break
             
             # Sauvegarder step courant
-            if call_uuid in self.streaming_sessions:
-                self.streaming_sessions[call_uuid]["current_step"] = current_step
+            if call_uuid in self.call_sessions:
+                self.call_sessions[call_uuid]["current_step"] = current_step
 
             # === EXÉCUTER STEP SELON MODE ===
             if is_agent_mode:
@@ -1538,8 +1310,8 @@ class RobotFreeSwitchV3:
                 logger.info(f"[{call_uuid[:8]}] Scenario ended with result: {result}")
 
                 # Sauvegarder résultat
-                if call_uuid in self.streaming_sessions:
-                    self.streaming_sessions[call_uuid]["final_result"] = result
+                if call_uuid in self.call_sessions:
+                    self.call_sessions[call_uuid]["final_result"] = result
 
                 break
         
@@ -1648,10 +1420,10 @@ class RobotFreeSwitchV3:
         Returns:
             Nom next step ou None si terminé
         """
-        if call_uuid not in self.streaming_sessions:
+        if call_uuid not in self.call_sessions:
             return None
         
-        session = self.streaming_sessions[call_uuid]
+        session = self.call_sessions[call_uuid]
         step_config = self.scenario_manager.get_step_config(scenario, step_name)
         
         if not step_config:

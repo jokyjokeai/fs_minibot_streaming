@@ -71,7 +71,7 @@ FREESWITCH_GATEWAY = os.getenv("FREESWITCH_GATEWAY", "gateway1")
 # IA SERVICES
 # ============================================================================
 # Vosk STT
-VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "models/vosk-model-small-fr-0.22")
+VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "models/vosk-model-fr-0.22-lgraph")
 VOSK_SAMPLE_RATE = int(os.getenv("VOSK_SAMPLE_RATE", "16000"))
 
 # Ollama NLP
