@@ -77,7 +77,7 @@ FREESWITCH_CALLER_ID = os.getenv("FREESWITCH_CALLER_ID", "33609907845")
 # IA SERVICES
 # ============================================================================
 # Vosk STT
-VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "models/vosk-model-fr-0.22-lgraph")
+VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "models/vosk-model-fr-0.6-linto-2.2.0")
 VOSK_SAMPLE_RATE = int(os.getenv("VOSK_SAMPLE_RATE", "16000"))
 
 # Ollama NLP
