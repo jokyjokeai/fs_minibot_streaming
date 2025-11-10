@@ -1462,8 +1462,13 @@ class RobotFreeSWITCH:
                                         logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: ✅ END-OF-SPEECH detected!")
                                         logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Speech duration: {speech_duration:.2f}s | Silence: {config.WAITING_END_OF_SPEECH_SILENCE}s")
 
-                                        # Attendre finalization du fichier
-                                        time.sleep(0.3)
+                                        # CRITICAL: Stopper recording pour finaliser le header WAV
+                                        stop_cmd = f"uuid_record {call_uuid} stop {record_file}"
+                                        self.esl_conn_api.api(stop_cmd)
+                                        logger.debug(f"[{call_uuid[:8]}] 👂 WAITING: Recording stopped")
+
+                                        # Attendre que FreeSWITCH finalise le header WAV
+                                        time.sleep(0.5)
 
                                         # Transcrire fichier complet
                                         transcription = self._transcribe_file(call_uuid, record_file)
@@ -1481,12 +1486,23 @@ class RobotFreeSWITCH:
             # Timeout atteint
             if speech_detected:
                 logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: ⏱️ Timeout {timeout}s reached (speech detected but no end-of-speech)")
-                time.sleep(0.3)
+
+                # Stopper recording
+                stop_cmd = f"uuid_record {call_uuid} stop {record_file}"
+                self.esl_conn_api.api(stop_cmd)
+                logger.debug(f"[{call_uuid[:8]}] 👂 WAITING: Recording stopped (timeout)")
+
+                time.sleep(0.5)
                 transcription = self._transcribe_file(call_uuid, record_file)
                 logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
                 return transcription
             else:
                 logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: ⏱️ Timeout {timeout}s reached WITHOUT speech → SILENCE")
+
+                # Stopper recording même si pas de parole (cleanup)
+                stop_cmd = f"uuid_record {call_uuid} stop {record_file}"
+                self.esl_conn_api.api(stop_cmd)
+
                 return None
 
         except Exception as e:
