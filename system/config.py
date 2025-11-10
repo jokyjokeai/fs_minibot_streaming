@@ -81,7 +81,7 @@ STT_ENGINE = os.getenv("STT_ENGINE", "faster_whisper")  # "faster_whisper" or "v
 
 # Faster-Whisper STT (Primary - GPU accelerated)
 FASTER_WHISPER_MODEL = os.getenv("FASTER_WHISPER_MODEL", "base")  # tiny, base, small, medium
-FASTER_WHISPER_DEVICE = os.getenv("FASTER_WHISPER_DEVICE", "auto")  # auto, cuda, cpu
+FASTER_WHISPER_DEVICE = os.getenv("FASTER_WHISPER_DEVICE", "cpu")  # auto, cuda, cpu (cpu=safe, cuda=fast mais requiert cuDNN)
 FASTER_WHISPER_COMPUTE_TYPE = os.getenv("FASTER_WHISPER_COMPUTE_TYPE", "auto")  # auto, float16, int8
 
 # Vosk STT (Fallback)

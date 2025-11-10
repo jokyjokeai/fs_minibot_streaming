@@ -27,9 +27,6 @@ torchaudio==2.4.0
 
 numpy==1.26.4
 transformers==4.46.3
-huggingface-hub
-safetensors
-tokenizers
 
 # ============================================
 # SPEECH-TO-TEXT (Vosk + Faster-Whisper)
@@ -92,22 +89,28 @@ phonenumbers==8.13.27
 # 6. Ollama (installer séparément):
 #    https://ollama.ai/download
 #    ollama pull mistral:7b
-#
+
 # ============================================
-# CHANGEMENTS V3 (2025)
+# CHANGEMENTS V3.1 (2025) - NETTOYAGE
 # ============================================
-# SUPPRIMÉ:
-#   - TTS (Coqui TTS) → Utilise audio pré-enregistré uniquement
+# SUPPRIMÉ (packages jamais utilisés dans le code):
+#   - huggingface-hub → Dépendance transitive de transformers (auto-installé)
+#   - safetensors → Dépendance transitive de transformers (auto-installé)
+#   - tokenizers → Dépendance transitive de transformers (auto-installé)
+#   - TTS (Coqui) → Supprimé v3 (audio pré-enregistré uniquement)
 #   - torchvision → Non utilisé dans le projet
 #   - alembic → Pas de migrations DB automatiques
 #   - prometheus-client → Monitoring non utilisé
 #   - python-json-logger → Logging natif Python
-#   - pytest/black/flake8 → Déplacés vers requirements-dev.txt
+#   - pytest/black/flake8 → Tools de dev (non nécessaires en production)
 #
-# AJOUTÉ:
-#   - websockets → Streaming ASR temps réel
+# CONSERVÉ (réellement utilisé):
+#   - faster-whisper==1.1.0 → GPU-accelerated STT (3-5x faster than Vosk)
+#   - vosk==0.3.45 → Fallback CPU-only STT robuste
 #   - ollama → NLP/Intent classification
-#   - faster-whisper → GPU-accelerated STT (3-5x faster than Vosk)
+#   - websockets → Streaming ASR temps réel
+#   - torch/torchaudio CUDA 11.8 → Support GPU pour Faster-Whisper
+#   - All web/database/audio packages → Utilisés activement
 #
 # FASTER-WHISPER vs VOSK:
 #   Faster-Whisper (primary): GPU-accelerated, 3-5x faster (0.3-0.5s vs 1.5s)
