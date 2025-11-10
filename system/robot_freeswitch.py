@@ -634,8 +634,9 @@ class RobotFreeSWITCH:
 
         # Attendre que media soit établi (crucial pour appels sortants)
         # Sans ce délai, uuid_record démarre avant que RTP soit prêt → fichier vide
-        time.sleep(0.5)
-        logger.debug(f"[{call_uuid[:8]}] AMD: Media path established, starting recording...")
+        # 1.5s nécessaire pour SIP négociation + RTP establishment
+        time.sleep(1.5)
+        logger.info(f"[{call_uuid[:8]}] AMD: Media path ready, starting recording...")
 
         # Activer stereo (Left=client, Right=robot)
         self.esl_conn_api.api(f"uuid_setvar {call_uuid} RECORD_STEREO true")
