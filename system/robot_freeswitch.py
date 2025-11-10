@@ -372,10 +372,14 @@ class RobotFreeSWITCH:
                 
                 event_name = event.getHeader("Event-Name")
                 call_uuid = event.getHeader("Unique-ID")
-                
+
+                # DEBUG: Logger TOUS les événements pour debug hangup
+                if call_uuid and event_name in ["CHANNEL_HANGUP", "CHANNEL_HANGUP_COMPLETE", "CHANNEL_DESTROY"]:
+                    logger.info(f"🔍 EVENT RECEIVED: {event_name} | UUID: {call_uuid[:8]}")
+
                 if not call_uuid:
                     continue
-                
+
                 # Dispatcher événements
                 if event_name == "CHANNEL_ANSWER":
                     self._handle_channel_answer(call_uuid, event)
