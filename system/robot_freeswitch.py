@@ -428,9 +428,10 @@ class RobotFreeSWITCH:
             self.call_sessions[call_uuid]["hangup_detected"] = True
             logger.info(f"[{call_uuid[:8]}] 📞 Hangup flag set → All VAD threads will stop")
 
-            # Attendre que les threads voient le flag (ils checkent toutes les 0.1s)
-            # Sans ce delay, la session pourrait être supprimée avant que les threads vérifient
-            time.sleep(0.2)
+            # Attendre que les threads voient le flag (ils checkent toutes les 0.05-0.1s)
+            # Augmenté à 1.0s pour garantir que tous les threads (VAD, recording) voient le flag
+            # et se terminent proprement avant cleanup de la session
+            time.sleep(1.0)
 
         # Cleanup
         logger.info(f"[{call_uuid[:8]}] 📞 Cleaning up session data...")
@@ -774,6 +775,7 @@ class RobotFreeSWITCH:
             # Sauvegarder dans session
             if call_uuid in self.call_sessions:
                 self.call_sessions[call_uuid]["recording_file"] = str(record_file)
+                self.call_sessions[call_uuid]["audio_finished"] = False  # Flag pour arrêter thread VAD
 
             # 3. Lancer thread VAD barge-in detection (NOUVEAU _monitor_vad_playing)
             vad_thread = threading.Thread(
@@ -835,8 +837,16 @@ class RobotFreeSWITCH:
                 time.sleep(check_interval)
                 elapsed += check_interval
 
-            # Audio terminé normalement - stopper recording
-            logger.debug(f"[{call_uuid[:8]}] ✅ Audio completed - stopping recording")
+            # Audio terminé normalement - marquer flag pour arrêter thread VAD
+            logger.debug(f"[{call_uuid[:8]}] ✅ Audio completed - signaling VAD thread to stop")
+            if call_uuid in self.call_sessions:
+                self.call_sessions[call_uuid]["audio_finished"] = True
+
+            # Attendre que thread VAD se termine (max 0.5s)
+            time.sleep(0.5)
+
+            # Stopper recording
+            logger.debug(f"[{call_uuid[:8]}] 📝 Stopping recording (audio finished normally)")
             self.esl_conn_api.api(f"uuid_record {call_uuid} stop {record_file}")
 
             # Supprimer fichier (pas de barge-in)
@@ -1195,10 +1205,19 @@ class RobotFreeSWITCH:
             start_time = time.time()
 
             while time.time() - start_time < max_duration:
-                # Check hangup
+                # Check hangup ou audio terminé
                 session = self.call_sessions.get(call_uuid)
-                if not session or session.get("hangup_detected", False):
+                if not session:
+                    logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Session closed")
+                    break
+
+                if session.get("hangup_detected", False):
                     logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Hangup detected")
+                    break
+
+                # CRITICAL: Arrêter si audio terminé normalement (pas de barge-in)
+                if session.get("audio_finished", False):
+                    logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Audio finished normally - stopping VAD monitoring")
                     break
 
                 # Lire fichier WAV en mode RAW
