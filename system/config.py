@@ -126,10 +126,10 @@ PLAYING_SMOOTH_DELAY = 1.0  # secondes - Délai avant interruption (finir phrase
 
 # MODE 3: WAITING_RESPONSE (End-of-speech detection)
 # Objectif: Détecter début/fin de parole, transcrire réponse complète
-# Comportement: Détecter début parole dès 300ms, fin si silence >= 1.0s
+# Comportement: Détecter début parole dès 300ms, fin si silence >= 0.8s
 WAITING_TIMEOUT = 10.0  # secondes - Timeout total avant retry_silence
 WAITING_MIN_SPEECH_DURATION = 0.3  # secondes - Détecter début parole
-WAITING_END_OF_SPEECH_SILENCE = 1.0  # secondes - Silence pour fin de parole (optimisé: réactif mais safe)
+WAITING_END_OF_SPEECH_SILENCE = 0.8  # secondes - Silence pour fin de parole (optimisé pour réactivité)
 WAITING_TRANSCRIBE_CONTINUOUS = True  # Transcrire pendant que client parle (latence minimale)
 
 # Compatibilité ancienne config (DEPRECATED - utiliser configs spécifiques ci-dessus)
