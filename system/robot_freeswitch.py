@@ -745,14 +745,17 @@ class RobotFreeSWITCH:
 
             # 1. Lancer uuid_broadcast (robot parle)
             cmd = f"uuid_broadcast {call_uuid} {audio_file} aleg"
+            logger.debug(f"[{call_uuid[:8]}] Sending: {cmd}")
+
             result = self.esl_conn_api.api(cmd)
             result_str = result.getBody() if hasattr(result, 'getBody') else str(result)
+            logger.debug(f"[{call_uuid[:8]}] uuid_broadcast result: {result_str}")
 
             if "+OK" not in result_str:
                 logger.error(f"[{call_uuid[:8]}] Playback failed: {result_str}")
                 return False
 
-            logger.debug(f"[{call_uuid[:8]}] 🔊 Playing: {Path(audio_file).name} (duration: {audio_duration:.1f}s)")
+            logger.info(f"[{call_uuid[:8]}] 🔊 Playing: {Path(audio_file).name} (duration: {audio_duration:.1f}s)")
 
             # Auto-tracking
             self.call_sequences[call_uuid].append({
@@ -764,8 +767,12 @@ class RobotFreeSWITCH:
             # 2. Lancer uuid_record EN PARALLÈLE (enregistrer client)
             record_file = config.RECORDINGS_DIR / f"bargein_{call_uuid}_{int(time.time())}.wav"
             record_cmd = f"uuid_record {call_uuid} start {record_file}"
-            self.esl_conn_api.api(record_cmd)
-            logger.debug(f"[{call_uuid[:8]}] 📝 Recording started for barge-in detection: {record_file.name}")
+            logger.debug(f"[{call_uuid[:8]}] Sending: {record_cmd}")
+
+            record_result = self.esl_conn_api.api(record_cmd)
+            record_result_str = record_result.getBody() if hasattr(record_result, 'getBody') else str(record_result)
+            logger.debug(f"[{call_uuid[:8]}] uuid_record result: {record_result_str}")
+            logger.info(f"[{call_uuid[:8]}] 📝 Recording started: {record_file.name}")
 
             # Sauvegarder dans session
             if call_uuid in self.call_sessions:
