@@ -25,8 +25,12 @@ BASE_DIR = Path(__file__).parent.parent
 AUDIO_DIR = BASE_DIR / "audio"
 LOGS_DIR = BASE_DIR / "logs"
 EXPORTS_DIR = BASE_DIR / "exports"
-# FreeSWITCH doit avoir les permissions d'écriture
-RECORDINGS_DIR = Path("/tmp/minibot_recordings")
+# FreeSWITCH recordings - Utiliser répertoire natif FreeSWITCH
+# Avantages: permissions correctes, pas de header WAV corrompu, standard FreeSWITCH
+RECORDINGS_DIR = Path(os.getenv(
+    "FREESWITCH_RECORDINGS_DIR",
+    "/usr/local/freeswitch/recordings"
+))
 
 # Audio FreeSWITCH
 FREESWITCH_SOUNDS_DIR = Path(os.getenv(

@@ -893,74 +893,103 @@ class RobotFreeSWITCH:
             silence_frames = 0
             speech_start_time = None
             total_speech_duration = 0.0
-    
+            last_file_size = 0  # Pour tracker la croissance du fichier
+
             start_time = time.time()
-    
+
             while time.time() - start_time < max_duration:
                 # Vérifier si hangup ou audio terminé
                 session = self.call_sessions.get(call_uuid)
                 if not session or session.get("hangup_detected", False):
                     logger.debug(f"[{call_uuid[:8]}] VAD: Hangup detected - stopping")
                     break
-    
-                # Lire fichier WAV
+
+                # Lire fichier WAV en mode RAW (skip header corrompu)
                 try:
-                    with wave.open(record_file, 'rb') as wav:
-                        # Vérifier format
-                        if wav.getnchannels() != 1 or wav.getsampwidth() != 2:
-                            logger.error(f"[{call_uuid[:8]}] VAD: Invalid WAV format")
-                            break
-    
-                        # Lire toutes les frames disponibles
-                        audio_data = wav.readframes(wav.getnframes())
-    
-                        # Traiter par frames de 30ms
+                    # Vérifier si fichier a grandi (nouvelles données)
+                    current_size = Path(record_file).stat().st_size
+                    if current_size <= last_file_size:
+                        # Pas de nouvelles données, attendre
+                        time.sleep(0.05)
+                        continue
+
+                    # Lire tout le fichier en binaire (y compris header)
+                    with open(record_file, 'rb') as f:
+                        raw_data = f.read()
+
+                    # Skip WAV header (premier "data" chunk)
+                    # Format WAV standard: RIFF (12 bytes) + fmt (24 bytes) + LIST (variable) + data (8 bytes + audio)
+                    # On cherche le marker "data" pour trouver le début de l'audio
+                    data_marker = b'data'
+                    data_pos = raw_data.find(data_marker)
+
+                    if data_pos == -1:
+                        # Pas encore de marker data, fichier trop petit
+                        time.sleep(0.05)
+                        continue
+
+                    # Skip "data" + 4 bytes de size = audio commence après
+                    audio_start = data_pos + 8
+                    audio_data = raw_data[audio_start:]
+
+                    # Ne traiter que les NOUVELLES données depuis la dernière lecture
+                    if current_size > last_file_size:
+                        new_bytes = current_size - last_file_size
+                        # Lire seulement les nouvelles frames
+                        new_audio_data = audio_data[-(new_bytes):]
+
+                        # Traiter par frames de 30ms (480 bytes @ 8kHz 16-bit)
                         offset = 0
-                        while offset + bytes_per_frame <= len(audio_data):
-                            frame = audio_data[offset:offset + bytes_per_frame]
+                        while offset + bytes_per_frame <= len(new_audio_data):
+                            frame = new_audio_data[offset:offset + bytes_per_frame]
                             offset += bytes_per_frame
-    
+
                             # VAD sur cette frame
                             is_speech = self.vad.is_speech(frame, sample_rate)
-    
+
                             if is_speech:
                                 speech_frames += 1
                                 silence_frames = 0
-    
+
                                 if speech_start_time is None:
                                     speech_start_time = time.time()
-    
+                                    logger.debug(f"[{call_uuid[:8]}] VAD: Speech started!")
+
                                 # Calculer durée parole
                                 if speech_start_time:
                                     total_speech_duration = time.time() - speech_start_time
-    
+
                                     # BARGE-IN si >= 2.5s !
                                     if total_speech_duration >= config.BARGE_IN_DURATION_THRESHOLD:
                                         logger.info(f"[{call_uuid[:8]}] 🎙️ VAD: Speech detected >= {config.BARGE_IN_DURATION_THRESHOLD}s → BARGE-IN!")
-    
+
                                         # Marquer timestamp barge-in
                                         if call_uuid in self.call_sessions:
                                             self.call_sessions[call_uuid]["barge_in_detected_time"] = time.time()
-    
+
                                         return  # Thread terminé
-    
+
                             else:
                                 # Silence
                                 silence_frames += 1
-    
+
                                 # Reset si silence > 0.8s (800ms)
                                 if silence_frames > int(800 / frame_duration_ms):
                                     if speech_start_time and total_speech_duration > 0:
                                         logger.debug(f"[{call_uuid[:8]}] VAD: Speech ended ({total_speech_duration:.2f}s < threshold)")
-    
+
                                     speech_frames = 0
                                     speech_start_time = None
                                     total_speech_duration = 0.0
-    
+
+                        # Mettre à jour dernière position lue
+                        last_file_size = current_size
+
                 except Exception as e:
-                    # Fichier pas encore prêt ou en cours d'écriture
+                    # Log l'erreur pour debugging
+                    logger.debug(f"[{call_uuid[:8]}] VAD read error (retry): {e}")
                     pass
-    
+
                 time.sleep(0.05)  # Check toutes les 50ms
     
             logger.debug(f"[{call_uuid[:8]}] VAD monitoring ended (no barge-in)")
