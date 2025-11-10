@@ -1110,7 +1110,7 @@ class RobotFreeSWITCH:
                     return
                 time.sleep(0.1)
 
-            logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Monitoring started")
+            logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: Monitoring started (max: {max_duration:.1f}s, barge-in threshold: {config.PLAYING_BARGE_IN_THRESHOLD}s)")
 
             # Config VAD - 8kHz téléphonie
             sample_rate = 8000
@@ -1128,6 +1128,7 @@ class RobotFreeSWITCH:
             # Segments de parole détectés (pour logging backchannels)
             speech_segments = []
             current_segment_start = None
+            last_progress_log = 0.0  # Pour logger progression tous les 0.5s
 
             start_time = time.time()
 
@@ -1178,15 +1179,20 @@ class RobotFreeSWITCH:
                                 if speech_start_time is None:
                                     speech_start_time = time.time()
                                     current_segment_start = time.time()
-                                    logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Speech started")
+                                    logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: 🗣️ Speech detected → Start")
 
                                 # Calculer durée parole
                                 if speech_start_time:
                                     total_speech_duration = time.time() - speech_start_time
 
+                                    # Logger progression tous les 0.5s
+                                    if total_speech_duration - last_progress_log >= 0.5:
+                                        logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: Speech ongoing [{total_speech_duration:.1f}s / {config.PLAYING_BARGE_IN_THRESHOLD}s threshold]")
+                                        last_progress_log = total_speech_duration
+
                                     # BARGE-IN si >= threshold
                                     if total_speech_duration >= config.PLAYING_BARGE_IN_THRESHOLD:
-                                        logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: Speech >= {config.PLAYING_BARGE_IN_THRESHOLD}s → BARGE-IN!")
+                                        logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: ⚡ BARGE-IN TRIGGERED! (speech {total_speech_duration:.2f}s >= {config.PLAYING_BARGE_IN_THRESHOLD}s)")
 
                                         # Marquer timestamp barge-in
                                         if call_uuid in self.call_sessions:
@@ -1197,6 +1203,7 @@ class RobotFreeSWITCH:
                             else:
                                 # Silence
                                 silence_frames += 1
+                                silence_duration_s = (silence_frames * frame_duration_ms) / 1000.0
 
                                 # Reset si silence > PLAYING_SILENCE_RESET
                                 silence_reset_ms = int(config.PLAYING_SILENCE_RESET * 1000)
@@ -1207,16 +1214,19 @@ class RobotFreeSWITCH:
 
                                         # Backchannel ou vraie parole ?
                                         if segment_duration < config.PLAYING_BACKCHANNEL_MAX:
-                                            logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Backchannel detected ({segment_duration:.2f}s < {config.PLAYING_BACKCHANNEL_MAX}s)")
+                                            logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: 💬 Backchannel detected ({segment_duration:.2f}s < {config.PLAYING_BACKCHANNEL_MAX}s) → Ignored")
                                             speech_segments.append(("backchannel", segment_duration))
                                         else:
-                                            logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Speech segment ({segment_duration:.2f}s, but < barge-in threshold)")
+                                            logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: 🗣️ Speech segment ended ({segment_duration:.2f}s, but < {config.PLAYING_BARGE_IN_THRESHOLD}s barge-in threshold)")
                                             speech_segments.append(("speech", segment_duration))
+
+                                        logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: 🔄 Reset (silence {config.PLAYING_SILENCE_RESET}s detected)")
 
                                     speech_frames = 0
                                     speech_start_time = None
                                     total_speech_duration = 0.0
                                     current_segment_start = None
+                                    last_progress_log = 0.0  # Reset progress
 
                         last_file_size = current_size
 
@@ -1277,7 +1287,8 @@ class RobotFreeSWITCH:
                     return None
                 time.sleep(0.1)
 
-            logger.debug(f"[{call_uuid[:8]}] WAITING VAD: Monitoring started (timeout {timeout}s)")
+            logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: ========== MONITORING STARTED ==========")
+            logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Timeout: {timeout}s | End-of-speech silence: {config.WAITING_END_OF_SPEECH_SILENCE}s")
 
             # Config VAD - 8kHz téléphonie
             sample_rate = 8000
@@ -1341,7 +1352,8 @@ class RobotFreeSWITCH:
                                 if not speech_detected:
                                     speech_detected = True
                                     speech_start_time = time.time()
-                                    logger.info(f"[{call_uuid[:8]}] WAITING VAD: Speech started")
+                                    elapsed = time.time() - start_time
+                                    logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: 🗣️ Speech START detected (at T+{elapsed:.1f}s)")
 
                                 last_speech_time = time.time()
 
@@ -1349,17 +1361,20 @@ class RobotFreeSWITCH:
                                 # Silence
                                 if speech_detected:
                                     silence_frames += 1
+                                    silence_duration_s = (silence_frames * frame_duration_ms) / 1000.0
 
                                     # End-of-speech si silence >= threshold
                                     if silence_frames > int(end_of_speech_silence_ms / frame_duration_ms):
                                         speech_duration = last_speech_time - speech_start_time if last_speech_time and speech_start_time else 0
-                                        logger.info(f"[{call_uuid[:8]}] WAITING VAD: End-of-speech detected (speech duration: {speech_duration:.2f}s)")
+                                        logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: ✅ END-OF-SPEECH detected!")
+                                        logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Speech duration: {speech_duration:.2f}s | Silence: {config.WAITING_END_OF_SPEECH_SILENCE}s")
 
                                         # Attendre finalization du fichier
                                         time.sleep(0.3)
 
                                         # Transcrire fichier complet
                                         transcription = self._transcribe_file(call_uuid, record_file)
+                                        logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
                                         return transcription
 
                         last_file_size = current_size
@@ -1372,11 +1387,13 @@ class RobotFreeSWITCH:
 
             # Timeout atteint
             if speech_detected:
-                logger.info(f"[{call_uuid[:8]}] WAITING VAD: Timeout reached with speech - transcribing")
+                logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: ⏱️ Timeout {timeout}s reached (speech detected but no end-of-speech)")
                 time.sleep(0.3)
-                return self._transcribe_file(call_uuid, record_file)
+                transcription = self._transcribe_file(call_uuid, record_file)
+                logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
+                return transcription
             else:
-                logger.info(f"[{call_uuid[:8]}] WAITING VAD: Timeout reached without speech")
+                logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: ⏱️ Timeout {timeout}s reached WITHOUT speech → SILENCE")
                 return None
 
         except Exception as e:
@@ -1518,7 +1535,10 @@ class RobotFreeSWITCH:
                 return transcription
             else:
                 # Pas de barge-in, utiliser WAITING mode (end-of-speech detection)
-                logger.info(f"[{call_uuid[:8]}] 👂 WAITING_RESPONSE mode (timeout: {timeout}s, end-of-speech: {config.WAITING_END_OF_SPEECH_SILENCE}s)")
+                logger.info(f"[{call_uuid[:8]}] ═══════════════════════════════════════")
+                logger.info(f"[{call_uuid[:8]}] 👂 ENTERING WAITING_RESPONSE MODE")
+                logger.info(f"[{call_uuid[:8]}] 👂 Timeout: {timeout}s | End-of-speech: {config.WAITING_END_OF_SPEECH_SILENCE}s")
+                logger.info(f"[{call_uuid[:8]}] ═══════════════════════════════════════")
 
                 # Préparer fichier d'enregistrement
                 timestamp = int(time.time() * 1000)
@@ -1529,14 +1549,15 @@ class RobotFreeSWITCH:
                 result = self.esl_conn_api.api(cmd)
 
                 if not result or b"+OK" not in result.getBody().encode():
-                    logger.error(f"[{call_uuid[:8]}] WAITING: Failed to start recording")
+                    logger.error(f"[{call_uuid[:8]}] 👂 WAITING: ❌ Failed to start recording")
                     return None
 
-                logger.debug(f"[{call_uuid[:8]}] WAITING: Recording to {Path(record_file).name}")
+                logger.info(f"[{call_uuid[:8]}] 👂 WAITING: Recording started → {Path(record_file).name}")
 
                 # Appeler la nouvelle fonction VAD WAITING
                 transcription = self._monitor_vad_waiting(call_uuid, record_file, timeout)
 
+                logger.info(f"[{call_uuid[:8]}] 👂 EXITING WAITING_RESPONSE MODE")
                 return transcription
 
         except Exception as e:
