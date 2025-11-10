@@ -5,14 +5,14 @@ Test Services - MiniBotPanel v3
 Teste la disponibilité et le fonctionnement de tous les services IA.
 
 Services testés:
-- Vosk STT (Speech-to-Text)
+- Faster-Whisper STT (Speech-to-Text GPU-accelerated)
 - Ollama NLP (Intent + Sentiment)
 - AMD Service (Answering Machine Detection)
 - FreeSWITCH ESL (Event Socket Library)
 
 Utilisation:
     python test_services.py
-    python test_services.py --service vosk
+    python test_services.py --service stt
     python test_services.py --verbose
 """
 
@@ -21,7 +21,7 @@ import logging
 from pathlib import Path
 
 from system.config import config
-from system.services.vosk_stt import VoskSTT
+from system.services.faster_whisper_stt import FasterWhisperSTT
 from system.services.ollama_nlp import OllamaNLP
 # ChatterboxTTSService removed - TTS no longer used (v3)
 from system.services.amd_service import AMDService
@@ -33,31 +33,36 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def test_vosk() -> bool:
+def test_faster_whisper() -> bool:
     """
-    Teste le service Vosk STT.
+    Teste le service Faster-Whisper STT.
 
     Returns:
         True si disponible, False sinon
     """
-    logger.info("\n🎤 TEST VOSK STT")
+    logger.info("\n🎤 TEST FASTER-WHISPER STT")
     logger.info("=" * 60)
 
     try:
-        stt = VoskSTT()
+        stt = FasterWhisperSTT(
+            model_name=config.FASTER_WHISPER_MODEL,
+            device=config.FASTER_WHISPER_DEVICE,
+            compute_type=config.FASTER_WHISPER_COMPUTE_TYPE
+        )
 
         if stt.is_available:
-            logger.info(f"✅ Vosk disponible")
-            logger.info(f"📁 Modèle: {config.VOSK_MODEL_PATH}")
-            logger.info(f"🔊 Sample rate: {config.VOSK_SAMPLE_RATE} Hz")
+            logger.info(f"✅ Faster-Whisper disponible")
+            logger.info(f"📁 Modèle: {config.FASTER_WHISPER_MODEL}")
+            logger.info(f"🎮 Device: {stt.device}")
+            logger.info(f"⚙️ Compute type: {stt.compute_type}")
             return True
         else:
-            logger.error("❌ Vosk non disponible")
-            logger.info(f"💡 Vérifiez que le modèle existe: {config.VOSK_MODEL_PATH}")
+            logger.error("❌ Faster-Whisper non disponible")
+            logger.info(f"💡 Vérifiez l'installation: pip install faster-whisper")
             return False
 
     except Exception as e:
-        logger.error(f"❌ Erreur Vosk: {e}")
+        logger.error(f"❌ Erreur Faster-Whisper: {e}")
         return False
 
 
@@ -152,7 +157,7 @@ def main():
     parser = argparse.ArgumentParser(description="Tester les services IA")
     parser.add_argument(
         "--service",
-        choices=["vosk", "ollama", "amd", "freeswitch"],
+        choices=["stt", "ollama", "amd", "freeswitch"],
         help="Tester un service spécifique"
     )
     parser.add_argument(
@@ -174,8 +179,8 @@ def main():
 
     # Tester service spécifique ou tous
     if args.service:
-        if args.service == "vosk":
-            results["Vosk STT"] = test_vosk()
+        if args.service == "stt":
+            results["Faster-Whisper STT"] = test_faster_whisper()
         elif args.service == "ollama":
             results["Ollama NLP"] = test_ollama()
         elif args.service == "amd":
@@ -184,7 +189,7 @@ def main():
             results["FreeSWITCH ESL"] = test_freeswitch()
     else:
         # Tester tous les services
-        results["Vosk STT"] = test_vosk()
+        results["Faster-Whisper STT"] = test_faster_whisper()
         results["Ollama NLP"] = test_ollama()
         results["AMD Service"] = test_amd()
         results["FreeSWITCH ESL"] = test_freeswitch()

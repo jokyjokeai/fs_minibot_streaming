@@ -6,7 +6,7 @@ Configuration épurée avec uniquement l'essentiel:
 - Chemins et dossiers
 - Database
 - FreeSWITCH ESL
-- Services IA (Vosk, Ollama)
+- Services IA (Faster-Whisper, Ollama)
 - AMD (Answering Machine Detection)
 - Barge-in (détection interruption client)
 - Gestion appels et retry

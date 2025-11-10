@@ -7,7 +7,7 @@ Robot d'appels avec IA conversationnelle, barge-in VAD et mode fichier:
 Fonctionnalités principales:
 - ✅ MODE FICHIER: Enregistrement + transcription (fiable et robuste)
 - ✅ BARGE-IN VAD: Détection parole >= 2.5s SANS transcription
-- ✅ Transcription avec modèle Vosk large (meilleure qualité)
+- ✅ Transcription avec Faster-Whisper GPU (3-5x plus rapide)
 - ✅ Workflow simple: Enregistrer → Détecter VAD → Transcrire si besoin
 - ✅ AMD (Answering Machine Detection)
 - ✅ Gestion objections autonome
@@ -17,7 +17,7 @@ Architecture:
     2. Call Thread Management (one thread per call)
     3. Audio Playback System (uuid_broadcast)
     4. Audio Recording System (uuid_record) + VAD barge-in
-    5. Speech Recognition (Vosk fichier)
+    5. Speech Recognition (Faster-Whisper GPU)
     6. NLP Intent Analysis (Ollama)
     7. Scenario Execution Engine
     8. Autonomous Agent Mode (objections handler)
@@ -42,7 +42,6 @@ except ImportError:
     ESL_AVAILABLE = False
 
 # Services V3
-from system.services.vosk_stt import VoskSTT
 from system.services.faster_whisper_stt import FasterWhisperSTT
 from system.services.ollama_nlp import OllamaNLP
 from system.services.amd_service import AMDService
@@ -160,7 +159,7 @@ class RobotFreeSWITCH:
 
     Fonctionnalités:
     - Barge-in VAD (détection parole >= 2.5s)
-    - Transcription fichier avec modèle Vosk large
+    - Transcription fichier avec Faster-Whisper GPU
     - Analyse NLP avec Ollama
     - Gestion objections/questions (mode autonome)
     - Intent mapping
@@ -211,32 +210,21 @@ class RobotFreeSWITCH:
         # === SERVICES INITIALIZATION ===
         logger.info("🤖 Loading AI services...")
 
-        # 1. STT Service (Faster-Whisper primary, Vosk fallback)
+        # 1. Faster-Whisper STT (GPU-accelerated)
         try:
-            if config.STT_ENGINE == "faster_whisper":
-                logger.info("🚀 Loading Faster-Whisper STT (primary - GPU accelerated)...")
-                self.stt_service = FasterWhisperSTT(
-                    model_name=config.FASTER_WHISPER_MODEL,
-                    device=config.FASTER_WHISPER_DEVICE,
-                    compute_type=config.FASTER_WHISPER_COMPUTE_TYPE
-                )
-                if self.stt_service.is_available:
-                    logger.info(f"✅ Faster-Whisper STT loaded (model: {config.FASTER_WHISPER_MODEL}, device: {self.stt_service.device})")
-                else:
-                    raise Exception("Faster-Whisper not available")
+            logger.info("🚀 Loading Faster-Whisper STT (GPU-accelerated)...")
+            self.stt_service = FasterWhisperSTT(
+                model_name=config.FASTER_WHISPER_MODEL,
+                device=config.FASTER_WHISPER_DEVICE,
+                compute_type=config.FASTER_WHISPER_COMPUTE_TYPE
+            )
+            if self.stt_service.is_available:
+                logger.info(f"✅ Faster-Whisper STT loaded (model: {config.FASTER_WHISPER_MODEL}, device: {self.stt_service.device})")
             else:
-                logger.info("🔄 Loading Vosk STT (config: STT_ENGINE=vosk)...")
-                self.stt_service = VoskSTT()
-                logger.info("✅ Vosk STT loaded (file mode with large model)")
+                raise Exception("Faster-Whisper not available")
         except Exception as e:
-            logger.warning(f"⚠️ Failed to load {config.STT_ENGINE}: {e}")
-            logger.info("🔄 Falling back to Vosk STT...")
-            try:
-                self.stt_service = VoskSTT()
-                logger.info("✅ Vosk STT loaded (fallback)")
-            except Exception as e2:
-                logger.error(f"❌ All STT engines failed: {e2}")
-                self.stt_service = None
+            logger.error(f"❌ Failed to load Faster-Whisper STT: {e}")
+            self.stt_service = None
 
         # 2. Ollama NLP
         try:
@@ -1802,7 +1790,7 @@ class RobotFreeSWITCH:
 
     def _transcribe_file(self, call_uuid: str, audio_file: str) -> Optional[str]:
         """
-        Transcrit un fichier audio WAV avec Vosk
+        Transcrit un fichier audio WAV avec Faster-Whisper
 
         Args:
             call_uuid: UUID appel
@@ -1835,7 +1823,7 @@ class RobotFreeSWITCH:
             logger.debug(f"[{call_uuid[:8]}] Transcribing: {audio_path.name}")
             result = self.stt_service.transcribe_file(str(audio_path))
 
-            # Le service Vosk retourne un dict avec "text"
+            # Le service Faster-Whisper retourne un dict avec "text"
             if isinstance(result, dict):
                 transcription = result.get("text", "").strip()
             else:

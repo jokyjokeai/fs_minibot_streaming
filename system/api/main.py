@@ -61,11 +61,15 @@ async def lifespan(app: FastAPI):
     if config.PRELOAD_MODELS:
         logger.info("🧠 Preloading AI models...")
         try:
-            from system.services.vosk_stt import VoskSTT
+            from system.services.faster_whisper_stt import FasterWhisperSTT
             from system.services.ollama_nlp import OllamaNLP
 
             # Initialiser services pour préchargement
-            vosk_stt = VoskSTT()
+            fw_stt = FasterWhisperSTT(
+                model_name=config.FASTER_WHISPER_MODEL,
+                device=config.FASTER_WHISPER_DEVICE,
+                compute_type=config.FASTER_WHISPER_COMPUTE_TYPE
+            )
 
             # Phase 8: Prewarm Ollama (keep_alive 30min)
             logger.info("🔥 Prewarming Ollama model...")
@@ -347,14 +351,22 @@ def health():
 
     # Check services IA
     try:
-        from system.services.vosk_stt import VoskSTT
-        stt = VoskSTT()
+        from system.services.faster_whisper_stt import FasterWhisperSTT
+        stt = FasterWhisperSTT(
+            model_name=config.FASTER_WHISPER_MODEL,
+            device=config.FASTER_WHISPER_DEVICE,
+            compute_type=config.FASTER_WHISPER_COMPUTE_TYPE
+        )
         if stt.is_available:
-            health_status["components"]["vosk"] = {"status": "healthy"}
+            health_status["components"]["faster_whisper"] = {
+                "status": "healthy",
+                "model": config.FASTER_WHISPER_MODEL,
+                "device": stt.device
+            }
         else:
-            health_status["components"]["vosk"] = {"status": "unhealthy"}
-    except:
-        health_status["components"]["vosk"] = {"status": "unknown"}
+            health_status["components"]["faster_whisper"] = {"status": "unhealthy"}
+    except Exception as e:
+        health_status["components"]["faster_whisper"] = {"status": "unknown", "error": str(e)}
 
     try:
         from system.services.ollama_nlp import OllamaNLP
