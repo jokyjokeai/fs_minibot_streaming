@@ -486,7 +486,7 @@ class RobotFreeSWITCH:
                 "campaign_id": str(campaign_id),
                 "retry_count": str(retry),
                 "ignore_early_media": "true",
-                "rtp_timeout_sec": "30",  # Timeout RTP 30s (détection hangup client)
+                "rtp_timeout_sec": "15",  # Timeout RTP 15s (détection hangup rapide)
             }
 
             # Caller ID (numéro émetteur)
@@ -810,10 +810,10 @@ class RobotFreeSWITCH:
 
             logger.info(f"[{call_uuid[:8]}] 🎬 PLAYING_AUDIO (duration: {audio_duration:.1f}s, barge-in if >= {config.PLAYING_BARGE_IN_THRESHOLD}s)")
 
-            # 1. ACTIVER RTP timeout pendant playback (30s = assez pour audios longs)
-            # Note: 30s permet de détecter hangup client tout en évitant timeout pendant audios longs
-            self.esl_conn_api.api(f"uuid_setvar {call_uuid} rtp_timeout_sec 30")
-            logger.debug(f"[{call_uuid[:8]}] RTP timeout set to 30s for playback")
+            # 1. Garder RTP timeout à 15s pendant playback (hérité de l'originate)
+            # Note: 15s est suffisant pour hello.wav (15.5s) et détecte rapidement le hangup
+            # Pas besoin de modifier, utilise la valeur de l'originate
+            logger.debug(f"[{call_uuid[:8]}] RTP timeout: 15s (from originate)")
 
             # 2. Lancer uuid_broadcast (robot parle)
             cmd = f"uuid_broadcast {call_uuid} {audio_file} aleg"
@@ -1446,10 +1446,10 @@ class RobotFreeSWITCH:
             import wave
             import struct
 
-            # ACTIVER RTP timeout pendant WAITING (détection hangup client)
-            # 10s sans RTP = client a raccroché
-            self.esl_conn_api.api(f"uuid_setvar {call_uuid} rtp_timeout_sec 10")
-            logger.debug(f"[{call_uuid[:8]}] RTP timeout enabled (10s) for hangup detection")
+            # ACTIVER RTP timeout court pendant WAITING (détection hangup client rapide)
+            # 5s sans RTP = client a raccroché (optimisé pour réactivité)
+            self.esl_conn_api.api(f"uuid_setvar {call_uuid} rtp_timeout_sec 5")
+            logger.debug(f"[{call_uuid[:8]}] RTP timeout enabled (5s) for hangup detection")
 
             # Attendre que fichier existe
             wait_start = time.time()
