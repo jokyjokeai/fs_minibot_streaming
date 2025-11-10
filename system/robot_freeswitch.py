@@ -278,10 +278,15 @@ class RobotFreeSWITCH:
         try:
             # Connexion #1: Pour événements (blocking)
             self.esl_conn_events = ESLconnection(self.esl_host, str(self.esl_port), self.esl_password)
-            
+
             if not self.esl_conn_events.connected():
                 raise ConnectionError("Failed to connect ESL events connection")
-            
+
+            # Enable linger: Keep connection alive until all events are delivered
+            # Critical pour recevoir CHANNEL_HANGUP_COMPLETE avant fermeture socket
+            self.esl_conn_events.api("linger")
+            logger.debug("✅ ESL linger enabled (will wait for all events)")
+
             # Subscribe aux événements nécessaires
             events = [
                 "CHANNEL_CREATE",
@@ -419,6 +424,10 @@ class RobotFreeSWITCH:
         if call_uuid in self.call_sessions:
             self.call_sessions[call_uuid]["hangup_detected"] = True
             logger.debug(f"[{call_uuid[:8]}] Hangup flag set - threads will stop")
+
+            # Attendre que les threads voient le flag (ils checkent toutes les 0.1s)
+            # Sans ce delay, la session pourrait être supprimée avant que les threads vérifient
+            time.sleep(0.2)
 
         # Cleanup
         self.active_calls.pop(call_uuid, None)
