@@ -702,15 +702,16 @@ class RobotFreeSWITCH:
         except Exception as e:
             logger.error(f"[{call_uuid[:8]}] Hangup error: {e}")
 
-    def _is_channel_alive(self, call_uuid: str) -> bool:
+    def _is_channel_alive(self, call_uuid: str, quick_check: bool = False) -> bool:
         """
         Vérifie si le canal FreeSWITCH existe encore ET est actif (client pas raccroché)
 
         PROBLÈME: Avec rtp_timeout_sec=0, FreeSWITCH ne détecte pas hangup client via RTP
-        SOLUTION: Vérifier channel_state (CS_HANGUP/CS_REPORTING = en cours de hangup)
+        SOLUTION: Vérifier channel_state ou hangup_cause
 
         Args:
             call_uuid: UUID de l'appel
+            quick_check: Si True, check minimal rapide (uuid_exists + hangup_cause)
 
         Returns:
             True si canal existe ET actif, False si raccroché ou en hangup
@@ -719,7 +720,25 @@ class RobotFreeSWITCH:
             return False
 
         try:
-            # Vérifier channel_state (état du channel)
+            # Quick check: uuid_exists + hangup_cause (ultra rapide, ~10ms)
+            if quick_check:
+                result = self.esl_conn_api.api(f"uuid_exists {call_uuid}")
+                if not result:
+                    return False
+                exists = result.getBody().strip().lower() == "true"
+                if not exists:
+                    logger.info(f"[{call_uuid[:8]}] ⚡ Quick check: Channel destroyed")
+                    return False
+                # Vérifier rapidement hangup_cause
+                hangup_result = self.esl_conn_api.api(f"uuid_getvar {call_uuid} hangup_cause")
+                if hangup_result:
+                    cause = hangup_result.getBody().strip()
+                    if cause and cause != "-ERR no reply" and cause != "_undef_":
+                        logger.info(f"[{call_uuid[:8]}] ⚡ Quick check: Hangup cause={cause}")
+                        return False
+                return True
+
+            # Full check: Vérifier channel_state (état du channel)
             state_result = self.esl_conn_api.api(f"uuid_getvar {call_uuid} channel_state")
             if not state_result:
                 return False
@@ -775,6 +794,11 @@ class RobotFreeSWITCH:
             return False
 
         try:
+            # ⚡ QUICK CHECK: Vérifier si channel encore actif AVANT de jouer
+            if not self._is_channel_alive(call_uuid, quick_check=True):
+                logger.warning(f"[{call_uuid[:8]}] ⚡ Channel not alive before playback → Aborting")
+                return False
+
             # Réinitialiser flag barge-in
             self.barge_in_active[call_uuid] = False
 
@@ -923,6 +947,11 @@ class RobotFreeSWITCH:
                     Path(record_file).unlink()
             except:
                 pass
+
+            # ⚡ QUICK CHECK: Vérifier si channel encore actif APRÈS playback
+            if not self._is_channel_alive(call_uuid, quick_check=True):
+                logger.warning(f"[{call_uuid[:8]}] ⚡ Channel not alive after playback → Client hung up")
+                return False
 
             return True
 
