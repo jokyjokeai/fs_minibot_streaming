@@ -237,8 +237,8 @@ class RobotFreeSWITCH:
         # 4. VAD pour barge-in (détection parole sans transcription)
         if VAD_AVAILABLE:
             try:
-                self.vad = webrtcvad.Vad(2)  # Mode 2 (compromis réactivité/précision)
-                logger.info("✅ WebRTC VAD loaded for barge-in detection")
+                self.vad = webrtcvad.Vad(3)  # Mode 3 (strict - filtre bruit/crosstalk entre canaux)
+                logger.info("✅ WebRTC VAD loaded for barge-in detection (Mode 3: strict)")
             except Exception as e:
                 logger.error(f"❌ Failed to initialize VAD: {e}")
                 self.vad = None
@@ -1067,8 +1067,13 @@ class RobotFreeSWITCH:
                     return ("UNKNOWN", "")
                 time.sleep(0.1)
 
-            # Attendre que FreeSWITCH finalise le fichier
-            time.sleep(0.3)
+            # Stopper recording pour finaliser le fichier WAV
+            stop_cmd = f"uuid_record {call_uuid} stop {record_file}"
+            self.esl_conn_api.api(stop_cmd)
+            logger.debug(f"[{call_uuid[:8]}] AMD: Recording stopped")
+
+            # Attendre que FreeSWITCH finalise le header WAV
+            time.sleep(0.5)
 
             # Vérifier taille fichier
             file_size = Path(record_file).stat().st_size if Path(record_file).exists() else 0
