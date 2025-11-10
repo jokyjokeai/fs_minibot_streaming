@@ -744,9 +744,9 @@ class RobotFreeSWITCH:
             })
 
             # 2. Lancer uuid_record EN PARALLÈLE (enregistrer client UNIQUEMENT)
-            # IMPORTANT: RECORD_READ_ONLY=true pour enregistrer SEULEMENT le client, pas le robot !
-            self.esl_conn_api.api(f"uuid_setvar {call_uuid} RECORD_STEREO false")
-            self.esl_conn_api.api(f"uuid_setvar {call_uuid} RECORD_READ_ONLY true")
+            # STEREO: Left=client, Right=robot → VAD traite SEULEMENT le canal gauche
+            self.esl_conn_api.api(f"uuid_setvar {call_uuid} RECORD_STEREO true")
+            logger.info(f"[{call_uuid[:8]}] 📝 RECORD_STEREO=true (Left=client, Right=robot)")
 
             record_file = config.RECORDINGS_DIR / f"bargein_{call_uuid}_{int(time.time())}.wav"
             record_cmd = f"uuid_record {call_uuid} start {record_file}"
@@ -992,6 +992,32 @@ class RobotFreeSWITCH:
     # VAD MODES - 3 comportements distincts (Best Practices 2025)
     # ============================================================================
 
+    def _extract_left_channel_from_stereo(self, stereo_frame: bytes) -> bytes:
+        """
+        Extrait le canal GAUCHE d'une frame stéréo (Left=client, Right=robot)
+
+        Stereo format: [L1, R1, L2, R2, L3, R3, ...] (16-bit PCM)
+        → Extraction: [L1, L2, L3, ...]
+
+        Args:
+            stereo_frame: Bytes stéréo (2 canaux entrelacés)
+
+        Returns:
+            Bytes mono canal gauche uniquement
+        """
+        import struct
+
+        # Convertir bytes → array d'int16
+        num_samples = len(stereo_frame) // 2  # 2 bytes per sample
+        stereo_samples = struct.unpack(f'<{num_samples}h', stereo_frame)
+
+        # Extraire échantillons pairs (canal gauche)
+        left_samples = stereo_samples[::2]
+
+        # Reconvertir → bytes
+        left_frame = struct.pack(f'<{len(left_samples)}h', *left_samples)
+        return left_frame
+
     def _monitor_vad_amd(self, call_uuid: str, record_file: str) -> tuple[str, str]:
         """
         MODE 1: AMD (Answering Machine Detection)
@@ -1042,10 +1068,11 @@ class RobotFreeSWITCH:
 
             # Vérifier taille fichier
             file_size = Path(record_file).stat().st_size if Path(record_file).exists() else 0
-            logger.debug(f"[{call_uuid[:8]}] 🔍 AMD: Recording file size: {file_size} bytes")
+            logger.info(f"[{call_uuid[:8]}] 🔍 AMD: Recording file size: {file_size} bytes")
 
             # Transcrire fichier complet
             transcription = self._transcribe_file(call_uuid, record_file)
+            logger.info(f"[{call_uuid[:8]}] 🔍 AMD: Transcription result: '{transcription}'")
 
             if not transcription:
                 logger.info(f"[{call_uuid[:8]}] 🔍 AMD: No transcription (empty or silence) → SILENCE")
@@ -1125,12 +1152,14 @@ class RobotFreeSWITCH:
                 time.sleep(0.1)
 
             logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: Monitoring started (max: {max_duration:.1f}s, barge-in threshold: {config.PLAYING_BARGE_IN_THRESHOLD}s)")
+            logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: Processing LEFT channel only (client audio) from stereo recording")
 
             # Config VAD - 8kHz téléphonie
             sample_rate = 8000
             frame_duration_ms = 30
             frame_size = int(sample_rate * frame_duration_ms / 1000)
-            bytes_per_frame = frame_size * 2
+            bytes_per_frame = frame_size * 2  # 16-bit mono
+            bytes_per_frame_stereo = bytes_per_frame * 2  # Stereo = 2x plus grand (Left+Right)
 
             # État VAD
             speech_frames = 0
@@ -1178,13 +1207,16 @@ class RobotFreeSWITCH:
                         new_bytes = current_size - last_file_size
                         new_audio_data = audio_data[-(new_bytes):]
 
-                        # Traiter frames
+                        # Traiter frames STEREO → extraire canal gauche (client)
                         offset = 0
-                        while offset + bytes_per_frame <= len(new_audio_data):
-                            frame = new_audio_data[offset:offset + bytes_per_frame]
-                            offset += bytes_per_frame
+                        while offset + bytes_per_frame_stereo <= len(new_audio_data):
+                            stereo_frame = new_audio_data[offset:offset + bytes_per_frame_stereo]
+                            offset += bytes_per_frame_stereo
 
-                            is_speech = self.vad.is_speech(frame, sample_rate)
+                            # Extraire canal gauche (client) uniquement
+                            mono_frame = self._extract_left_channel_from_stereo(stereo_frame)
+
+                            is_speech = self.vad.is_speech(mono_frame, sample_rate)
 
                             if is_speech:
                                 speech_frames += 1
@@ -1223,8 +1255,8 @@ class RobotFreeSWITCH:
                                 silence_reset_ms = int(config.PLAYING_SILENCE_RESET * 1000)
                                 if silence_frames > int(silence_reset_ms / frame_duration_ms):
                                     if speech_start_time:
-                                        # Segment terminé - calculer durée réelle
-                                        segment_duration = (time.time() - speech_start_time) if speech_start_time else 0.0
+                                        # Segment terminé - utiliser la durée calculée au dernier frame de speech
+                                        segment_duration = total_speech_duration
 
                                         # Backchannel ou vraie parole ?
                                         if segment_duration < config.PLAYING_BACKCHANNEL_MAX:
@@ -1303,12 +1335,14 @@ class RobotFreeSWITCH:
 
             logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: ========== MONITORING STARTED ==========")
             logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Timeout: {timeout}s | End-of-speech silence: {config.WAITING_END_OF_SPEECH_SILENCE}s")
+            logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Processing LEFT channel only (client audio) from stereo recording")
 
             # Config VAD - 8kHz téléphonie
             sample_rate = 8000
             frame_duration_ms = 30
             frame_size = int(sample_rate * frame_duration_ms / 1000)
-            bytes_per_frame = frame_size * 2
+            bytes_per_frame = frame_size * 2  # 16-bit mono
+            bytes_per_frame_stereo = bytes_per_frame * 2  # Stereo = 2x plus grand (Left+Right)
 
             # État VAD
             speech_detected = False
@@ -1352,13 +1386,16 @@ class RobotFreeSWITCH:
                         new_bytes = current_size - last_file_size
                         new_audio_data = audio_data[-(new_bytes):]
 
-                        # Traiter frames
+                        # Traiter frames STEREO → extraire canal gauche (client)
                         offset = 0
-                        while offset + bytes_per_frame <= len(new_audio_data):
-                            frame = new_audio_data[offset:offset + bytes_per_frame]
-                            offset += bytes_per_frame
+                        while offset + bytes_per_frame_stereo <= len(new_audio_data):
+                            stereo_frame = new_audio_data[offset:offset + bytes_per_frame_stereo]
+                            offset += bytes_per_frame_stereo
 
-                            is_speech = self.vad.is_speech(frame, sample_rate)
+                            # Extraire canal gauche (client) uniquement
+                            mono_frame = self._extract_left_channel_from_stereo(stereo_frame)
+
+                            is_speech = self.vad.is_speech(mono_frame, sample_rate)
 
                             if is_speech:
                                 silence_frames = 0
