@@ -256,11 +256,11 @@ class RobotFreeSWITCH:
             logger.error(f"❌ Failed to load ScenarioManager: {e}")
             self.scenario_manager = None
 
-        logger.info("✅ RobotFreeSWITCH V3 initialized")
+        logger.info("✅ RobotFreeSWITCH initialized")
         logger.info("="*60)
 
     def __repr__(self):
-        return f"<RobotFreeSwitchV3 active_calls={len(self.active_calls)} running={self.running}>"
+        return f"<RobotFreeSWITCH active_calls={len(self.active_calls)} running={self.running}>"
 
     # ========================================================================
     # SECTION 2: ESL CONNECTION MANAGEMENT
@@ -315,7 +315,7 @@ class RobotFreeSWITCH:
 
     def start(self):
         """Démarre le robot et la boucle d'événements"""
-        logger.info("Starting RobotFreeSWITCH V3...")
+        logger.info("Starting RobotFreeSWITCH...")
         
         # Connexion ESL
         if not self.connect():
@@ -327,14 +327,14 @@ class RobotFreeSWITCH:
         self.event_thread = threading.Thread(target=self._event_loop, daemon=True)
         self.event_thread.start()
         
-        logger.info("✅ RobotFreeSWITCH V3 started and listening for events")
+        logger.info("✅ RobotFreeSWITCH started and listening for events")
         logger.info("👂 Waiting for calls...")
         
         return True
 
     def stop(self):
         """Arrête le robot proprement"""
-        logger.info("Stopping RobotFreeSWITCH V3...")
+        logger.info("Stopping RobotFreeSWITCH...")
         
         self.running = False
         
@@ -348,7 +348,7 @@ class RobotFreeSWITCH:
         if self.esl_conn_api:
             self.esl_conn_api.disconnect()
         
-        logger.info("✅ RobotFreeSWITCH V3 stopped")
+        logger.info("✅ RobotFreeSWITCH stopped")
 
     def _event_loop(self):
         """

@@ -74,9 +74,8 @@ class VoskSTT:
             logger.warning("🚫 VoskSTT not available - missing dependencies")
             return
 
-        # Charger modèle
-        if config.PRELOAD_MODELS:
-            self._load_model()
+        # Charger modèle (toujours preload pour éviter latence au premier appel)
+        self._load_model()
 
         logger.info(f"{'✅' if self.is_available else '❌'} VoskSTT initialized")
 
