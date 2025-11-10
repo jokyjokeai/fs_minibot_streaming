@@ -991,10 +991,12 @@ class RobotFreeSWITCH:
                                 # Silence
                                 silence_frames += 1
 
-                                # Reset si silence > 0.8s (800ms)
-                                if silence_frames > int(800 / frame_duration_ms):
+                                # Reset si silence > BARGE_IN_SILENCE_RESET (2.0s par défaut)
+                                # Permet de filtrer backchannels multiples ("oui" + pause + "oui")
+                                silence_reset_ms = int(config.BARGE_IN_SILENCE_RESET * 1000)
+                                if silence_frames > int(silence_reset_ms / frame_duration_ms):
                                     if speech_start_time and total_speech_duration > 0:
-                                        logger.debug(f"[{call_uuid[:8]}] VAD: Speech ended ({total_speech_duration:.2f}s < threshold)")
+                                        logger.debug(f"[{call_uuid[:8]}] VAD: Speech ended after {silence_reset_ms}ms silence ({total_speech_duration:.2f}s < threshold)")
 
                                     speech_frames = 0
                                     speech_start_time = None

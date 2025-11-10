@@ -109,6 +109,7 @@ WEBSOCKET_PORT = int(os.getenv("WEBSOCKET_PORT", "8080"))
 # ============================================================================
 BARGE_IN_ENABLED = True
 BARGE_IN_DURATION_THRESHOLD = 2.5  # secondes - Parole >= 2.5s = barge-in
+BARGE_IN_SILENCE_RESET = 2.0  # secondes - Silence >= 2.0s reset compteur (ignore backchannels multiples)
 GRACE_PERIOD_SECONDS = 2.0  # Grace period au début audio
 SMOOTH_DELAY_SECONDS = 1.0  # Délai avant stop audio (smooth pour finir phrase)
 BARGE_IN_SMOOTH_DELAY = 1.0  # Alias pour compatibilité
@@ -178,6 +179,7 @@ class Config:
     # Barge-In (SIMPLE)
     BARGE_IN_ENABLED = BARGE_IN_ENABLED
     BARGE_IN_DURATION_THRESHOLD = BARGE_IN_DURATION_THRESHOLD
+    BARGE_IN_SILENCE_RESET = BARGE_IN_SILENCE_RESET
     GRACE_PERIOD_SECONDS = GRACE_PERIOD_SECONDS
     SMOOTH_DELAY_SECONDS = SMOOTH_DELAY_SECONDS
     BARGE_IN_SMOOTH_DELAY = BARGE_IN_SMOOTH_DELAY
