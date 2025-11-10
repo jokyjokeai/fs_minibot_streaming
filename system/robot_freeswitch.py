@@ -607,14 +607,13 @@ class RobotFreeSWITCH:
         """
         Phase 3: Détecte si l'appelé est un humain ou un répondeur
 
-        Méthode: Écouter pendant 2.5 secondes AVANT de commencer à parler
+        NOUVEAU: Utilise _monitor_vad_amd() pour enregistrer et transcrire 3.0s
 
-        Détection basée sur ce qui se passe pendant le délai initial:
-        - Silence total → Incertain (peut être retry_silence ou personne timide)
-        - "Allô" court (< 2s, < 3 mots) → Humain ✅
-        - Message long (> 5s) → Répondeur ❌
-        - Mots-clés typiques répondeur → Répondeur ❌
-        - BEEP détecté → Répondeur ❌
+        Détection basée sur transcription + NLP:
+        - "allô", "oui bonjour" → HUMAN ✅
+        - "messagerie", "laissez un message" → MACHINE ❌
+        - Silence total → SILENCE/UNKNOWN
+        - Bip détecté → BEEP/MACHINE ❌
 
         Args:
             call_uuid: UUID de l'appel
@@ -622,81 +621,42 @@ class RobotFreeSWITCH:
         Returns:
             "HUMAN", "MACHINE", ou "UNKNOWN"
         """
-        logger.info(f"[{call_uuid[:8]}] 🎧 AMD: Listening for {config.AMD_INITIAL_DELAY}s before speaking...")
+        logger.info(f"[{call_uuid[:8]}] 🎧 AMD: Starting {config.AMD_TIMEOUT}s detection...")
 
-        # Timestamp début écoute
-        listen_start = time.time()
+        # Préparer fichier d'enregistrement
+        timestamp = int(time.time() * 1000)
+        record_file = str(config.RECORDINGS_DIR / f"amd_{call_uuid}_{timestamp}.wav")
 
-        # Collecter transcriptions pendant le délai
-        collected_text = ""
-        speech_detected = False
-        total_speech_duration = 0.0
-        last_seen_transcription = ""
+        # Démarrer enregistrement
+        cmd = f"uuid_record {call_uuid} start {record_file}"
+        result = self.esl_conn_api.api(cmd)
 
-        while time.time() - listen_start < config.AMD_INITIAL_DELAY:
-            # Vérifier si hangup
-            session = self.call_sessions.get(call_uuid, {})
-            if session.get("hangup_detected", False):
-                logger.info(f"[{call_uuid[:8]}] AMD: Call hung up during listening")
-                return "UNKNOWN"
-
-            # V3 FIX: Récupérer dernière transcription depuis "last_transcription" (pas "transcriptions")
-            text = session.get("last_transcription") or ""
-            text = text.strip() if text else ""
-
-            if text and text != last_seen_transcription:
-                collected_text += " " + text
-                last_seen_transcription = text
-                speech_detected = True
-                logger.debug(f"[{call_uuid[:8]}] AMD: Collected: '{text}'")
-
-            # Attendre un peu avant vérifier à nouveau
-            time.sleep(0.1)
-
-        # Analyser ce qui a été collecté
-        collected_text = collected_text.strip().lower()
-        word_count = len(collected_text.split()) if collected_text else 0
-
-        logger.info(f"[{call_uuid[:8]}] AMD: Listening complete. Text: '{collected_text}' ({word_count} words)")
-
-        # === ANALYSE ===
-
-        # 1. Silence total → UNKNOWN (peut être humain timide ou retry_silence)
-        if not speech_detected or not collected_text:
-            logger.info(f"[{call_uuid[:8]}] AMD: Silence detected → UNKNOWN (continuing anyway)")
+        if not result or b"+OK" not in result.getBody().encode():
+            logger.error(f"[{call_uuid[:8]}] AMD: Failed to start recording")
             return "UNKNOWN"
 
-        # 2. Très court (< 3 mots, typiquement "allô" ou "oui") → HUMAN
-        if word_count <= 3:
-            logger.info(f"[{call_uuid[:8]}] AMD: Short greeting ({word_count} words) → HUMAN ✅")
-            return "HUMAN"
+        logger.debug(f"[{call_uuid[:8]}] AMD: Recording to {record_file}")
 
-        # 3. Mots-clés typiques répondeur
-        machine_keywords = [
-            "bonjour vous êtes bien",
-            "laissez un message",
-            "veuillez laisser",
-            "après le bip",
-            "après le signal",
-            "notre bureau est fermé",
-            "nous sommes absents",
-            "bienvenue chez",
-            "merci d'avoir appelé"
-        ]
+        try:
+            # Appeler la nouvelle fonction VAD AMD
+            amd_result, transcription = self._monitor_vad_amd(call_uuid, record_file)
 
-        for keyword in machine_keywords:
-            if keyword in collected_text:
-                logger.info(f"[{call_uuid[:8]}] AMD: Keyword '{keyword}' detected → MACHINE ❌")
-                return "MACHINE"
+            logger.info(f"[{call_uuid[:8]}] AMD Result: {amd_result}")
+            logger.debug(f"[{call_uuid[:8]}] AMD Transcription: '{transcription}'")
 
-        # 4. Message long (> 10 mots) → Probablement répondeur
-        if word_count > 10:
-            logger.info(f"[{call_uuid[:8]}] AMD: Long message ({word_count} words) → MACHINE ❌")
-            return "MACHINE"
+            return amd_result
 
-        # 5. Sinon, considérer comme humain
-        logger.info(f"[{call_uuid[:8]}] AMD: Normal speech ({word_count} words) → HUMAN ✅")
-        return "HUMAN"
+        except Exception as e:
+            logger.error(f"[{call_uuid[:8]}] AMD error: {e}", exc_info=True)
+            return "UNKNOWN"
+
+        finally:
+            # Stopper recording (au cas où)
+            try:
+                cmd = f"uuid_record {call_uuid} stop {record_file}"
+                self.esl_conn_api.api(cmd)
+            except:
+                pass
 
     def hangup_call(self, call_uuid: str):
         """
@@ -722,14 +682,14 @@ class RobotFreeSWITCH:
 
     def _play_audio(self, call_uuid: str, audio_file: str) -> bool:
         """
-        Joue un fichier audio avec barge-in VAD
+        Joue un fichier audio avec barge-in VAD intelligent
 
-        NOUVEAU WORKFLOW (mode fichier + VAD):
+        NOUVEAU WORKFLOW (V3 - 3 modes VAD):
         1. Lancer uuid_broadcast (robot parle)
         2. EN PARALLÈLE: uuid_record (enregistrer client)
-        3. EN PARALLÈLE: Thread VAD (détecter parole >= 2.5s)
-        4. Si barge-in détecté → uuid_break après smooth delay 1s
-        5. Stopper recording, retourner False (interrupted)
+        3. EN PARALLÈLE: _monitor_vad_playing() (barge-in intelligent)
+        4. Si barge-in >= 2.5s → uuid_break + transcription
+        5. Si backchannels (<0.8s) → Logger seulement, continuer
 
         Args:
             call_uuid: UUID de l'appel
@@ -752,7 +712,7 @@ class RobotFreeSWITCH:
             if call_uuid in self.call_sessions:
                 self.call_sessions[call_uuid]["barge_in_detected_time"] = 0
 
-            logger.info(f"[{call_uuid[:8]}] 🎬 PLAYING_AUDIO (duration: {audio_duration:.1f}s, barge-in VAD if >= 2.5s)")
+            logger.info(f"[{call_uuid[:8]}] 🎬 PLAYING_AUDIO (duration: {audio_duration:.1f}s, barge-in if >= {config.PLAYING_BARGE_IN_THRESHOLD}s)")
 
             # 1. Lancer uuid_broadcast (robot parle)
             cmd = f"uuid_broadcast {call_uuid} {audio_file} aleg"
@@ -766,7 +726,7 @@ class RobotFreeSWITCH:
                 logger.error(f"[{call_uuid[:8]}] Playback failed: {result_str}")
                 return False
 
-            logger.info(f"[{call_uuid[:8]}] 🔊 Playing: {Path(audio_file).name} (duration: {audio_duration:.1f}s)")
+            logger.info(f"[{call_uuid[:8]}] 🔊 Playing: {Path(audio_file).name}")
 
             # Auto-tracking
             self.call_sequences[call_uuid].append({
@@ -793,9 +753,9 @@ class RobotFreeSWITCH:
             if call_uuid in self.call_sessions:
                 self.call_sessions[call_uuid]["recording_file"] = str(record_file)
 
-            # 3. Lancer thread VAD barge-in detection
+            # 3. Lancer thread VAD barge-in detection (NOUVEAU _monitor_vad_playing)
             vad_thread = threading.Thread(
-                target=self._monitor_barge_in_vad,
+                target=self._monitor_vad_playing,
                 args=(call_uuid, str(record_file), audio_duration),
                 daemon=True
             )
@@ -822,9 +782,9 @@ class RobotFreeSWITCH:
                     # Barge-in détecté ! Vérifier smooth delay
                     time_since_detection = time.time() - barge_in_time
 
-                    if time_since_detection >= config.BARGE_IN_SMOOTH_DELAY:
+                    if time_since_detection >= config.PLAYING_SMOOTH_DELAY:
                         # Smooth delay écoulé → Couper audio
-                        logger.info(f"[{call_uuid[:8]}] ⏹️ BARGE-IN! Interrupting audio (smooth delay {config.BARGE_IN_SMOOTH_DELAY}s)")
+                        logger.info(f"[{call_uuid[:8]}] ⏹️ BARGE-IN! Interrupting audio (smooth delay {config.PLAYING_SMOOTH_DELAY}s)")
 
                         # Stopper audio
                         self.esl_conn_api.api(f"uuid_break {call_uuid}")
@@ -835,16 +795,19 @@ class RobotFreeSWITCH:
                         # Attendre que FreeSWITCH finalise le fichier WAV
                         time.sleep(0.3)
 
-                        # IMPORTANT: Sauvegarder le chemin du fichier barge-in pour transcription
+                        # Transcrire fichier barge-in
+                        transcription = self._transcribe_file(call_uuid, str(record_file))
+
+                        # Sauvegarder transcription barge-in
                         if call_uuid in self.call_sessions:
-                            self.call_sessions[call_uuid]["last_barge_in_file"] = str(record_file)
-                            logger.debug(f"[{call_uuid[:8]}] Saved barge-in file: {Path(record_file).name}")
+                            self.call_sessions[call_uuid]["last_barge_in_transcription"] = transcription
+                            logger.info(f"[{call_uuid[:8]}] 📝 Barge-in transcription: '{transcription}'")
 
                         # Reset flag
                         self.call_sessions[call_uuid]["barge_in_detected_time"] = 0
                         self.barge_in_active[call_uuid] = True
 
-                        logger.info(f"[{call_uuid[:8]}] 🎧 Barge-in completed - recording saved")
+                        logger.info(f"[{call_uuid[:8]}] 🎧 Barge-in completed")
                         return False
 
                 time.sleep(check_interval)
@@ -856,13 +819,13 @@ class RobotFreeSWITCH:
 
             # Supprimer fichier (pas de barge-in)
             try:
-                if record_file.exists():
-                    record_file.unlink()
+                if Path(record_file).exists():
+                    Path(record_file).unlink()
             except:
                 pass
 
             return True
-            
+
         except Exception as e:
             logger.error(f"[{call_uuid[:8]}] Playback error: {e}")
             return False
@@ -1016,8 +979,409 @@ class RobotFreeSWITCH:
     
         except Exception as e:
             logger.error(f"[{call_uuid[:8]}] VAD error: {e}", exc_info=True)
-    
-    
+
+    # ============================================================================
+    # VAD MODES - 3 comportements distincts (Best Practices 2025)
+    # ============================================================================
+
+    def _monitor_vad_amd(self, call_uuid: str, record_file: str) -> tuple[str, str]:
+        """
+        MODE 1: AMD (Answering Machine Detection)
+
+        Objectif: Détecter HUMAN vs MACHINE vs BEEP vs SILENCE rapidement
+        Durée: 3.0s (config.AMD_TIMEOUT)
+
+        Comportement:
+        - Enregistrer pendant 3.0s
+        - Transcrire TOUT (pas de seuil minimum, même 0.3s)
+        - Retourner: ("HUMAN"|"MACHINE"|"BEEP"|"SILENCE"|"UNKNOWN", transcription)
+
+        Args:
+            call_uuid: UUID de l'appel
+            record_file: Chemin fichier recording (déjà démarré)
+
+        Returns:
+            Tuple (amd_result: str, transcription: str)
+        """
+        if not self.vad:
+            logger.warning(f"[{call_uuid[:8]}] VAD not available - AMD disabled")
+            return ("UNKNOWN", "")
+
+        try:
+            start_time = time.time()
+            timeout = config.AMD_TIMEOUT
+
+            logger.info(f"[{call_uuid[:8]}] 🎧 AMD: Listening for {timeout}s...")
+
+            # Attendre que fichier existe
+            wait_start = time.time()
+            while not Path(record_file).exists():
+                if time.time() - wait_start > 2.0:
+                    logger.warning(f"[{call_uuid[:8]}] AMD: Recording file not created")
+                    return ("UNKNOWN", "")
+                time.sleep(0.1)
+
+            # Attendre timeout complet (3.0s)
+            while time.time() - start_time < timeout:
+                # Check hangup
+                if call_uuid not in self.call_sessions or self.call_sessions[call_uuid].get("hangup_detected", False):
+                    logger.info(f"[{call_uuid[:8]}] AMD: Hangup detected")
+                    return ("UNKNOWN", "")
+                time.sleep(0.1)
+
+            # Attendre que FreeSWITCH finalise le fichier
+            time.sleep(0.3)
+
+            # Transcrire fichier complet
+            transcription = self._transcribe_file(call_uuid, record_file)
+
+            if not transcription:
+                logger.info(f"[{call_uuid[:8]}] AMD: Silence detected → SILENCE")
+                return ("SILENCE", "")
+
+            # NLP pour déterminer HUMAN vs MACHINE
+            text_lower = transcription.lower()
+
+            # Patterns MACHINE
+            machine_patterns = [
+                "messagerie", "message", "laissez", "après le bip", "absent",
+                "rappeler", "indisponible", "répondeur", "boîte vocale"
+            ]
+            if any(pattern in text_lower for pattern in machine_patterns):
+                logger.info(f"[{call_uuid[:8]}] AMD: Machine detected → MACHINE: '{transcription}'")
+                return ("MACHINE", transcription)
+
+            # Patterns HUMAN
+            human_patterns = [
+                "allô", "oui", "bonjour", "qui", "quoi", "c'est qui"
+            ]
+            if any(pattern in text_lower for pattern in human_patterns):
+                logger.info(f"[{call_uuid[:8]}] AMD: Human detected → HUMAN: '{transcription}'")
+                return ("HUMAN", transcription)
+
+            # Si transcription courte (<3 mots) et pas de patterns → probablement HUMAN
+            word_count = len(transcription.split())
+            if word_count <= 3:
+                logger.info(f"[{call_uuid[:8]}] AMD: Short response → likely HUMAN: '{transcription}'")
+                return ("HUMAN", transcription)
+
+            # Par défaut: UNKNOWN
+            logger.info(f"[{call_uuid[:8]}] AMD: Unclear → UNKNOWN: '{transcription}'")
+            return ("UNKNOWN", transcription)
+
+        except Exception as e:
+            logger.error(f"[{call_uuid[:8]}] AMD error: {e}", exc_info=True)
+            return ("UNKNOWN", "")
+
+    def _monitor_vad_playing(self, call_uuid: str, record_file: str, max_duration: float):
+        """
+        MODE 2: PLAYING_AUDIO (Barge-in intelligent)
+
+        Objectif: Détecter vraies interruptions vs. backchannels
+        Durée: Tant que robot parle (max_duration)
+
+        Comportement:
+        - Transcrire TOUS les segments (même <0.8s backchannels)
+        - Logger backchannels pour analytics
+        - Barge-in seulement si parole >= 2.5s continue
+        - Reset compteur si silence >= 2.0s
+
+        Backchannels (<0.8s): "oui", "ok", "hum" → Logger seulement
+        Interruptions (>=2.5s): Vraie parole → BARGE-IN!
+
+        Args:
+            call_uuid: UUID appel
+            record_file: Chemin fichier recording
+            max_duration: Durée max audio robot
+        """
+        if not self.vad:
+            logger.warning(f"[{call_uuid[:8]}] VAD not available - barge-in disabled")
+            return
+
+        try:
+            import wave
+            import struct
+
+            # Attendre que fichier existe
+            wait_start = time.time()
+            while not Path(record_file).exists():
+                if time.time() - wait_start > 2.0:
+                    logger.warning(f"[{call_uuid[:8]}] PLAYING VAD: Recording file not created")
+                    return
+                time.sleep(0.1)
+
+            logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Monitoring started")
+
+            # Config VAD - 8kHz téléphonie
+            sample_rate = 8000
+            frame_duration_ms = 30
+            frame_size = int(sample_rate * frame_duration_ms / 1000)
+            bytes_per_frame = frame_size * 2
+
+            # État VAD
+            speech_frames = 0
+            silence_frames = 0
+            speech_start_time = None
+            total_speech_duration = 0.0
+            last_file_size = 0
+
+            # Segments de parole détectés (pour logging backchannels)
+            speech_segments = []
+            current_segment_start = None
+
+            start_time = time.time()
+
+            while time.time() - start_time < max_duration:
+                # Check hangup
+                session = self.call_sessions.get(call_uuid)
+                if not session or session.get("hangup_detected", False):
+                    logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Hangup detected")
+                    break
+
+                # Lire fichier WAV en mode RAW
+                try:
+                    current_size = Path(record_file).stat().st_size
+                    if current_size <= last_file_size:
+                        time.sleep(0.05)
+                        continue
+
+                    with open(record_file, 'rb') as f:
+                        raw_data = f.read()
+
+                    # Skip WAV header
+                    data_marker = b'data'
+                    data_pos = raw_data.find(data_marker)
+                    if data_pos == -1:
+                        time.sleep(0.05)
+                        continue
+
+                    audio_start = data_pos + 8
+                    audio_data = raw_data[audio_start:]
+
+                    # Nouvelles données uniquement
+                    if current_size > last_file_size:
+                        new_bytes = current_size - last_file_size
+                        new_audio_data = audio_data[-(new_bytes):]
+
+                        # Traiter frames
+                        offset = 0
+                        while offset + bytes_per_frame <= len(new_audio_data):
+                            frame = new_audio_data[offset:offset + bytes_per_frame]
+                            offset += bytes_per_frame
+
+                            is_speech = self.vad.is_speech(frame, sample_rate)
+
+                            if is_speech:
+                                speech_frames += 1
+                                silence_frames = 0
+
+                                if speech_start_time is None:
+                                    speech_start_time = time.time()
+                                    current_segment_start = time.time()
+                                    logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Speech started")
+
+                                # Calculer durée parole
+                                if speech_start_time:
+                                    total_speech_duration = time.time() - speech_start_time
+
+                                    # BARGE-IN si >= threshold
+                                    if total_speech_duration >= config.PLAYING_BARGE_IN_THRESHOLD:
+                                        logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: Speech >= {config.PLAYING_BARGE_IN_THRESHOLD}s → BARGE-IN!")
+
+                                        # Marquer timestamp barge-in
+                                        if call_uuid in self.call_sessions:
+                                            self.call_sessions[call_uuid]["barge_in_detected_time"] = time.time()
+
+                                        return  # Thread terminé
+
+                            else:
+                                # Silence
+                                silence_frames += 1
+
+                                # Reset si silence > PLAYING_SILENCE_RESET
+                                silence_reset_ms = int(config.PLAYING_SILENCE_RESET * 1000)
+                                if silence_frames > int(silence_reset_ms / frame_duration_ms):
+                                    if speech_start_time and total_speech_duration > 0:
+                                        # Segment terminé
+                                        segment_duration = total_speech_duration
+
+                                        # Backchannel ou vraie parole ?
+                                        if segment_duration < config.PLAYING_BACKCHANNEL_MAX:
+                                            logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Backchannel detected ({segment_duration:.2f}s < {config.PLAYING_BACKCHANNEL_MAX}s)")
+                                            speech_segments.append(("backchannel", segment_duration))
+                                        else:
+                                            logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Speech segment ({segment_duration:.2f}s, but < barge-in threshold)")
+                                            speech_segments.append(("speech", segment_duration))
+
+                                    speech_frames = 0
+                                    speech_start_time = None
+                                    total_speech_duration = 0.0
+                                    current_segment_start = None
+
+                        last_file_size = current_size
+
+                except Exception as e:
+                    logger.debug(f"[{call_uuid[:8]}] PLAYING VAD read error: {e}")
+                    pass
+
+                time.sleep(0.05)
+
+            # Audio terminé sans barge-in
+            logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Monitoring ended (no barge-in)")
+
+            # Logger segments détectés
+            if speech_segments:
+                backchannel_count = sum(1 for seg_type, _ in speech_segments if seg_type == "backchannel")
+                speech_count = sum(1 for seg_type, _ in speech_segments if seg_type == "speech")
+                logger.info(f"[{call_uuid[:8]}] PLAYING VAD: Detected {backchannel_count} backchannels, {speech_count} speech segments")
+
+        except Exception as e:
+            logger.error(f"[{call_uuid[:8]}] PLAYING VAD error: {e}", exc_info=True)
+
+    def _monitor_vad_waiting(self, call_uuid: str, record_file: str, timeout: float) -> Optional[str]:
+        """
+        MODE 3: WAITING_RESPONSE (End-of-speech detection)
+
+        Objectif: Détecter début/fin de parole, transcrire réponse complète
+        Durée: Jusqu'à timeout (10s) ou end-of-speech détecté
+
+        Comportement:
+        - Détecter début parole dès 0.3s
+        - Détecter fin parole si silence >= 1.5s
+        - Transcrire fichier complet à la fin
+        - Retourner transcription ou None si timeout
+
+        Args:
+            call_uuid: UUID appel
+            record_file: Chemin fichier recording
+            timeout: Timeout max (10s par défaut)
+
+        Returns:
+            Transcription client ou None si timeout sans parole
+        """
+        if not self.vad:
+            logger.warning(f"[{call_uuid[:8]}] VAD not available - fallback to timeout recording")
+            # Fallback: attendre timeout puis transcrire
+            time.sleep(timeout)
+            return self._transcribe_file(call_uuid, record_file)
+
+        try:
+            import wave
+            import struct
+
+            # Attendre que fichier existe
+            wait_start = time.time()
+            while not Path(record_file).exists():
+                if time.time() - wait_start > 2.0:
+                    logger.warning(f"[{call_uuid[:8]}] WAITING VAD: Recording file not created")
+                    return None
+                time.sleep(0.1)
+
+            logger.debug(f"[{call_uuid[:8]}] WAITING VAD: Monitoring started (timeout {timeout}s)")
+
+            # Config VAD - 8kHz téléphonie
+            sample_rate = 8000
+            frame_duration_ms = 30
+            frame_size = int(sample_rate * frame_duration_ms / 1000)
+            bytes_per_frame = frame_size * 2
+
+            # État VAD
+            speech_detected = False
+            speech_start_time = None
+            last_speech_time = None
+            silence_frames = 0
+            last_file_size = 0
+
+            start_time = time.time()
+            end_of_speech_silence_ms = int(config.WAITING_END_OF_SPEECH_SILENCE * 1000)
+
+            while time.time() - start_time < timeout:
+                # Check hangup
+                session = self.call_sessions.get(call_uuid)
+                if not session or session.get("hangup_detected", False):
+                    logger.debug(f"[{call_uuid[:8]}] WAITING VAD: Hangup detected")
+                    return None
+
+                # Lire fichier WAV en mode RAW
+                try:
+                    current_size = Path(record_file).stat().st_size
+                    if current_size <= last_file_size:
+                        time.sleep(0.05)
+                        continue
+
+                    with open(record_file, 'rb') as f:
+                        raw_data = f.read()
+
+                    # Skip WAV header
+                    data_marker = b'data'
+                    data_pos = raw_data.find(data_marker)
+                    if data_pos == -1:
+                        time.sleep(0.05)
+                        continue
+
+                    audio_start = data_pos + 8
+                    audio_data = raw_data[audio_start:]
+
+                    # Nouvelles données uniquement
+                    if current_size > last_file_size:
+                        new_bytes = current_size - last_file_size
+                        new_audio_data = audio_data[-(new_bytes):]
+
+                        # Traiter frames
+                        offset = 0
+                        while offset + bytes_per_frame <= len(new_audio_data):
+                            frame = new_audio_data[offset:offset + bytes_per_frame]
+                            offset += bytes_per_frame
+
+                            is_speech = self.vad.is_speech(frame, sample_rate)
+
+                            if is_speech:
+                                silence_frames = 0
+
+                                if not speech_detected:
+                                    speech_detected = True
+                                    speech_start_time = time.time()
+                                    logger.info(f"[{call_uuid[:8]}] WAITING VAD: Speech started")
+
+                                last_speech_time = time.time()
+
+                            else:
+                                # Silence
+                                if speech_detected:
+                                    silence_frames += 1
+
+                                    # End-of-speech si silence >= threshold
+                                    if silence_frames > int(end_of_speech_silence_ms / frame_duration_ms):
+                                        speech_duration = last_speech_time - speech_start_time if last_speech_time and speech_start_time else 0
+                                        logger.info(f"[{call_uuid[:8]}] WAITING VAD: End-of-speech detected (speech duration: {speech_duration:.2f}s)")
+
+                                        # Attendre finalization du fichier
+                                        time.sleep(0.3)
+
+                                        # Transcrire fichier complet
+                                        transcription = self._transcribe_file(call_uuid, record_file)
+                                        return transcription
+
+                        last_file_size = current_size
+
+                except Exception as e:
+                    logger.debug(f"[{call_uuid[:8]}] WAITING VAD read error: {e}")
+                    pass
+
+                time.sleep(0.05)
+
+            # Timeout atteint
+            if speech_detected:
+                logger.info(f"[{call_uuid[:8]}] WAITING VAD: Timeout reached with speech - transcribing")
+                time.sleep(0.3)
+                return self._transcribe_file(call_uuid, record_file)
+            else:
+                logger.info(f"[{call_uuid[:8]}] WAITING VAD: Timeout reached without speech")
+                return None
+
+        except Exception as e:
+            logger.error(f"[{call_uuid[:8]}] WAITING VAD error: {e}", exc_info=True)
+            return None
 
     def _get_audio_duration(self, audio_file: str) -> float:
         """
@@ -1122,16 +1486,16 @@ class RobotFreeSWITCH:
 
     def _listen_for_response(self, call_uuid: str, timeout: int = 10) -> Optional[str]:
         """
-        Écoute et transcrit la réponse du client (MODE FICHIER)
+        Écoute et transcrit la réponse du client (V3 - 3 modes VAD)
 
         Workflow:
-        1. Si barge-in: Transcrire le fichier barge-in existant
-        2. Sinon: Enregistre audio client avec uuid_record puis transcrit
+        1. Si barge-in: Utiliser transcription déjà enregistrée
+        2. Sinon: Utiliser _monitor_vad_waiting() pour end-of-speech detection
         3. Retourne la transcription
 
         Args:
             call_uuid: UUID de l'appel
-            timeout: Timeout en secondes
+            timeout: Timeout en secondes (défaut: 10s via config.WAITING_TIMEOUT)
 
         Returns:
             Transcription texte ou None si silence/timeout
@@ -1143,22 +1507,37 @@ class RobotFreeSWITCH:
         try:
             session = self.call_sessions[call_uuid]
 
-            # Si barge-in détecté, utiliser le fichier déjà enregistré
-            if "last_barge_in_file" in session:
-                barge_in_file = session["last_barge_in_file"]
-                logger.info(f"[{call_uuid[:8]}] 🎤 Transcribing barge-in file: {Path(barge_in_file).name}")
-
-                # Transcrire immédiatement
-                transcription = self._transcribe_file(call_uuid, barge_in_file)
+            # Si barge-in détecté, utiliser transcription déjà sauvegardée
+            if "last_barge_in_transcription" in session:
+                transcription = session["last_barge_in_transcription"]
+                logger.info(f"[{call_uuid[:8]}] 🎤 Using barge-in transcription: '{transcription}'")
 
                 # Nettoyer
-                del session["last_barge_in_file"]
+                del session["last_barge_in_transcription"]
 
                 return transcription
             else:
-                # Pas de barge-in, enregistrer normalement
-                logger.debug(f"[{call_uuid[:8]}] Using file mode for transcription")
-                return self._listen_record_fallback(call_uuid, timeout)
+                # Pas de barge-in, utiliser WAITING mode (end-of-speech detection)
+                logger.info(f"[{call_uuid[:8]}] 👂 WAITING_RESPONSE mode (timeout: {timeout}s, end-of-speech: {config.WAITING_END_OF_SPEECH_SILENCE}s)")
+
+                # Préparer fichier d'enregistrement
+                timestamp = int(time.time() * 1000)
+                record_file = str(config.RECORDINGS_DIR / f"waiting_{call_uuid}_{timestamp}.wav")
+
+                # Démarrer enregistrement
+                cmd = f"uuid_record {call_uuid} start {record_file}"
+                result = self.esl_conn_api.api(cmd)
+
+                if not result or b"+OK" not in result.getBody().encode():
+                    logger.error(f"[{call_uuid[:8]}] WAITING: Failed to start recording")
+                    return None
+
+                logger.debug(f"[{call_uuid[:8]}] WAITING: Recording to {Path(record_file).name}")
+
+                # Appeler la nouvelle fonction VAD WAITING
+                transcription = self._monitor_vad_waiting(call_uuid, record_file, timeout)
+
+                return transcription
 
         except Exception as e:
             logger.error(f"[{call_uuid[:8]}] Listen error: {e}", exc_info=True)
