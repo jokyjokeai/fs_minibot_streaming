@@ -45,7 +45,7 @@ except ImportError:
 from system.services.faster_whisper_stt import FasterWhisperSTT
 from system.services.ollama_nlp import OllamaNLP
 from system.services.amd_service import AMDService
-from system.services.echo_filter import SimpleEchoFilter
+from system.services.echo_filter_advanced import AdvancedEchoFilter
 # StreamingASR V3 SUPPRIMÉ - Mode fichier uniquement
 
 # VAD pour barge-in (détection parole sans transcription)
@@ -243,12 +243,12 @@ class RobotFreeSWITCH:
             logger.error(f"❌ Failed to load AMD Service: {e}")
             self.amd_service = None
 
-        # 4. Echo Filter (anti-feedback barge-in)
+        # 4. Advanced Echo Filter (anti-feedback barge-in with librosa)
         try:
-            self.echo_filter = SimpleEchoFilter(enabled=True)
-            logger.info("✅ Echo Filter loaded")
+            self.echo_filter = AdvancedEchoFilter(enabled=True)
+            logger.info("✅ Advanced Echo Filter loaded (librosa)")
         except Exception as e:
-            logger.error(f"❌ Failed to load Echo Filter: {e}")
+            logger.error(f"❌ Failed to load Advanced Echo Filter: {e}")
             self.echo_filter = None
 
         # 4. VAD pour barge-in (détection parole sans transcription)
