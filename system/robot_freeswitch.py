@@ -765,8 +765,9 @@ class RobotFreeSWITCH:
             })
 
             # 2. Lancer uuid_record EN PARALLÈLE (enregistrer client)
+            # IMPORTANT: Forcer 16kHz pour compatibilité VAD
             record_file = config.RECORDINGS_DIR / f"bargein_{call_uuid}_{int(time.time())}.wav"
-            record_cmd = f"uuid_record {call_uuid} start {record_file}"
+            record_cmd = f"uuid_record {call_uuid} start {record_file} 16000"
             logger.debug(f"[{call_uuid[:8]}] Sending: {record_cmd}")
 
             record_result = self.esl_conn_api.api(record_cmd)
