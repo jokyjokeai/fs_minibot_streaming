@@ -1491,25 +1491,45 @@ class RobotFreeSWITCH:
 
     def _get_audio_duration(self, audio_file: str) -> float:
         """
-        Calcule la durée d'un fichier audio WAV
-        
+        Calcule la durée d'un fichier audio WAV (supporte mu-law/G.711)
+
         Args:
             audio_file: Chemin vers fichier WAV
-            
+
         Returns:
-            Durée en secondes (60.0 si erreur/format inconnu)
+            Durée en secondes (60.0 si erreur)
         """
         try:
+            # Méthode 1: soxi (supporte mu-law, A-law, PCM, etc.)
+            import subprocess
+            result = subprocess.run(
+                ['soxi', '-D', audio_file],
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            if result.returncode == 0:
+                duration = float(result.stdout.strip())
+                logger.debug(f"Audio duration ({Path(audio_file).name}): {duration:.2f}s")
+                return duration
+        except Exception as e:
+            logger.debug(f"soxi failed: {e}")
+
+        try:
+            # Méthode 2: wave module (PCM seulement)
             import wave
             with wave.open(audio_file, 'rb') as wav:
                 frames = wav.getnframes()
                 rate = wav.getframerate()
                 duration = frames / float(rate)
+                logger.debug(f"Audio duration ({Path(audio_file).name}): {duration:.2f}s")
                 return duration
         except Exception as e:
-            # Format WAV non standard (mu-law, etc.) - utiliser durée par défaut
-            logger.debug(f"Could not read audio duration from {Path(audio_file).name}: {e}")
-            return 60.0  # Fallback
+            logger.debug(f"wave.open failed: {e}")
+
+        # Fallback: 60s si impossible de détecter
+        logger.warning(f"Could not detect audio duration for {Path(audio_file).name}, using 60s fallback")
+        return 60.0
 
     def _start_background_audio(self, call_uuid: str, background_audio_path: Optional[str] = None):
         """
