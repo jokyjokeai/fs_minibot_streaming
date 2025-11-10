@@ -150,7 +150,7 @@ def _detect_gpu_device():
         return "cpu"
 
 # Faster-Whisper STT (Primary - GPU accelerated)
-FASTER_WHISPER_MODEL = os.getenv("FASTER_WHISPER_MODEL", "base")  # tiny, base, small, medium, large (base = best speed/quality balance)
+FASTER_WHISPER_MODEL = os.getenv("FASTER_WHISPER_MODEL", "small")  # tiny, base, small, medium, large (small = best quality/speed balance)
 FASTER_WHISPER_DEVICE = os.getenv("FASTER_WHISPER_DEVICE", _detect_gpu_device())  # auto-detect GPU
 FASTER_WHISPER_COMPUTE_TYPE = os.getenv("FASTER_WHISPER_COMPUTE_TYPE", "auto")  # auto, float16, int8
 

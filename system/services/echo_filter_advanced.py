@@ -245,7 +245,7 @@ class AdvancedEchoFilter:
             )
 
             if mfcc_similarity >= self.mfcc_similarity_threshold:
-                logger.info(f"🔇 Echo filter: ECHO DETECTED (MFCC similarity: {mfcc_similarity:.2%} >= {self.mfcc_similarity_threshold:.2%})")
+                logger.warning(f"🔇 Echo detected: MFCC {mfcc_similarity:.0%} (threshold {self.mfcc_similarity_threshold:.0%})")
                 return True
 
             # --- Test 2: Spectral Similarity ---
@@ -255,7 +255,7 @@ class AdvancedEchoFilter:
             )
 
             if spectral_similarity >= self.spectral_similarity_threshold:
-                logger.info(f"🔇 Echo filter: ECHO DETECTED (Spectral similarity: {spectral_similarity:.2%} >= {self.spectral_similarity_threshold:.2%})")
+                logger.warning(f"🔇 Echo detected: Spectral {spectral_similarity:.0%} (threshold {self.spectral_similarity_threshold:.0%})")
                 return True
 
             # --- Test 3: Cross-Correlation ---
@@ -265,7 +265,7 @@ class AdvancedEchoFilter:
             )
 
             if correlation >= self.correlation_threshold:
-                logger.info(f"🔇 Echo filter: ECHO DETECTED (Correlation: {correlation:.2%} >= {self.correlation_threshold:.2%})")
+                logger.warning(f"🔇 Echo detected: Correlation {correlation:.0%} (threshold {self.correlation_threshold:.0%})")
                 return True
 
             # --- Test 4: Energy Ratio (doit être dans range acceptable) ---
@@ -276,11 +276,10 @@ class AdvancedEchoFilter:
                 combined_score = (mfcc_similarity + spectral_similarity + correlation) / 3.0
 
                 if combined_score >= 0.65:  # Score combiné > 65%
-                    logger.info(f"🔇 Echo filter: ECHO DETECTED (Combined score: {combined_score:.2%}, energy_ratio: {energy_ratio:.2f})")
+                    logger.warning(f"🔇 Echo detected: Combined {combined_score:.0%} (energy ratio {energy_ratio:.1f})")
                     return True
 
-            # Pas d'echo détecté
-            logger.debug(f"🔇 Echo filter: No echo (MFCC: {mfcc_similarity:.2%}, Spectral: {spectral_similarity:.2%}, Corr: {correlation:.2%})")
+            # Pas d'echo détecté - pas de log (silent)
             return False
 
         except Exception as e:
