@@ -91,5 +91,5 @@ echo "  - View logs:                sudo journalctl -u minibot-recording-cleanup
 echo "  - Stop timer:               sudo systemctl stop minibot-recording-cleanup.timer"
 echo "  - Disable timer:            sudo systemctl disable minibot-recording-cleanup.timer"
 echo ""
-echo "Documentation: systemd/INSTALL.md"
+echo "Documentation: system/systemd/INSTALL.md"
 echo ""

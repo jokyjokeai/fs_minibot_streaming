@@ -7,8 +7,8 @@ Ce guide explique comment installer le service de nettoyage automatique des reco
 ### 1. Copier les fichiers systemd
 
 ```bash
-sudo cp systemd/minibot-recording-cleanup.service /etc/systemd/system/
-sudo cp systemd/minibot-recording-cleanup.timer /etc/systemd/system/
+sudo cp system/systemd/minibot-recording-cleanup.service /etc/systemd/system/
+sudo cp system/systemd/minibot-recording-cleanup.timer /etc/systemd/system/
 ```
 
 ### 2. Recharger systemd
@@ -111,7 +111,7 @@ nano /home/jokyjokeai/Desktop/fs_minibot_streaming/.env
 
 Par défaut: **3h00 du matin**
 
-Pour changer:
+Pour changer (éditer le fichier dans `/etc/systemd/system/` ou modifier `system/systemd/minibot-recording-cleanup.timer` puis réinstaller):
 ```bash
 # Éditer le timer
 sudo nano /etc/systemd/system/minibot-recording-cleanup.timer
