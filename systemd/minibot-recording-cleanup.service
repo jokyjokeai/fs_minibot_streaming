@@ -1,0 +1,27 @@
+[Unit]
+Description=MiniBotPanel - Recording Cleanup Service
+Documentation=https://github.com/yourusername/minibot
+After=network.target
+
+[Service]
+Type=oneshot
+User=jokyjokeai
+Group=jokyjokeai
+WorkingDirectory=/home/jokyjokeai/Desktop/fs_minibot_streaming
+
+# Exécuter le service de cleanup
+ExecStart=/home/jokyjokeai/Desktop/fs_minibot_streaming/venv/bin/python /home/jokyjokeai/Desktop/fs_minibot_streaming/system/services/recording_cleanup_service.py
+
+# Logs
+StandardOutput=append:/home/jokyjokeai/Desktop/fs_minibot_streaming/logs/recording_cleanup.log
+StandardError=append:/home/jokyjokeai/Desktop/fs_minibot_streaming/logs/recording_cleanup.log
+
+# Security hardening
+PrivateTmp=true
+NoNewPrivileges=true
+
+# Restart policy (pour oneshot, pas de restart auto)
+# Le timer relancera le service quotidiennement
+
+[Install]
+WantedBy=multi-user.target

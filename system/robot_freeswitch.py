@@ -45,6 +45,7 @@ except ImportError:
 from system.services.faster_whisper_stt import FasterWhisperSTT
 from system.services.ollama_nlp import OllamaNLP
 from system.services.amd_service import AMDService
+from system.services.echo_filter import SimpleEchoFilter
 # StreamingASR V3 SUPPRIMÉ - Mode fichier uniquement
 
 # VAD pour barge-in (détection parole sans transcription)
@@ -241,6 +242,14 @@ class RobotFreeSWITCH:
         except Exception as e:
             logger.error(f"❌ Failed to load AMD Service: {e}")
             self.amd_service = None
+
+        # 4. Echo Filter (anti-feedback barge-in)
+        try:
+            self.echo_filter = SimpleEchoFilter(enabled=True)
+            logger.info("✅ Echo Filter loaded")
+        except Exception as e:
+            logger.error(f"❌ Failed to load Echo Filter: {e}")
+            self.echo_filter = None
 
         # 4. VAD pour barge-in (détection parole sans transcription)
         if VAD_AVAILABLE:
@@ -844,6 +853,10 @@ class RobotFreeSWITCH:
                 "timestamp": datetime.now()
             })
 
+            # 🔇 Echo filter: Sauvegarder audio robot pour détection echo
+            if self.echo_filter:
+                self.echo_filter.set_robot_audio(audio_file)
+
             # 2. Lancer uuid_record EN PARALLÈLE (enregistrer client UNIQUEMENT)
             # STEREO: Left=client, Right=robot → VAD traite SEULEMENT le canal gauche
             self.esl_conn_api.api(f"uuid_setvar {call_uuid} RECORD_STEREO true")
@@ -1370,6 +1383,22 @@ class RobotFreeSWITCH:
                                     # BARGE-IN si >= threshold
                                     if total_speech_duration >= config.PLAYING_BARGE_IN_THRESHOLD:
                                         logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: ⚡ BARGE-IN TRIGGERED! (speech {total_speech_duration:.2f}s >= {config.PLAYING_BARGE_IN_THRESHOLD}s)")
+
+                                        # 🔇 Echo filter: Vérifier si probable echo AVANT de stopper playback
+                                        if self.echo_filter and call_uuid in self.call_sessions:
+                                            record_path = self.call_sessions[call_uuid].get("current_recording_path")
+                                            if record_path and Path(record_path).exists():
+                                                # Attendre 100ms pour que fichier soit écrit
+                                                time.sleep(0.1)
+                                                if self.echo_filter.is_probable_echo(str(record_path)):
+                                                    logger.info(f"[{call_uuid[:8]}] 🔇 Echo detected → Ignoring barge-in")
+                                                    # Reset compteurs et continuer
+                                                    speech_frames = 0
+                                                    speech_start_time = None
+                                                    total_speech_duration = 0.0
+                                                    last_speech_duration = 0.0
+                                                    current_segment_start = None
+                                                    continue  # Continuer monitoring
 
                                         # Marquer timestamp barge-in
                                         if call_uuid in self.call_sessions:

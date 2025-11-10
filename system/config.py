@@ -150,7 +150,7 @@ def _detect_gpu_device():
         return "cpu"
 
 # Faster-Whisper STT (Primary - GPU accelerated)
-FASTER_WHISPER_MODEL = os.getenv("FASTER_WHISPER_MODEL", "small")  # tiny, base, small, medium, large
+FASTER_WHISPER_MODEL = os.getenv("FASTER_WHISPER_MODEL", "base")  # tiny, base, small, medium, large (base = best speed/quality balance)
 FASTER_WHISPER_DEVICE = os.getenv("FASTER_WHISPER_DEVICE", _detect_gpu_device())  # auto-detect GPU
 FASTER_WHISPER_COMPUTE_TYPE = os.getenv("FASTER_WHISPER_COMPUTE_TYPE", "auto")  # auto, float16, int8
 
@@ -189,14 +189,14 @@ WEBSOCKET_PORT = int(os.getenv("WEBSOCKET_PORT", "8080"))
 # MODE 1: AMD (Answering Machine Detection)
 # Objectif: Détecter HUMAN vs MACHINE rapidement
 # Comportement: Transcrire TOUT (même "allô", bip, silence), pas de seuil minimum
-AMD_TIMEOUT = 1.3  # secondes (ultra agressive! test limite minimal)
+AMD_TIMEOUT = 1.4  # secondes (optimisé pour meilleur contexte NLP)
 AMD_MIN_SPEECH_DURATION = 0.3  # secondes - Détecter dès 300ms de parole
 AMD_TRANSCRIBE_ALL = True  # Tout transcrire pour NLP
 
 # MODE 2: PLAYING_AUDIO (Barge-in intelligent)
 # Objectif: Détecter vraies interruptions vs. backchannels ("oui", "ok", "hum")
-# Comportement: Transcrire TOUT en continu, barge-in si parole >= 2.5s
-PLAYING_BARGE_IN_THRESHOLD = 2.5  # secondes - Parole continue >= 2.5s = barge-in
+# Comportement: Transcrire TOUT en continu, barge-in si parole >= 2.0s
+PLAYING_BARGE_IN_THRESHOLD = 2.0  # secondes - Parole continue >= 2.0s = barge-in (optimisé réactivité)
 PLAYING_BACKCHANNEL_MAX = 0.8  # secondes - Parole < 0.8s = backchannel (logger seulement)
 PLAYING_SILENCE_RESET = 2.0  # secondes - Reset compteur si silence >= 2.0s (filtre backchannels multiples)
 PLAYING_TRANSCRIBE_ALL = True  # Transcrire tous les segments (même backchannels)
@@ -204,10 +204,10 @@ PLAYING_SMOOTH_DELAY = 1.0  # secondes - Délai avant interruption (finir phrase
 
 # MODE 3: WAITING_RESPONSE (End-of-speech detection)
 # Objectif: Détecter début/fin de parole, transcrire réponse complète
-# Comportement: Détecter début parole dès 300ms, fin si silence >= 0.8s
+# Comportement: Détecter début parole dès 300ms, fin si silence >= 0.7s
 WAITING_TIMEOUT = 10.0  # secondes - Timeout total avant retry_silence
 WAITING_MIN_SPEECH_DURATION = 0.3  # secondes - Détecter début parole
-WAITING_END_OF_SPEECH_SILENCE = 0.8  # secondes - Silence pour fin de parole (optimisé pour réactivité)
+WAITING_END_OF_SPEECH_SILENCE = 0.7  # secondes - Silence pour fin de parole (optimisé réactivité +0.1s)
 WAITING_TRANSCRIBE_CONTINUOUS = True  # Transcrire pendant que client parle (latence minimale)
 
 # Compatibilité ancienne config (DEPRECATED - utiliser configs spécifiques ci-dessus)
@@ -228,6 +228,15 @@ CALL_TIMEOUT_SECONDS = int(os.getenv("CALL_TIMEOUT_SECONDS", "300"))
 RETRY_ENABLED = os.getenv("RETRY_ENABLED", "true").lower() == "true"
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "2"))
 RETRY_DELAY_MINUTES = int(os.getenv("RETRY_DELAY_MINUTES", "30"))
+
+# ============================================================================
+# RECORDING CLEANUP
+# ============================================================================
+# Automatic cleanup of old recordings to prevent disk saturation
+RECORDING_CLEANUP_ENABLED = os.getenv("RECORDING_CLEANUP_ENABLED", "true").lower() == "true"
+RECORDING_RETENTION_DAYS = int(os.getenv("RECORDING_RETENTION_DAYS", "7"))  # Delete recordings older than 7 days
+RECORDING_CLEANUP_DISK_THRESHOLD = float(os.getenv("RECORDING_CLEANUP_DISK_THRESHOLD", "80"))  # Trigger cleanup at 80% disk usage
+RECORDING_CLEANUP_DISK_TARGET = float(os.getenv("RECORDING_CLEANUP_DISK_TARGET", "70"))  # Target 70% after cleanup
 
 # ============================================================================
 # LOGGING
@@ -319,6 +328,12 @@ class Config:
     RETRY_ENABLED = RETRY_ENABLED
     MAX_RETRIES = MAX_RETRIES
     RETRY_DELAY_MINUTES = RETRY_DELAY_MINUTES
+
+    # Recording Cleanup
+    RECORDING_CLEANUP_ENABLED = RECORDING_CLEANUP_ENABLED
+    RECORDING_RETENTION_DAYS = RECORDING_RETENTION_DAYS
+    RECORDING_CLEANUP_DISK_THRESHOLD = RECORDING_CLEANUP_DISK_THRESHOLD
+    RECORDING_CLEANUP_DISK_TARGET = RECORDING_CLEANUP_DISK_TARGET
 
     # Logging
     LOG_LEVEL = LOG_LEVEL

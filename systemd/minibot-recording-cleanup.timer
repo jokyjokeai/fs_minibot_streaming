@@ -1,0 +1,17 @@
+[Unit]
+Description=MiniBotPanel - Daily Recording Cleanup Timer
+Documentation=https://github.com/yourusername/minibot
+Requires=minibot-recording-cleanup.service
+
+[Timer]
+# Exécuter tous les jours à 3h00 du matin
+OnCalendar=*-*-* 03:00:00
+
+# Si le système était éteint à 3h, exécuter au démarrage
+Persistent=true
+
+# Random delay de 0-300s pour éviter pic de charge si plusieurs serveurs
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
