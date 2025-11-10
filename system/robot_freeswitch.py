@@ -486,8 +486,7 @@ class RobotFreeSWITCH:
                 "campaign_id": str(campaign_id),
                 "retry_count": str(retry),
                 "ignore_early_media": "true",
-                "media_timeout": "0",  # Désactiver timeout média
-                "rtp_timeout_sec": "0",  # Désactiver timeout RTP
+                "rtp_timeout_sec": "30",  # Timeout RTP 30s (détection hangup client)
             }
 
             # Caller ID (numéro émetteur)
