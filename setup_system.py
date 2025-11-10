@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """
-Setup Database - MiniBotPanel v3
+Setup System - MiniBotPanel v3
 
-Initialise la base de données PostgreSQL.
+Initialise le système complet: database + systemd services.
 
 Fonctionnalités:
 - Création tables (Contact, Campaign, Call, CallEvent)
-- Test connexion
+- Test connexion database
 - Migration schema si nécessaire
 - Données de test optionnelles
-- Configuration permissions FreeSWITCH recordings (optionnel)
+- Configuration permissions FreeSWITCH recordings
+- Installation service systemd recording cleanup
 
 Utilisation:
-    python setup_database.py
-    python setup_database.py --test-data
-    python setup_database.py --reset (⚠️ supprime toutes les données)
-    python setup_database.py --setup-permissions (configure FreeSWITCH recordings)
+    python setup_system.py                      # Setup database uniquement
+    python setup_system.py --test-data           # Avec données de test
+    python setup_system.py --reset               # Reset database (⚠️ DESTRUCTIF)
+    python setup_system.py --setup-permissions   # FreeSWITCH permissions (sudo)
+    python setup_system.py --install-systemd     # Systemd cleanup service (sudo)
+    python setup_system.py --full                # Tout installer (sudo)
 """
 
 import argparse
@@ -262,8 +265,126 @@ def setup_freeswitch_permissions():
         return False
 
 
+def install_systemd_service():
+    """
+    Installe le service systemd de cleanup automatique.
+
+    Copie les fichiers dans /etc/systemd/system/ et active le timer.
+
+    Requis: sudo
+    """
+    logger.info("\n🔧 INSTALLATION SERVICE SYSTEMD - RECORDING CLEANUP")
+    logger.info("=" * 60)
+
+    # Vérifier si on tourne en root/sudo
+    if os.geteuid() != 0:
+        logger.error("❌ Cette installation nécessite les droits sudo")
+        logger.info("💡 Relancez avec: sudo python3 setup_system.py --install-systemd")
+        return False
+
+    script_dir = Path(__file__).parent
+    systemd_source_dir = script_dir / "system" / "systemd"
+    systemd_target_dir = Path("/etc/systemd/system")
+
+    service_file = "minibot-recording-cleanup.service"
+    timer_file = "minibot-recording-cleanup.timer"
+
+    logger.info(f"Source: {systemd_source_dir}")
+    logger.info(f"Target: {systemd_target_dir}")
+    logger.info("")
+
+    try:
+        # 1. Vérifier fichiers source
+        logger.info("[1/5] Vérification fichiers source...")
+        service_source = systemd_source_dir / service_file
+        timer_source = systemd_source_dir / timer_file
+
+        if not service_source.exists():
+            logger.error(f"❌ Fichier non trouvé: {service_source}")
+            return False
+
+        if not timer_source.exists():
+            logger.error(f"❌ Fichier non trouvé: {timer_source}")
+            return False
+
+        logger.info("  ✅ Fichiers source trouvés")
+
+        # 2. Copier fichiers
+        logger.info("[2/5] Copie fichiers systemd...")
+        subprocess.run(
+            ["cp", str(service_source), str(systemd_target_dir)],
+            check=True,
+            capture_output=True
+        )
+        subprocess.run(
+            ["cp", str(timer_source), str(systemd_target_dir)],
+            check=True,
+            capture_output=True
+        )
+        logger.info("  ✅ Fichiers copiés vers /etc/systemd/system/")
+
+        # 3. Recharger systemd
+        logger.info("[3/5] Rechargement systemd daemon...")
+        subprocess.run(
+            ["systemctl", "daemon-reload"],
+            check=True,
+            capture_output=True
+        )
+        logger.info("  ✅ Systemd daemon rechargé")
+
+        # 4. Activer timer
+        logger.info("[4/5] Activation du timer...")
+        subprocess.run(
+            ["systemctl", "enable", "minibot-recording-cleanup.timer"],
+            check=True,
+            capture_output=True
+        )
+        logger.info("  ✅ Timer activé (démarrage auto au boot)")
+
+        # 5. Démarrer timer
+        logger.info("[5/5] Démarrage du timer...")
+        subprocess.run(
+            ["systemctl", "start", "minibot-recording-cleanup.timer"],
+            check=True,
+            capture_output=True
+        )
+        logger.info("  ✅ Timer démarré")
+
+        # Afficher status
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("✅ Service systemd installé avec succès!")
+        logger.info("=" * 60)
+        logger.info("")
+
+        # Status timer
+        logger.info("Timer status:")
+        subprocess.run(["systemctl", "status", "minibot-recording-cleanup.timer", "--no-pager", "-l"])
+
+        logger.info("")
+        logger.info("Prochaine exécution:")
+        subprocess.run(["systemctl", "list-timers", "minibot-recording-cleanup.timer", "--no-pager"])
+
+        logger.info("")
+        logger.info("📝 Commandes utiles:")
+        logger.info("  - Status timer:  sudo systemctl status minibot-recording-cleanup.timer")
+        logger.info("  - Tester service: sudo systemctl start minibot-recording-cleanup.service")
+        logger.info("  - Voir logs:     sudo journalctl -u minibot-recording-cleanup.service -n 50")
+        logger.info("  - Stopper timer: sudo systemctl stop minibot-recording-cleanup.timer")
+
+        return True
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"❌ Erreur lors de l'exécution de la commande: {e}")
+        logger.error(f"   Sortie: {e.stderr.decode() if e.stderr else 'N/A'}")
+        return False
+    except Exception as e:
+        logger.error(f"❌ Erreur installation systemd: {e}")
+        return False
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Initialiser la base de données")
+    parser = argparse.ArgumentParser(description="Initialiser le système MiniBotPanel")
     parser.add_argument(
         "--reset",
         action="store_true",
@@ -279,12 +400,30 @@ def main():
         action="store_true",
         help="Configurer permissions FreeSWITCH recordings (requiert sudo)"
     )
+    parser.add_argument(
+        "--install-systemd",
+        action="store_true",
+        help="Installer service systemd recording cleanup (requiert sudo)"
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Installation complète: database + permissions + systemd (requiert sudo)"
+    )
 
     args = parser.parse_args()
 
-    # Si seulement setup-permissions, le faire et sortir
-    if args.setup_permissions and not args.reset and not args.test_data:
-        setup_freeswitch_permissions()
+    # Mode --full = tout installer
+    if args.full:
+        args.setup_permissions = True
+        args.install_systemd = True
+
+    # Si seulement options sudo, les faire et sortir
+    if (args.setup_permissions or args.install_systemd) and not args.reset and not args.test_data and not args.full:
+        if args.setup_permissions:
+            setup_freeswitch_permissions()
+        if args.install_systemd:
+            install_systemd_service()
         return
 
     logger.info("🚀 SETUP BASE DE DONNÉES")
@@ -329,7 +468,12 @@ def main():
         logger.info("\n6️⃣ Configuration permissions FreeSWITCH")
         setup_freeswitch_permissions()
 
-    logger.info("\n✅ Setup base de données terminé!")
+    # Install systemd service si demandé
+    if args.install_systemd:
+        logger.info("\n7️⃣ Installation service systemd")
+        install_systemd_service()
+
+    logger.info("\n✅ Setup système terminé!")
 
 
 if __name__ == "__main__":
