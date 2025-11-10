@@ -713,6 +713,7 @@ class RobotFreeSWITCH:
             True si canal existe, False si raccroché
         """
         if not self.esl_conn_api or not self.esl_conn_api.connected():
+            logger.debug(f"[{call_uuid[:8]}] Channel check: ESL not connected")
             return False
 
         try:
@@ -720,7 +721,10 @@ class RobotFreeSWITCH:
             if result:
                 body = result.getBody()
                 # uuid_exists retourne "true" si existe, "false" si n'existe pas
-                return body.strip().lower() == "true"
+                is_alive = body.strip().lower() == "true"
+                logger.debug(f"[{call_uuid[:8]}] Channel check: uuid_exists={body.strip()} → {is_alive}")
+                return is_alive
+            logger.debug(f"[{call_uuid[:8]}] Channel check: No result from uuid_exists")
             return False
         except Exception as e:
             logger.debug(f"[{call_uuid[:8]}] Channel check error: {e}")
@@ -817,6 +821,7 @@ class RobotFreeSWITCH:
             max_duration = audio_duration + 1.0
             check_interval = 0.1
             elapsed = 0.0
+            last_channel_check = 0.0
 
             while elapsed < max_duration:
                 # Vérifier hangup (flag OU polling actif du canal)
@@ -827,7 +832,7 @@ class RobotFreeSWITCH:
                     return False
 
                 # NOUVEAU: Polling actif toutes les 0.5s pour détecter si client a raccroché
-                if elapsed % 0.5 < check_interval:  # Check tous les 0.5s
+                if elapsed - last_channel_check >= 0.5:
                     if not self._is_channel_alive(call_uuid):
                         logger.warning(f"[{call_uuid[:8]}] 📞 Channel closed (client hung up) - stopping playback")
                         # Marquer hangup pour que threads le voient
@@ -836,6 +841,7 @@ class RobotFreeSWITCH:
                         self.esl_conn_api.api(f"uuid_break {call_uuid}")
                         self.esl_conn_api.api(f"uuid_record {call_uuid} stop {record_file}")
                         return False
+                    last_channel_check = elapsed
 
                 # Vérifier si barge-in détecté par VAD
                 session = self.call_sessions.get(call_uuid, {})
@@ -1430,6 +1436,7 @@ class RobotFreeSWITCH:
 
             start_time = time.time()
             end_of_speech_silence_ms = int(config.WAITING_END_OF_SPEECH_SILENCE * 1000)
+            last_channel_check = 0.0
 
             while time.time() - start_time < timeout:
                 # Check hangup (flag)
@@ -1440,13 +1447,14 @@ class RobotFreeSWITCH:
 
                 # NOUVEAU: Polling actif toutes les 0.5s pour détecter si client a raccroché
                 elapsed = time.time() - start_time
-                if int(elapsed * 2) != int((elapsed - 0.05) * 2):  # Check ~tous les 0.5s
+                if elapsed - last_channel_check >= 0.5:
                     if not self._is_channel_alive(call_uuid):
                         logger.warning(f"[{call_uuid[:8]}] 👂 WAITING VAD: Channel closed (client hung up)")
                         # Marquer hangup
                         if call_uuid in self.call_sessions:
                             self.call_sessions[call_uuid]["hangup_detected"] = True
                         return None
+                    last_channel_check = elapsed
 
                 # Lire fichier WAV en mode RAW
                 try:
