@@ -28,6 +28,9 @@ torchaudio==2.4.0
 numpy==1.26.4
 transformers==4.46.3
 
+# NVIDIA cuDNN for GPU acceleration (1 GB)
+nvidia-cudnn-cu11==9.1.0.70
+
 # ============================================
 # SPEECH-TO-TEXT (Vosk + Faster-Whisper)
 # ============================================

@@ -13,10 +13,56 @@ Configuration épurée avec uniquement l'essentiel:
 """
 
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# ============================================================================
+# AUTO-CONFIGURE GPU LIBRARIES (cuDNN)
+# ============================================================================
+def _setup_gpu_libraries():
+    """
+    Configure cuDNN libraries automatiquement.
+
+    Si cuDNN détecté dans venv et LD_LIBRARY_PATH pas configuré,
+    re-lance Python avec LD_LIBRARY_PATH correct.
+    """
+    # Si déjà configuré, skip
+    if os.environ.get("_GPU_LIBS_SET"):
+        return
+
+    try:
+        # Chercher cuDNN dans venv
+        venv_base = Path(sys.executable).parent.parent
+        cudnn_lib = venv_base / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages" / "nvidia" / "cudnn" / "lib"
+        cublas_lib = venv_base / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages" / "nvidia" / "cublas" / "lib"
+
+        new_paths = []
+        if cudnn_lib.exists():
+            new_paths.append(str(cudnn_lib))
+        if cublas_lib.exists():
+            new_paths.append(str(cublas_lib))
+
+        if new_paths:
+            # Vérifier si LD_LIBRARY_PATH contient déjà cuDNN
+            current_ld = os.environ.get("LD_LIBRARY_PATH", "")
+            if str(cudnn_lib) not in current_ld:
+                # Pas configuré, re-lancer avec LD_LIBRARY_PATH
+                new_ld = ":".join(new_paths + ([current_ld] if current_ld else []))
+
+                env = os.environ.copy()
+                env["LD_LIBRARY_PATH"] = new_ld
+                env["_GPU_LIBS_SET"] = "1"
+
+                # Re-lancer script actuel
+                os.execvpe(sys.executable, [sys.executable] + sys.argv, env)
+    except Exception:
+        pass
+
+# Configurer GPU automatiquement au chargement du module
+_setup_gpu_libraries()
 
 # ============================================================================
 # CHEMINS
@@ -79,9 +125,33 @@ FREESWITCH_CALLER_ID = os.getenv("FREESWITCH_CALLER_ID", "33609907845")
 # STT Engine Selection
 STT_ENGINE = os.getenv("STT_ENGINE", "faster_whisper")  # "faster_whisper" or "vosk"
 
+# GPU Auto-Detection pour Faster-Whisper
+def _detect_gpu_device():
+    """
+    Détecte automatiquement si GPU disponible + cuDNN installé.
+
+    Returns:
+        str: "cuda" si GPU disponible et cuDNN OK, sinon "cpu"
+    """
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return "cpu"
+
+        # Tester si cuDNN disponible (essayer import)
+        try:
+            from ctranslate2 import __version__
+            # Si on arrive ici, ctranslate2 est installé
+            # On peut tester CUDA
+            return "cuda"
+        except Exception:
+            return "cpu"
+    except ImportError:
+        return "cpu"
+
 # Faster-Whisper STT (Primary - GPU accelerated)
-FASTER_WHISPER_MODEL = os.getenv("FASTER_WHISPER_MODEL", "base")  # tiny, base, small, medium
-FASTER_WHISPER_DEVICE = os.getenv("FASTER_WHISPER_DEVICE", "cpu")  # auto, cuda, cpu (cpu=safe, cuda=fast mais requiert cuDNN)
+FASTER_WHISPER_MODEL = os.getenv("FASTER_WHISPER_MODEL", "small")  # tiny, base, small, medium, large
+FASTER_WHISPER_DEVICE = os.getenv("FASTER_WHISPER_DEVICE", _detect_gpu_device())  # auto-detect GPU
 FASTER_WHISPER_COMPUTE_TYPE = os.getenv("FASTER_WHISPER_COMPUTE_TYPE", "auto")  # auto, float16, int8
 
 # Vosk STT (Fallback)
