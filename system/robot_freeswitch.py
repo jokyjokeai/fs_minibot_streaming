@@ -766,9 +766,10 @@ class RobotFreeSWITCH:
                 "timestamp": datetime.now()
             })
 
-            # 2. Lancer uuid_record EN PARALLÈLE (enregistrer client)
-            # Forcer sample rate 8kHz via variable de canal (optimal pour WebRTC VAD)
+            # 2. Lancer uuid_record EN PARALLÈLE (enregistrer client UNIQUEMENT)
+            # IMPORTANT: RECORD_READ_ONLY=true pour enregistrer SEULEMENT le client, pas le robot !
             self.esl_conn_api.api(f"uuid_setvar {call_uuid} RECORD_STEREO false")
+            self.esl_conn_api.api(f"uuid_setvar {call_uuid} RECORD_READ_ONLY true")
 
             record_file = config.RECORDINGS_DIR / f"bargein_{call_uuid}_{int(time.time())}.wav"
             record_cmd = f"uuid_record {call_uuid} start {record_file}"
@@ -1235,8 +1236,20 @@ class RobotFreeSWITCH:
             result_str = result.getBody() if hasattr(result, 'getBody') else str(result)
             logger.debug(f"[{call_uuid[:8]}] uuid_record start result: {result_str}")
 
-            # Attendre fin enregistrement (timeout + petite marge)
-            time.sleep(timeout + 0.5)
+            # Attendre fin enregistrement EN VÉRIFIANT le hangup
+            elapsed = 0.0
+            check_interval = 0.5
+            max_wait = timeout + 0.5
+
+            while elapsed < max_wait:
+                # Vérifier si client a raccroché
+                if call_uuid not in self.call_sessions or self.call_sessions[call_uuid].get("hangup_detected", False):
+                    logger.info(f"[{call_uuid[:8]}] Hangup detected during recording - stopping")
+                    self.esl_conn_api.api(f"uuid_record {call_uuid} stop {record_file}")
+                    return None
+
+                time.sleep(check_interval)
+                elapsed += check_interval
 
             # Arrêter enregistrement (au cas où)
             cmd = f"uuid_record {call_uuid} stop {record_file}"
