@@ -418,24 +418,29 @@ class RobotFreeSWITCH:
     def _handle_channel_hangup(self, call_uuid: str, event):
         """Gère l'événement CHANNEL_HANGUP_COMPLETE"""
         hangup_cause = event.getHeader("Hangup-Cause") or "UNKNOWN"
-        logger.info(f"📞 Call ended: {call_uuid} - {hangup_cause}")
+        logger.info(f"[{call_uuid[:8]}] ═══════════════════════════════════════")
+        logger.info(f"[{call_uuid[:8]}] 📞 HANGUP DETECTED")
+        logger.info(f"[{call_uuid[:8]}] 📞 Cause: {hangup_cause}")
+        logger.info(f"[{call_uuid[:8]}] ═══════════════════════════════════════")
 
         # Marquer comme raccroché pour que les threads en cours s'arrêtent
         if call_uuid in self.call_sessions:
             self.call_sessions[call_uuid]["hangup_detected"] = True
-            logger.debug(f"[{call_uuid[:8]}] Hangup flag set - threads will stop")
+            logger.info(f"[{call_uuid[:8]}] 📞 Hangup flag set → All VAD threads will stop")
 
             # Attendre que les threads voient le flag (ils checkent toutes les 0.1s)
             # Sans ce delay, la session pourrait être supprimée avant que les threads vérifient
             time.sleep(0.2)
 
         # Cleanup
+        logger.info(f"[{call_uuid[:8]}] 📞 Cleaning up session data...")
         self.active_calls.pop(call_uuid, None)
         self.call_threads.pop(call_uuid, None)
         self.call_sessions.pop(call_uuid, None)
         self.call_sequences.pop(call_uuid, None)
         self.barge_in_active.pop(call_uuid, None)
         self.background_audio_active.pop(call_uuid, None)
+        logger.info(f"[{call_uuid[:8]}] 📞 Cleanup complete - call session terminated")
 
     def _handle_dtmf(self, call_uuid: str, event):
         """Gère les touches DTMF (optionnel)"""
@@ -1880,10 +1885,13 @@ class RobotFreeSWITCH:
         # 3. Analyser intent
         intent = "silence"
         if transcription and self.nlp_service:
+            logger.info(f"[{call_uuid[:8]}] 🧠 NLP: Analyzing transcription: '{transcription}'")
             intent_result = self.nlp_service.analyze_intent(transcription, context="telemarketing")
             intent = intent_result.get("intent", "unknown")
-            logger.info(f"[{call_uuid[:8]}] Intent: {intent}")
-            
+            confidence = intent_result.get("confidence", 0.0)
+            logger.info(f"[{call_uuid[:8]}] 🧠 NLP: Result → Intent: {intent} (confidence: {confidence:.2f})")
+            logger.debug(f"[{call_uuid[:8]}] 🧠 NLP: Full result: {intent_result}")
+
             # Sauvegarder
             call_history[step_name] = intent
         else:
@@ -2001,11 +2009,14 @@ class RobotFreeSWITCH:
             if not self.nlp_service:
                 logger.warning(f"[{call_uuid[:8]}] NLP service not available")
                 break
-            
+
+            logger.info(f"[{call_uuid[:8]}] 🧠 NLP: Analyzing transcription: '{transcription}'")
             intent_result = self.nlp_service.analyze_intent(transcription, context="telemarketing")
             intent = intent_result.get("intent", "unknown")
-            
-            logger.info(f"[{call_uuid[:8]}]   └─ Intent: {intent}")
+            confidence = intent_result.get("confidence", 0.0)
+
+            logger.info(f"[{call_uuid[:8]}] 🧠 NLP: Result → Intent: {intent} (confidence: {confidence:.2f})")
+            logger.debug(f"[{call_uuid[:8]}] 🧠 NLP: Full result: {intent_result}")
             
             # Sauvegarder
             session["transcriptions"].append(transcription)
