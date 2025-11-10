@@ -201,6 +201,8 @@ class VoskSTT:
         """
         Transcrit un fichier audio complet.
 
+        Supporte MONO et STEREO (extrait automatiquement canal gauche si stereo)
+
         Args:
             audio_file: Chemin vers fichier WAV
 
@@ -218,10 +220,42 @@ class VoskSTT:
             # Ouvrir fichier WAV
             wf = wave.open(str(audio_path), "rb")
 
-            # Vérifier format
-            if wf.getnchannels() != 1:
+            # Si STEREO: convertir en MONO (extraire canal gauche = client)
+            num_channels = wf.getnchannels()
+            if num_channels == 2:
+                logger.info(f"Stereo audio detected → Converting to MONO (left channel only)")
+
+                # Sauvegarder infos avant de fermer
+                sample_width = wf.getsampwidth()
+                frame_rate = wf.getframerate()
+                num_frames = wf.getnframes()
+
+                stereo_frames = wf.readframes(num_frames)
                 wf.close()
-                return {"text": "", "confidence": 0.0, "error": "Audio must be mono"}
+
+                # Extraire canal gauche
+                import struct
+                import io
+                num_samples = len(stereo_frames) // 4  # 4 bytes per stereo sample (2 bytes per channel)
+                stereo_samples = struct.unpack(f'<{num_samples * 2}h', stereo_frames)
+                left_samples = stereo_samples[::2]  # Échantillons pairs = canal gauche
+                mono_frames = struct.pack(f'<{len(left_samples)}h', *left_samples)
+
+                # Créer WAV mono en mémoire
+                mono_wf = io.BytesIO()
+                with wave.open(mono_wf, 'wb') as mono_wav:
+                    mono_wav.setnchannels(1)
+                    mono_wav.setsampwidth(sample_width)
+                    mono_wav.setframerate(frame_rate)
+                    mono_wav.writeframes(mono_frames)
+
+                # Réouvrir comme wave
+                mono_wf.seek(0)
+                wf = wave.open(mono_wf, 'rb')
+
+            elif num_channels != 1:
+                wf.close()
+                return {"text": "", "confidence": 0.0, "error": f"Unsupported channels: {num_channels}"}
 
             sample_rate = wf.getframerate()
             if sample_rate not in [8000, 16000, 32000, 48000]:

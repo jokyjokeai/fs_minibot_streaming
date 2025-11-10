@@ -632,6 +632,10 @@ class RobotFreeSWITCH:
         timestamp = int(time.time() * 1000)
         record_file = str(config.RECORDINGS_DIR / f"amd_{call_uuid}_{timestamp}.wav")
 
+        # Activer stereo (Left=client, Right=robot)
+        self.esl_conn_api.api(f"uuid_setvar {call_uuid} RECORD_STEREO true")
+        logger.debug(f"[{call_uuid[:8]}] AMD: RECORD_STEREO=true (Left=client, Right=robot)")
+
         # Démarrer enregistrement
         cmd = f"uuid_record {call_uuid} start {record_file}"
         result = self.esl_conn_api.api(cmd)
