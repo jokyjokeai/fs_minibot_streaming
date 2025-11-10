@@ -1278,6 +1278,7 @@ class RobotFreeSWITCH:
             silence_frames = 0
             speech_start_time = None
             total_speech_duration = 0.0
+            last_speech_duration = 0.0  # Dernière durée speech calculée (pour backchannel logging)
             last_file_size = 0
 
             # Segments de parole détectés (pour logging backchannels)
@@ -1351,6 +1352,7 @@ class RobotFreeSWITCH:
                                 # Calculer durée parole
                                 if speech_start_time:
                                     total_speech_duration = time.time() - speech_start_time
+                                    last_speech_duration = total_speech_duration  # Sauvegarder pour backchannel logging
 
                                     # Logger progression tous les 0.5s
                                     if total_speech_duration - last_progress_log >= 0.5:
@@ -1376,8 +1378,8 @@ class RobotFreeSWITCH:
                                 silence_reset_ms = int(config.PLAYING_SILENCE_RESET * 1000)
                                 if silence_frames > int(silence_reset_ms / frame_duration_ms):
                                     if speech_start_time:
-                                        # Segment terminé - utiliser la durée calculée au dernier frame de speech
-                                        segment_duration = total_speech_duration
+                                        # Segment terminé - utiliser last_speech_duration (calculé au dernier frame de speech)
+                                        segment_duration = last_speech_duration
 
                                         # Backchannel ou vraie parole ?
                                         if segment_duration < config.PLAYING_BACKCHANNEL_MAX:
@@ -1392,6 +1394,7 @@ class RobotFreeSWITCH:
                                     speech_frames = 0
                                     speech_start_time = None
                                     total_speech_duration = 0.0
+                                    last_speech_duration = 0.0  # Reset last_speech_duration aussi
                                     current_segment_start = None
                                     last_progress_log = 0.0  # Reset progress
 
