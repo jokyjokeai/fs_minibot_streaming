@@ -767,9 +767,11 @@ class RobotFreeSWITCH:
             })
 
             # 2. Lancer uuid_record EN PARALLÈLE (enregistrer client)
-            # IMPORTANT: Forcer 16kHz pour compatibilité VAD
+            # Forcer sample rate 8kHz via variable de canal (optimal pour WebRTC VAD)
+            self.esl_conn_api.api(f"uuid_setvar {call_uuid} RECORD_STEREO false")
+
             record_file = config.RECORDINGS_DIR / f"bargein_{call_uuid}_{int(time.time())}.wav"
-            record_cmd = f"uuid_record {call_uuid} start {record_file} 16000"
+            record_cmd = f"uuid_record {call_uuid} start {record_file}"
             logger.debug(f"[{call_uuid[:8]}] Sending: {record_cmd}")
 
             record_result = self.esl_conn_api.api(record_cmd)
