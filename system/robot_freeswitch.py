@@ -637,6 +637,9 @@ class RobotFreeSWITCH:
 
         logger.debug(f"[{call_uuid[:8]}] AMD: Recording to {record_file}")
 
+        # Petit délai pour laisser FreeSWITCH initialiser le fichier WAV
+        time.sleep(0.2)
+
         try:
             # Appeler la nouvelle fonction VAD AMD
             amd_result, transcription = self._monitor_vad_amd(call_uuid, record_file)
@@ -1032,12 +1035,18 @@ class RobotFreeSWITCH:
             # Attendre que FreeSWITCH finalise le fichier
             time.sleep(0.3)
 
+            # Vérifier taille fichier
+            file_size = Path(record_file).stat().st_size if Path(record_file).exists() else 0
+            logger.debug(f"[{call_uuid[:8]}] 🔍 AMD: Recording file size: {file_size} bytes")
+
             # Transcrire fichier complet
             transcription = self._transcribe_file(call_uuid, record_file)
 
             if not transcription:
-                logger.info(f"[{call_uuid[:8]}] AMD: Silence detected → SILENCE")
+                logger.info(f"[{call_uuid[:8]}] 🔍 AMD: No transcription (empty or silence) → SILENCE")
                 return ("SILENCE", "")
+
+            logger.info(f"[{call_uuid[:8]}] 🔍 AMD: Transcription obtained: '{transcription}'")
 
             # NLP pour déterminer HUMAN vs MACHINE
             text_lower = transcription.lower()
@@ -1208,9 +1217,9 @@ class RobotFreeSWITCH:
                                 # Reset si silence > PLAYING_SILENCE_RESET
                                 silence_reset_ms = int(config.PLAYING_SILENCE_RESET * 1000)
                                 if silence_frames > int(silence_reset_ms / frame_duration_ms):
-                                    if speech_start_time and total_speech_duration > 0:
-                                        # Segment terminé
-                                        segment_duration = total_speech_duration
+                                    if speech_start_time:
+                                        # Segment terminé - calculer durée réelle
+                                        segment_duration = (time.time() - speech_start_time) if speech_start_time else 0.0
 
                                         # Backchannel ou vraie parole ?
                                         if segment_duration < config.PLAYING_BACKCHANNEL_MAX:
