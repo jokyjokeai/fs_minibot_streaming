@@ -1,15 +1,15 @@
 """
-Configuration V3 - ULTRA SIMPLIFIÉE
-===================================
+Configuration MiniBotPanel - ULTRA SIMPLIFIÉE
+==============================================
 
-Supprimé:
-- ❌ BACKCHANNEL_KEYWORDS (40+ mots inutiles)
-- ❌ QUESTION_KEYWORDS
-- ❌ BACKCHANNEL_MAX_DURATION
-- ❌ Background music config
-- ❌ Toute la complexité inutile
-
-Gardé seulement l'essentiel.
+Configuration épurée avec uniquement l'essentiel:
+- Chemins et dossiers
+- Database
+- FreeSWITCH ESL
+- Services IA (Vosk, Ollama)
+- AMD (Answering Machine Detection)
+- Barge-in (détection interruption client)
+- Gestion appels et retry
 """
 
 import os
@@ -127,8 +127,8 @@ LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 # ============================================================================
 # CLASSE CONFIG (pour import facile)
 # ============================================================================
-class ConfigV3:
-    """Config V3 - Simplifié et propre"""
+class Config:
+    """Config - Simplifié et propre"""
 
     # Chemins
     BASE_DIR = BASE_DIR
@@ -187,4 +187,4 @@ class ConfigV3:
     LOG_FORMAT = LOG_FORMAT
 
 # Instance globale
-config = ConfigV3()
+config = Config()

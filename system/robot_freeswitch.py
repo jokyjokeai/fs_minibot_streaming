@@ -1,29 +1,28 @@
 """
-RobotFreeSWITCH V3 - MODE FICHIER + BARGE-IN VAD
-=================================================
+RobotFreeSWITCH - Robot d'appels automatisés intelligent
+=========================================================
 
-Version V3 avec mode fichier fiable et barge-in VAD:
+Robot d'appels avec IA conversationnelle, barge-in VAD et mode fichier:
 
-Changements V3 (refonte complète):
-- ✅ MODE FICHIER: Enregistrement + transcription (comme Asterisk)
+Fonctionnalités principales:
+- ✅ MODE FICHIER: Enregistrement + transcription (fiable et robuste)
 - ✅ BARGE-IN VAD: Détection parole >= 2.5s SANS transcription
-- ✅ Transcription avec GROS modèle Vosk (meilleure qualité)
-- ❌ SUPPRIMÉ: Streaming temps réel (trop instable)
+- ✅ Transcription avec modèle Vosk large (meilleure qualité)
 - ✅ Workflow simple: Enregistrer → Détecter VAD → Transcrire si besoin
-- ✅ Fiable et rapide
+- ✅ AMD (Answering Machine Detection)
+- ✅ Gestion objections autonome
 
-Architecture simplifiée:
+Architecture:
     1. ESL Connection Management (dual connections)
     2. Call Thread Management (one thread per call)
     3. Audio Playback System (uuid_broadcast)
     4. Audio Recording System (uuid_record) + VAD barge-in
-    5. Speech Recognition (Vosk fichier - gros modèle)
+    5. Speech Recognition (Vosk fichier)
     6. NLP Intent Analysis (Ollama)
     7. Scenario Execution Engine
-    8. Autonomous Agent Mode (objections handler) ← CONSERVÉ
+    8. Autonomous Agent Mode (objections handler)
 
 Author: MiniBotPanel Team
-Version: 3.0.0
 Date: 2025-11-10
 """
 
@@ -57,9 +56,9 @@ try:
 except ImportError:
     VAD_AVAILABLE = False
 
-# Scenario & Config V3
+# Scenario & Config
 from system.scenarios import ScenarioManager
-from system.config_v3 import config  # ← V3
+from system.config import config
 
 # Database
 from system.database import SessionLocal
@@ -79,13 +78,13 @@ logger = get_logger(__name__)
 
 
 # ============================================================================
-# V3: DATACLASSES & BARGE-IN DETECTOR
+# DATACLASSES & BARGE-IN DETECTOR
 # ============================================================================
 
 @dataclass
 class CallState:
     """
-    V3: État immutable d'un appel
+    État immutable d'un appel
 
     Permet tracking propre sans variables globales éparpillées.
     """
@@ -102,7 +101,7 @@ class CallState:
 
 class BargeInDetector:
     """
-    V3: Détecteur de barge-in ULTRA SIMPLE
+    Détecteur de barge-in ULTRA SIMPLE
 
     Une seule règle:
     - PLAYING_AUDIO + durée >= 2.5s + pas grace period = BARGE-IN
@@ -154,28 +153,24 @@ class BargeInDetector:
             return False
 
 
-class RobotFreeSwitchV3:
+class RobotFreeSWITCH:
     """
-    Robot FreeSWITCH V3 - Version simplifiée et optimisée
+    Robot FreeSWITCH - Version optimisée mode fichier + VAD
 
-    Changements V3:
-    - Barge-in ultra simple (durée >= 2s)
-    - Pas de race conditions (durée incluse dans événements)
-    - Pas de crash Vosk (reset_recognizer supprimé)
-    - Logs debug détaillés
-
-    Conserve:
-    - Transcription temps réel (streaming V3)
+    Fonctionnalités:
+    - Barge-in VAD (détection parole >= 2.5s)
+    - Transcription fichier avec modèle Vosk large
     - Analyse NLP avec Ollama
-    - Gestion objections/questions (mode autonome) ← ESSENTIEL
-    - Intent mapping classique
-    - AMD, barge-in, silences
+    - Gestion objections/questions (mode autonome)
+    - Intent mapping
+    - AMD (Answering Machine Detection)
+    - Smooth delay pour interruption naturelle
     """
 
     def __init__(self):
-        """Initialise le robot V3 et tous ses services"""
+        """Initialise le robot et tous ses services"""
         logger.info("="*60)
-        logger.info("🚀 RobotFreeSWITCH V3 - Initialization")
+        logger.info("🚀 RobotFreeSWITCH - Initialization")
         logger.info("="*60)
 
         if not ESL_AVAILABLE:
@@ -208,12 +203,12 @@ class RobotFreeSwitchV3:
         # === CALL SESSIONS (ex-call_sessions) ===
         self.call_sessions = {}  # {call_uuid: session_data}
 
-        # === V3: BARGE-IN DETECTOR ===
+        # === BARGE-IN DETECTOR ===
         self.barge_in_detector = BargeInDetector()
-        logger.info(f"✅ V3 BargeInDetector initialized (threshold: {BargeInDetector.DURATION_THRESHOLD}s)")
+        logger.info(f"✅ BargeInDetector initialized (threshold: {BargeInDetector.DURATION_THRESHOLD}s)")
 
         # === SERVICES INITIALIZATION ===
-        logger.info("🤖 Loading AI services V3...")
+        logger.info("🤖 Loading AI services...")
 
         # 1. Vosk STT (mode fichier - gros modèle)
         try:
@@ -1175,10 +1170,10 @@ class RobotFreeSwitchV3:
             return None
 
     # ============================================================================
-    # V3: _is_backchannel() SUPPRIMÉ
+    # NOTE: _is_backchannel() SUPPRIMÉ
     # ============================================================================
     # Cette méthode complexe a été remplacée par BargeInDetector.should_trigger()
-    # Avantages V3:
+    # Avantages:
     # - Logique simple et testable
     # - Pas de race conditions (durée fournie par événements)
     # - Pas de variables globales éparpillées

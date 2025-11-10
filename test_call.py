@@ -10,7 +10,7 @@ Utilise robot_freeswitch_v3.py avec:
 """
 import time
 import threading
-from system.robot_freeswitch_v3 import RobotFreeSwitchV3 as RobotFreeSWITCH
+from system.robot_freeswitch import RobotFreeSWITCH
 
 def main():
     print("="*60)
