@@ -880,10 +880,10 @@ class RobotFreeSWITCH:
     
             logger.debug(f"[{call_uuid[:8]}] VAD monitoring started on {Path(record_file).name}")
     
-            # Config VAD
-            sample_rate = 16000  # uuid_record en 16kHz
+            # Config VAD - FreeSWITCH enregistre en 8kHz (codec natif du call)
+            sample_rate = 8000  # uuid_record utilise codec du canal (PCMA 8kHz)
             frame_duration_ms = 30  # 30ms frames
-            frame_size = int(sample_rate * frame_duration_ms / 1000)  # 480 samples
+            frame_size = int(sample_rate * frame_duration_ms / 1000)  # 240 samples @ 8kHz
             bytes_per_frame = frame_size * 2  # 16-bit = 2 bytes
     
             # État VAD
