@@ -25,7 +25,8 @@ BASE_DIR = Path(__file__).parent.parent
 AUDIO_DIR = BASE_DIR / "audio"
 LOGS_DIR = BASE_DIR / "logs"
 EXPORTS_DIR = BASE_DIR / "exports"
-RECORDINGS_DIR = BASE_DIR / "recordings"
+# FreeSWITCH doit avoir les permissions d'écriture
+RECORDINGS_DIR = Path("/tmp/minibot_recordings")
 
 # Audio FreeSWITCH
 FREESWITCH_SOUNDS_DIR = Path(os.getenv(
