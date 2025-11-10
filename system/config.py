@@ -111,7 +111,7 @@ WEBSOCKET_PORT = int(os.getenv("WEBSOCKET_PORT", "8080"))
 # MODE 1: AMD (Answering Machine Detection)
 # Objectif: Détecter HUMAN vs MACHINE rapidement
 # Comportement: Transcrire TOUT (même "allô", bip, silence), pas de seuil minimum
-AMD_TIMEOUT = 2.5  # secondes (optimisé: 0.5s plus rapide que 3.0s, reste safe)
+AMD_TIMEOUT = 2.0  # secondes (optimisé: ultra-rapide, test incrémental si trop court)
 AMD_MIN_SPEECH_DURATION = 0.3  # secondes - Détecter dès 300ms de parole
 AMD_TRANSCRIBE_ALL = True  # Tout transcrire pour NLP
 
@@ -203,7 +203,7 @@ class Config:
     WEBSOCKET_PORT = WEBSOCKET_PORT
 
     # VAD Modes (3 comportements distincts)
-    # Mode 1: AMD
+    # Mode 1: AMD (2.0s optimisé)
     AMD_TIMEOUT = AMD_TIMEOUT
     AMD_MIN_SPEECH_DURATION = AMD_MIN_SPEECH_DURATION
     AMD_TRANSCRIBE_ALL = AMD_TRANSCRIBE_ALL
