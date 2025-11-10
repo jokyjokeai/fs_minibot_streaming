@@ -43,6 +43,7 @@ except ImportError:
 
 # Services V3
 from system.services.vosk_stt import VoskSTT
+from system.services.faster_whisper_stt import FasterWhisperSTT
 from system.services.ollama_nlp import OllamaNLP
 from system.services.amd_service import AMDService
 # StreamingASR V3 SUPPRIMÉ - Mode fichier uniquement
@@ -210,13 +211,32 @@ class RobotFreeSWITCH:
         # === SERVICES INITIALIZATION ===
         logger.info("🤖 Loading AI services...")
 
-        # 1. Vosk STT (mode fichier - gros modèle)
+        # 1. STT Service (Faster-Whisper primary, Vosk fallback)
         try:
-            self.stt_service = VoskSTT()
-            logger.info("✅ Vosk STT loaded (file mode with large model)")
+            if config.STT_ENGINE == "faster_whisper":
+                logger.info("🚀 Loading Faster-Whisper STT (primary - GPU accelerated)...")
+                self.stt_service = FasterWhisperSTT(
+                    model_name=config.FASTER_WHISPER_MODEL,
+                    device=config.FASTER_WHISPER_DEVICE,
+                    compute_type=config.FASTER_WHISPER_COMPUTE_TYPE
+                )
+                if self.stt_service.is_available:
+                    logger.info(f"✅ Faster-Whisper STT loaded (model: {config.FASTER_WHISPER_MODEL}, device: {self.stt_service.device})")
+                else:
+                    raise Exception("Faster-Whisper not available")
+            else:
+                logger.info("🔄 Loading Vosk STT (config: STT_ENGINE=vosk)...")
+                self.stt_service = VoskSTT()
+                logger.info("✅ Vosk STT loaded (file mode with large model)")
         except Exception as e:
-            logger.error(f"❌ Failed to load Vosk STT: {e}")
-            self.stt_service = None
+            logger.warning(f"⚠️ Failed to load {config.STT_ENGINE}: {e}")
+            logger.info("🔄 Falling back to Vosk STT...")
+            try:
+                self.stt_service = VoskSTT()
+                logger.info("✅ Vosk STT loaded (fallback)")
+            except Exception as e2:
+                logger.error(f"❌ All STT engines failed: {e2}")
+                self.stt_service = None
 
         # 2. Ollama NLP
         try:

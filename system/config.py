@@ -76,7 +76,15 @@ FREESWITCH_CALLER_ID = os.getenv("FREESWITCH_CALLER_ID", "33609907845")
 # ============================================================================
 # IA SERVICES
 # ============================================================================
-# Vosk STT
+# STT Engine Selection
+STT_ENGINE = os.getenv("STT_ENGINE", "faster_whisper")  # "faster_whisper" or "vosk"
+
+# Faster-Whisper STT (Primary - GPU accelerated)
+FASTER_WHISPER_MODEL = os.getenv("FASTER_WHISPER_MODEL", "base")  # tiny, base, small, medium
+FASTER_WHISPER_DEVICE = os.getenv("FASTER_WHISPER_DEVICE", "auto")  # auto, cuda, cpu
+FASTER_WHISPER_COMPUTE_TYPE = os.getenv("FASTER_WHISPER_COMPUTE_TYPE", "auto")  # auto, float16, int8
+
+# Vosk STT (Fallback)
 VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "models/vosk-model-fr-0.6-linto-2.2.0")
 VOSK_SAMPLE_RATE = int(os.getenv("VOSK_SAMPLE_RATE", "16000"))
 
@@ -183,9 +191,15 @@ class Config:
     FREESWITCH_GATEWAY = FREESWITCH_GATEWAY
     FREESWITCH_CALLER_ID = FREESWITCH_CALLER_ID
 
-    # IA Services
+    # IA Services - STT
+    STT_ENGINE = STT_ENGINE
+    FASTER_WHISPER_MODEL = FASTER_WHISPER_MODEL
+    FASTER_WHISPER_DEVICE = FASTER_WHISPER_DEVICE
+    FASTER_WHISPER_COMPUTE_TYPE = FASTER_WHISPER_COMPUTE_TYPE
     VOSK_MODEL_PATH = VOSK_MODEL_PATH
     VOSK_SAMPLE_RATE = VOSK_SAMPLE_RATE
+
+    # IA Services - NLP
     OLLAMA_URL = OLLAMA_URL
     OLLAMA_MODEL = OLLAMA_MODEL
     OLLAMA_TIMEOUT = OLLAMA_TIMEOUT

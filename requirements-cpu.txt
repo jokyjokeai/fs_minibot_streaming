@@ -32,9 +32,10 @@ safetensors
 tokenizers
 
 # ============================================
-# SPEECH-TO-TEXT (Vosk)
+# SPEECH-TO-TEXT (Vosk + Faster-Whisper)
 # ============================================
-vosk==0.3.45
+vosk==0.3.45  # Fallback CPU-only STT
+faster-whisper==1.1.0  # Primary STT (supports CPU with int8 compute)
 soundfile==0.12.1
 webrtcvad==2.0.10
 websockets>=12.0
@@ -97,3 +98,9 @@ phonenumbers==8.13.27
 # AJOUTÉ:
 #   - websockets → Streaming ASR temps réel
 #   - ollama → NLP/Intent classification
+#   - faster-whisper → STT amélioré (meilleure qualité que Vosk)
+#
+# FASTER-WHISPER vs VOSK:
+#   Faster-Whisper (primary): Meilleure qualité, support CPU avec int8 compute
+#   Vosk (fallback): Robuste et rapide, utilisé si Faster-Whisper fail
+#   Changement engine: STT_ENGINE=vosk ou STT_ENGINE=faster_whisper dans .env
