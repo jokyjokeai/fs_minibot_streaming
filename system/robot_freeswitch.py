@@ -811,10 +811,10 @@ class RobotFreeSWITCH:
 
             logger.info(f"[{call_uuid[:8]}] 🎬 PLAYING_AUDIO (duration: {audio_duration:.1f}s, barge-in if >= {config.PLAYING_BARGE_IN_THRESHOLD}s)")
 
-            # 1. DÉSACTIVER temporairement RTP timeout pendant playback
-            # (évite disconnects pendant que robot parle)
-            self.esl_conn_api.api(f"uuid_setvar {call_uuid} rtp_timeout_sec 0")
-            logger.debug(f"[{call_uuid[:8]}] RTP timeout disabled for playback")
+            # 1. ACTIVER RTP timeout pendant playback (30s = assez pour audios longs)
+            # Note: 30s permet de détecter hangup client tout en évitant timeout pendant audios longs
+            self.esl_conn_api.api(f"uuid_setvar {call_uuid} rtp_timeout_sec 30")
+            logger.debug(f"[{call_uuid[:8]}] RTP timeout set to 30s for playback")
 
             # 2. Lancer uuid_broadcast (robot parle)
             cmd = f"uuid_broadcast {call_uuid} {audio_file} aleg"
