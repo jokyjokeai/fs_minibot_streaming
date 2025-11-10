@@ -704,30 +704,48 @@ class RobotFreeSWITCH:
 
     def _is_channel_alive(self, call_uuid: str) -> bool:
         """
-        Vérifie si le canal FreeSWITCH existe encore (client pas raccroché)
+        Vérifie si le canal FreeSWITCH existe encore ET est actif (client pas raccroché)
+
+        PROBLÈME: Avec rtp_timeout_sec=0, FreeSWITCH ne détecte pas hangup client via RTP
+        SOLUTION: Vérifier channel_state (CS_HANGUP/CS_REPORTING = en cours de hangup)
 
         Args:
             call_uuid: UUID de l'appel
 
         Returns:
-            True si canal existe, False si raccroché
+            True si canal existe ET actif, False si raccroché ou en hangup
         """
         if not self.esl_conn_api or not self.esl_conn_api.connected():
-            logger.debug(f"[{call_uuid[:8]}] Channel check: ESL not connected")
             return False
 
         try:
-            result = self.esl_conn_api.api(f"uuid_exists {call_uuid}")
-            if result:
-                body = result.getBody()
-                # uuid_exists retourne "true" si existe, "false" si n'existe pas
-                is_alive = body.strip().lower() == "true"
-                logger.debug(f"[{call_uuid[:8]}] Channel check: uuid_exists={body.strip()} → {is_alive}")
-                return is_alive
-            logger.debug(f"[{call_uuid[:8]}] Channel check: No result from uuid_exists")
-            return False
+            # Vérifier channel_state (état du channel)
+            state_result = self.esl_conn_api.api(f"uuid_getvar {call_uuid} channel_state")
+            if not state_result:
+                return False
+
+            state = state_result.getBody().strip()
+
+            # States possibles:
+            # CS_NEW, CS_INIT, CS_ROUTING, CS_SOFT_EXECUTE, CS_EXECUTE,
+            # CS_EXCHANGE_MEDIA, CS_PARK, CS_CONSUME_MEDIA,
+            # CS_HIBERNATE, CS_RESET, CS_HANGUP, CS_REPORTING, CS_DESTROY
+
+            # Si state est HANGUP ou REPORTING → Channel est en train de se terminer
+            if state in ["CS_HANGUP", "CS_REPORTING", "CS_DESTROY"]:
+                logger.info(f"[{call_uuid[:8]}] 🔍 Channel check: state={state} → Hanging up")
+                return False
+
+            # Si erreur (channel n'existe pas)
+            if "-ERR" in state or not state:
+                logger.info(f"[{call_uuid[:8]}] 🔍 Channel check: state={state} → Channel gone")
+                return False
+
+            # Channel actif
+            return True
+
         except Exception as e:
-            logger.debug(f"[{call_uuid[:8]}] Channel check error: {e}")
+            logger.warning(f"[{call_uuid[:8]}] 🔍 Channel check error: {e}")
             return False
 
 
@@ -769,7 +787,12 @@ class RobotFreeSWITCH:
 
             logger.info(f"[{call_uuid[:8]}] 🎬 PLAYING_AUDIO (duration: {audio_duration:.1f}s, barge-in if >= {config.PLAYING_BARGE_IN_THRESHOLD}s)")
 
-            # 1. Lancer uuid_broadcast (robot parle)
+            # 1. DÉSACTIVER temporairement RTP timeout pendant playback
+            # (évite disconnects pendant que robot parle)
+            self.esl_conn_api.api(f"uuid_setvar {call_uuid} rtp_timeout_sec 0")
+            logger.debug(f"[{call_uuid[:8]}] RTP timeout disabled for playback")
+
+            # 2. Lancer uuid_broadcast (robot parle)
             cmd = f"uuid_broadcast {call_uuid} {audio_file} aleg"
             logger.debug(f"[{call_uuid[:8]}] Sending: {cmd}")
 
@@ -1407,6 +1430,11 @@ class RobotFreeSWITCH:
         try:
             import wave
             import struct
+
+            # ACTIVER RTP timeout pendant WAITING (détection hangup client)
+            # 10s sans RTP = client a raccroché
+            self.esl_conn_api.api(f"uuid_setvar {call_uuid} rtp_timeout_sec 10")
+            logger.debug(f"[{call_uuid[:8]}] RTP timeout enabled (10s) for hangup detection")
 
             # Attendre que fichier existe
             wait_start = time.time()
