@@ -469,9 +469,9 @@ class RobotFreeSWITCH:
                 "ignore_early_media": "true",
             }
 
-            # Caller ID optionnel (si défini dans config)
-            if hasattr(config, 'CALLER_ID_NUMBER'):
-                variables["origination_caller_id_number"] = config.CALLER_ID_NUMBER
+            # Caller ID (numéro émetteur)
+            if hasattr(config, 'FREESWITCH_CALLER_ID'):
+                variables["origination_caller_id_number"] = config.FREESWITCH_CALLER_ID
             
             var_string = ",".join([f"{k}='{v}'" for k, v in variables.items()])
             
