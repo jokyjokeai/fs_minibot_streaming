@@ -1690,45 +1690,38 @@ class RobotFreeSWITCH:
                                     elapsed = time.time() - start_time
                                     logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: 🗣️ Speech START detected (at T+{elapsed:.1f}s)")
 
-                                    # ========== EXPERIMENTAL: START TRANSCRIPTION IN BACKGROUND ==========
-                                    # Launch transcription thread AFTER 0.5s of speech
-                                    # Thread transcribes incrementally and updates result
+                                    # ========== PHASE 2: START TRANSCRIPTION IN BACKGROUND (32KB PROTECTION) ==========
+                                    # Launch transcription thread at speech START
+                                    # Thread waits for 32KB minimum data before transcribing (avoids "fmt chunk missing")
                                     # Main thread continues VAD, uses thread result when ready
-                                    # Expected gain: ~0.3-0.5s (transcription overlaps with end of speech)
+                                    # Expected gain: ~0.2-0.4s for long responses (>=2s speech)
                                     if config.CONTINUOUS_TRANSCRIPTION_ENABLED:
                                         def background_transcription():
                                             try:
-                                                # FIX: Wait 1.0s for FreeSWITCH to write enough data + finalize header
-                                                # BEFORE: 0.5s was too short, caused "fmt chunk missing" errors
-                                                time.sleep(1.0)
-
-                                                # Monitor recording: transcribe when stable
-                                                last_size = 0
-                                                stable_count = 0
-
-                                                while True:
-                                                    if not Path(record_file).exists():
-                                                        time.sleep(0.1)
-                                                        continue
-
-                                                    current_size = Path(record_file).stat().st_size
-
-                                                    # FIX: Increased stability checks (3 instead of 2) and min size (8KB instead of 1KB)
-                                                    # More reliable detection of recording completion
-                                                    if current_size == last_size and current_size > 8192:
-                                                        stable_count += 1
-                                                        if stable_count >= 3:
-                                                            # Recording stopped, transcribe now
-                                                            time.sleep(0.1)  # Minimal wait for WAV header
-                                                            result = self._transcribe_file(call_uuid, record_file)
-                                                            transcription_result["text"] = result
-                                                            logger.debug(f"[{call_uuid[:8]}] 🧵 Background transcription completed: '{result[:50] if result else 'empty'}...'")
-                                                            break
-                                                    else:
-                                                        stable_count = 0
-                                                        last_size = current_size
-
+                                                # Protection 1: Wait for file existence
+                                                while not Path(record_file).exists():
                                                     time.sleep(0.1)
+
+                                                # Protection 2: Wait for 32KB minimum (≈2s audio @ 8kHz mono)
+                                                # Ensures FreeSWITCH has written valid WAV header + sufficient data
+                                                # Prevents "fmt chunk and/or data chunk missing" error
+                                                min_size = 32768  # 32KB
+                                                max_wait = 5.0    # 5s timeout (if end-of-speech before 32KB, main thread does sync)
+                                                start_wait = time.time()
+
+                                                while Path(record_file).stat().st_size < min_size:
+                                                    if time.time() - start_wait > max_wait:
+                                                        # Timeout: speech probably < 2s
+                                                        # Main thread will do sync transcription
+                                                        logger.debug(f"[{call_uuid[:8]}] 🧵 Background thread timeout (file < 32KB), main thread will handle")
+                                                        return
+                                                    time.sleep(0.1)
+
+                                                # File has >= 32KB, safe to transcribe
+                                                logger.debug(f"[{call_uuid[:8]}] 🧵 File >= 32KB, starting background transcription")
+                                                result = self._transcribe_file(call_uuid, record_file)
+                                                transcription_result["text"] = result
+                                                logger.debug(f"[{call_uuid[:8]}] 🧵 Background transcription completed: '{result[:50] if result else 'empty'}...'")
 
                                             except Exception as e:
                                                 logger.error(f"[{call_uuid[:8]}] 🧵 Background transcription error: {e}")
@@ -1736,8 +1729,8 @@ class RobotFreeSWITCH:
 
                                         transcription_thread = threading.Thread(target=background_transcription, daemon=True)
                                         transcription_thread.start()
-                                        logger.debug(f"[{call_uuid[:8]}] 🧵 Started background transcription thread")
-                                    # ========== EXPERIMENTAL END ==========
+                                        logger.debug(f"[{call_uuid[:8]}] 🧵 Started background transcription thread (Phase 2 - 32KB protection)")
+                                    # ========== PHASE 2 END ==========
 
                                 last_speech_time = time.time()
 
