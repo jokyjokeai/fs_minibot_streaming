@@ -1765,8 +1765,7 @@ class RobotFreeSWITCH:
                                                 # Thread failed, fallback to sync transcription
                                                 logger.warning(f"[{call_uuid[:8]}] ⚠️ Background thread failed: {transcription_result['error']}")
                                                 logger.info(f"[{call_uuid[:8]}] 🔄 Falling back to synchronous transcription")
-                                                # FIX: Wait longer for FreeSWITCH to finalize WAV header (was 0.1s, now 0.5s)
-                                                time.sleep(0.5)
+                                                # No sleep needed: faster_whisper_stt.py has retry logic with progressive backoff
                                                 transcription = self._transcribe_file(call_uuid, record_file)
                                                 logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
                                                 return transcription
@@ -1774,23 +1773,14 @@ class RobotFreeSWITCH:
                                                 # Thread timeout, fallback to sync
                                                 logger.warning(f"[{call_uuid[:8]}] ⚠️ Background thread timeout")
                                                 logger.info(f"[{call_uuid[:8]}] 🔄 Falling back to synchronous transcription")
-                                                # FIX: Wait longer for FreeSWITCH to finalize WAV header (was 0.1s, now 0.5s)
-                                                time.sleep(0.5)
+                                                # No sleep needed: faster_whisper_stt.py has retry logic with progressive backoff
                                                 transcription = self._transcribe_file(call_uuid, record_file)
                                                 logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
                                                 return transcription
                                         else:
-                                            # Original path: synchronous transcription
-                                            # ========== EXPERIMENTAL: REDUCED SLEEP FOR LATENCY ==========
-                                            # BEFORE: sleep(0.5) - wait for FreeSWITCH to finalize WAV header
-                                            # NOW: sleep(0.1) - FreeSWITCH writes in real-time, minimal wait needed
-                                            # Expected gain: ~0.3-0.4s per interaction
-                                            # Can be reverted to 0.5 if WAV header issues detected
-                                            if config.CONTINUOUS_TRANSCRIPTION_ENABLED:
-                                                time.sleep(0.1)  # Optimized latency
-                                            else:
-                                                time.sleep(0.5)  # Safe fallback
-                                            # ========== EXPERIMENTAL: REDUCED SLEEP END ==========
+                                            # Original path: synchronous transcription (no background thread)
+                                            # No sleep needed: faster_whisper_stt.py has retry logic with progressive backoff (0.5s, 1.0s, 1.5s)
+                                            # This ensures WAV header is finalized without hardcoded sleep here
 
                                             # Transcrire fichier complet
                                             transcription = self._transcribe_file(call_uuid, record_file)
@@ -1825,15 +1815,13 @@ class RobotFreeSWITCH:
                         return transcription_result["text"]
                     else:
                         logger.warning(f"[{call_uuid[:8]}] ⚠️ Background thread not ready, using sync transcription")
-                        # FIX: Wait longer for FreeSWITCH to finalize WAV header (was 0.1s, now 0.5s)
-                        time.sleep(0.5)
+                        # No sleep needed: faster_whisper_stt.py has retry logic with progressive backoff
                         transcription = self._transcribe_file(call_uuid, record_file)
                         logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
                         return transcription
                 else:
-                    # Original path
-                    # FIX: Always wait 0.5s for FreeSWITCH to finalize WAV header (was 0.1s optimization)
-                    time.sleep(0.5)
+                    # Original path (CONTINUOUS_TRANSCRIPTION_ENABLED=false)
+                    # No sleep needed: faster_whisper_stt.py has retry logic with progressive backoff
                     transcription = self._transcribe_file(call_uuid, record_file)
                     logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
                     return transcription

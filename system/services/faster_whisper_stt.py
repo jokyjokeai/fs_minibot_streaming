@@ -265,11 +265,30 @@ class FasterWhisperSTT:
 
             start_time = time.time()
 
-            # Vérifier format audio
-            wf = wave.open(str(audio_path), "rb")
-            num_channels = wf.getnchannels()
-            sample_rate = wf.getframerate()
-            wf.close()
+            # Vérifier format audio avec retry (FreeSWITCH peut prendre du temps pour finaliser header WAV)
+            num_channels = None
+            sample_rate = None
+            max_retries = 3
+            retry_delays = [0.5, 1.0, 1.5]  # Progressive backoff
+
+            for retry in range(max_retries):
+                try:
+                    wf = wave.open(str(audio_path), "rb")
+                    num_channels = wf.getnchannels()
+                    sample_rate = wf.getframerate()
+                    wf.close()
+                    break  # Success
+                except wave.Error as e:
+                    if retry < max_retries - 1:
+                        delay = retry_delays[retry]
+                        logger.warning(f"WAV header not ready (attempt {retry + 1}/{max_retries}), waiting {delay}s: {e}")
+                        time.sleep(delay)
+                    else:
+                        logger.error(f"WAV header still invalid after {max_retries} retries: {e}")
+                        raise
+
+            if num_channels is None or sample_rate is None:
+                return {"text": "", "confidence": 0.0, "error": "Failed to read WAV header"}
 
             # Log info audio
             logger.debug(f"Audio: {num_channels}ch, {sample_rate}Hz, {audio_path.name}")
