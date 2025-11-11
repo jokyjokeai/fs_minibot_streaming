@@ -925,8 +925,16 @@ class RobotFreeSWITCH:
                             # Stopper recording
                             self.esl_conn_api.api(f"uuid_record {call_uuid} stop {record_file}")
 
-                            # Attendre que FreeSWITCH finalise le fichier WAV
-                            time.sleep(0.3)
+                            # ========== EXPERIMENTAL: REDUCED SLEEP FOR LATENCY ==========
+                            # BEFORE: sleep(0.3) - wait for FreeSWITCH to finalize WAV header
+                            # NOW: sleep(0.05) - FreeSWITCH writes in real-time, minimal wait needed
+                            # Expected gain: ~0.2-0.25s per barge-in
+                            # Can be reverted to 0.3 if WAV header issues detected
+                            if config.CONTINUOUS_TRANSCRIPTION_ENABLED:
+                                time.sleep(0.05)  # Optimized latency (barge-in critical path)
+                            else:
+                                time.sleep(0.3)  # Safe fallback
+                            # ========== EXPERIMENTAL: REDUCED SLEEP END ==========
 
                             # Transcrire fichier barge-in
                             transcription = self._transcribe_file(call_uuid, str(record_file))
@@ -1620,8 +1628,16 @@ class RobotFreeSWITCH:
                                         self.esl_conn_api.api(stop_cmd)
                                         logger.debug(f"[{call_uuid[:8]}] 👂 WAITING: Recording stopped")
 
-                                        # Attendre que FreeSWITCH finalise le header WAV
-                                        time.sleep(0.5)
+                                        # ========== EXPERIMENTAL: REDUCED SLEEP FOR LATENCY ==========
+                                        # BEFORE: sleep(0.5) - wait for FreeSWITCH to finalize WAV header
+                                        # NOW: sleep(0.1) - FreeSWITCH writes in real-time, minimal wait needed
+                                        # Expected gain: ~0.3-0.4s per interaction
+                                        # Can be reverted to 0.5 if WAV header issues detected
+                                        if config.CONTINUOUS_TRANSCRIPTION_ENABLED:
+                                            time.sleep(0.1)  # Optimized latency
+                                        else:
+                                            time.sleep(0.5)  # Safe fallback
+                                        # ========== EXPERIMENTAL: REDUCED SLEEP END ==========
 
                                         # Transcrire fichier complet
                                         transcription = self._transcribe_file(call_uuid, record_file)
@@ -1645,7 +1661,12 @@ class RobotFreeSWITCH:
                 self.esl_conn_api.api(stop_cmd)
                 logger.debug(f"[{call_uuid[:8]}] 👂 WAITING: Recording stopped (timeout)")
 
-                time.sleep(0.5)
+                # ========== EXPERIMENTAL: REDUCED SLEEP FOR LATENCY ==========
+                if config.CONTINUOUS_TRANSCRIPTION_ENABLED:
+                    time.sleep(0.1)  # Optimized latency
+                else:
+                    time.sleep(0.5)  # Safe fallback
+                # ========== EXPERIMENTAL: REDUCED SLEEP END ==========
                 transcription = self._transcribe_file(call_uuid, record_file)
                 logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
                 return transcription

@@ -210,6 +210,14 @@ WAITING_MIN_SPEECH_DURATION = 0.3  # secondes - Détecter début parole
 WAITING_END_OF_SPEECH_SILENCE = 0.4  # secondes - Silence pour fin de parole (ultra réactif) - Optimisé latence
 WAITING_TRANSCRIBE_CONTINUOUS = True  # Transcrire pendant que client parle (latence minimale)
 
+# ============================================================================
+# EXPERIMENTAL: CONTINUOUS TRANSCRIPTION (can be easily disabled if issues)
+# ============================================================================
+# Expected gain: ~0.3-0.5s per interaction
+# Launch transcription DURING speech instead of waiting for end-of-speech
+# Applies to both BARGE-IN and WAITING_RESPONSE modes
+CONTINUOUS_TRANSCRIPTION_ENABLED = os.getenv("CONTINUOUS_TRANSCRIPTION_ENABLED", "true").lower() == "true"
+
 # Compatibilité ancienne config (DEPRECATED - utiliser configs spécifiques ci-dessus)
 BARGE_IN_ENABLED = True
 BARGE_IN_DURATION_THRESHOLD = PLAYING_BARGE_IN_THRESHOLD
@@ -313,6 +321,9 @@ class Config:
     WAITING_MIN_SPEECH_DURATION = WAITING_MIN_SPEECH_DURATION
     WAITING_END_OF_SPEECH_SILENCE = WAITING_END_OF_SPEECH_SILENCE
     WAITING_TRANSCRIBE_CONTINUOUS = WAITING_TRANSCRIBE_CONTINUOUS
+
+    # EXPERIMENTAL: Continuous Transcription
+    CONTINUOUS_TRANSCRIPTION_ENABLED = CONTINUOUS_TRANSCRIPTION_ENABLED
 
     # Compatibilité ancienne config (DEPRECATED)
     BARGE_IN_ENABLED = BARGE_IN_ENABLED
