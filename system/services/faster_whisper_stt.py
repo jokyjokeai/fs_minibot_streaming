@@ -268,8 +268,8 @@ class FasterWhisperSTT:
             # Vérifier format audio avec retry (FreeSWITCH peut prendre du temps pour finaliser header WAV)
             num_channels = None
             sample_rate = None
-            max_retries = 3
-            retry_delays = [0.5, 1.0, 1.5]  # Progressive backoff
+            max_retries = 2  # Réduit de 3→2 pour réactivité (0.5s + 1.0s = 1.5s max au lieu de 3.0s)
+            retry_delays = [0.5, 1.0]  # Progressive backoff
 
             for retry in range(max_retries):
                 try:
@@ -284,7 +284,7 @@ class FasterWhisperSTT:
                         logger.warning(f"WAV header not ready (attempt {retry + 1}/{max_retries}), waiting {delay}s: {e}")
                         time.sleep(delay)
                     else:
-                        logger.error(f"WAV header still invalid after {max_retries} retries: {e}")
+                        logger.error(f"WAV header still invalid after {max_retries} retries ({sum(retry_delays)}s total wait): {e}")
                         raise
 
             if num_channels is None or sample_rate is None:
