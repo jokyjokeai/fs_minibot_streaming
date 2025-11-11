@@ -1572,6 +1572,98 @@ class RobotFreeSWITCH:
         except Exception as e:
             logger.error(f"[{call_uuid[:8]}] PLAYING VAD error: {e}", exc_info=True)
 
+    def _background_transcribe_with_retry(
+        self,
+        call_uuid: str,
+        record_file: str,
+        result_dict: dict,
+        thread_start_time: float
+    ):
+        """
+        Phase 2: Background transcription avec retry progressif (exponential backoff + jitter).
+
+        Lance la transcription en background pendant que le client parle.
+        Utilise retry intelligent pour gérer le timing header WAV FreeSWITCH.
+
+        Stratégie:
+        - Tentative 1: 50ms (détection rapide si WAV prêt)
+        - Tentative 2: 150ms (header peut prendre du temps)
+        - Tentative 3: 300ms (fallback avant timeout)
+        - Jitter ±20% pour éviter synchronisation
+        - Timeout total: ~500ms avant abandon
+
+        Args:
+            call_uuid: UUID appel
+            record_file: Chemin fichier recording
+            result_dict: Dict partagé pour résultat {"text": str, "error": str}
+            thread_start_time: Timestamp démarrage thread (pour logs performance)
+        """
+        import os
+        import random
+        import wave
+
+        MIN_FILE_SIZE = 8192  # 8KB minimum (garantit header + ~200ms audio 16kHz)
+        RETRY_DELAYS = [0.05, 0.15, 0.3]  # 50ms, 150ms, 300ms
+        JITTER_FACTOR = 0.2  # ±20%
+
+        logger.debug(f"[{call_uuid[:8]}] 🧵 Background transcription thread started")
+
+        try:
+            for attempt, base_delay in enumerate(RETRY_DELAYS, 1):
+                # Exponential backoff avec jitter
+                jitter = base_delay * JITTER_FACTOR * (random.random() * 2 - 1)
+                delay = base_delay + jitter
+                time.sleep(delay)
+
+                elapsed_thread = time.time() - thread_start_time
+                logger.debug(f"[{call_uuid[:8]}] 🧵 Retry {attempt}/{len(RETRY_DELAYS)} (delay: {delay*1000:.0f}ms, elapsed: {elapsed_thread*1000:.0f}ms)")
+
+                # Vérifier taille fichier (protection header incomplet)
+                try:
+                    file_size = os.path.getsize(record_file)
+                except OSError:
+                    logger.debug(f"[{call_uuid[:8]}] 🧵 File not found yet, retrying...")
+                    continue
+
+                if file_size < MIN_FILE_SIZE:
+                    logger.debug(f"[{call_uuid[:8]}] 🧵 File too small ({file_size} < {MIN_FILE_SIZE} bytes), retrying...")
+                    continue
+
+                # Tenter ouverture WAV (test header validité)
+                try:
+                    wf = wave.open(record_file, 'rb')
+                    num_channels = wf.getnchannels()
+                    sample_rate = wf.getframerate()
+                    wf.close()
+
+                    logger.debug(f"[{call_uuid[:8]}] 🧵 WAV header valid ({num_channels}ch, {sample_rate}Hz, {file_size} bytes)")
+
+                    # Header valide, lancer transcription!
+                    transcribe_start = time.time()
+                    transcription = self._transcribe_file(call_uuid, record_file)
+                    transcribe_time = time.time() - transcribe_start
+
+                    total_thread_time = time.time() - thread_start_time
+                    logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: Background thread total: {total_thread_time:.3f}s (wait: {elapsed_thread:.3f}s + transcribe: {transcribe_time:.3f}s)")
+                    logger.info(f"[{call_uuid[:8]}] 🧵 ✅ Background transcription SUCCESS: '{transcription[:50]}{'...' if len(transcription) > 50 else ''}'")
+
+                    result_dict["text"] = transcription
+                    return  # Succès!
+
+                except wave.Error as e:
+                    logger.debug(f"[{call_uuid[:8]}] 🧵 WAV header invalid: {e}, retrying...")
+                    continue
+
+            # Timeout après toutes les tentatives
+            total_thread_time = time.time() - thread_start_time
+            logger.warning(f"[{call_uuid[:8]}] 🧵 ⚠️ Background thread timeout after {len(RETRY_DELAYS)} retries ({total_thread_time:.3f}s)")
+            result_dict["error"] = "WAV_NOT_READY"
+
+        except Exception as e:
+            total_thread_time = time.time() - thread_start_time
+            logger.error(f"[{call_uuid[:8]}] 🧵 ❌ Background thread error: {e} ({total_thread_time:.3f}s)", exc_info=True)
+            result_dict["error"] = str(e)
+
     def _monitor_vad_waiting(self, call_uuid: str, record_file: str, timeout: float) -> Optional[str]:
         """
         MODE 3: WAITING_RESPONSE (End-of-speech detection)
@@ -1699,14 +1791,18 @@ class RobotFreeSWITCH:
                                     elapsed = time.time() - start_time
                                     logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: 🗣️ Speech START detected (at T+{elapsed:.1f}s)")
 
-                                    # ========== PHASE 2: START TRANSCRIPTION AT SPEECH END (OPTIMAL) ==========
-                                    # NOUVELLE APPROCHE: Démarrer transcription à END-OF-SPEECH (pas speech start)
-                                    # Avantages:
-                                    # - Fichier WAV toujours complet et finalisé (0 erreurs)
-                                    # - Pas de retry/wait (latence minimale)
-                                    # - Pas de gestion complexe 32KB/timeout
-                                    # Trade-off: Perte ~0.3s vs. background start, mais gain stabilité + vitesse totale
-                                    # ========== PHASE 2 END (disabled - will start at end-of-speech) ==========
+                                    # ========== PHASE 2: START BACKGROUND TRANSCRIPTION (ENABLED) ==========
+                                    # Démarrer transcription en background dès que le client commence à parler
+                                    # Gains attendus: 0.3-0.5s par interaction
+                                    if config.CONTINUOUS_TRANSCRIPTION_ENABLED and transcription_thread is None:
+                                        thread_start_time = time.time()
+                                        transcription_thread = threading.Thread(
+                                            target=self._background_transcribe_with_retry,
+                                            args=(call_uuid, record_file, transcription_result, thread_start_time)
+                                        )
+                                        transcription_thread.start()
+                                        logger.info(f"[{call_uuid[:8]}] 🧵 Background transcription thread launched at speech START")
+                                    # ========== PHASE 2 END ==========
 
                                 last_speech_time = time.time()
 
@@ -1735,34 +1831,58 @@ class RobotFreeSWITCH:
                                         logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: uuid_record stop: {stop_record_time:.3f}s")
                                         logger.debug(f"[{call_uuid[:8]}] 👂 WAITING: Recording stopped")
 
-                                        # ========== EXPERIMENTAL: USE BACKGROUND TRANSCRIPTION RESULT ==========
+                                        # ========== PHASE 2: USE BACKGROUND TRANSCRIPTION RESULT ==========
                                         if config.CONTINUOUS_TRANSCRIPTION_ENABLED and transcription_thread:
-                                            # FIX: Increased timeout to 5s (was 3s) to account for longer wait + transcription
+                                            # Attendre thread background (timeout 5s)
+                                            wait_thread_start = time.time()
                                             logger.debug(f"[{call_uuid[:8]}] 🧵 Waiting for background transcription...")
                                             transcription_thread.join(timeout=5.0)
+                                            wait_thread_time = time.time() - wait_thread_start
 
                                             if transcription_result["text"] is not None:
-                                                # Thread completed successfully
+                                                # Thread completed successfully - Gain Phase 2!
+                                                total_latency = time.time() - start_time
                                                 logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: ✅ Using background transcription result")
+                                                logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: Wait for thread: {wait_thread_time:.3f}s")
+                                                logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: TOTAL LATENCY (VAD+background): {total_latency:.3f}s")
+                                                logger.info(f"[{call_uuid[:8]}] 🚀 PHASE 2 SUCCESS: Background transcription completed during speech!")
                                                 return transcription_result["text"]
                                             elif transcription_result["error"]:
                                                 # Thread failed, fallback to sync transcription
                                                 logger.warning(f"[{call_uuid[:8]}] ⚠️ Background thread failed: {transcription_result['error']}")
                                                 logger.info(f"[{call_uuid[:8]}] 🔄 Falling back to synchronous transcription")
-                                                # No sleep needed: faster_whisper_stt.py has retry logic with progressive backoff
+                                                logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: Wait for thread (failed): {wait_thread_time:.3f}s")
+
+                                                # Fallback synchrone
+                                                transcribe_start = time.time()
                                                 transcription = self._transcribe_file(call_uuid, record_file)
+                                                transcribe_time = time.time() - transcribe_start
+                                                total_latency = time.time() - start_time
+
                                                 logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
+                                                logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: Fallback transcription: {transcribe_time:.3f}s")
+                                                logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: TOTAL LATENCY (VAD+fallback): {total_latency:.3f}s")
+                                                logger.info(f"[{call_uuid[:8]}] ⚠️ PHASE 2 FALLBACK: Used synchronous path (no gain)")
                                                 return transcription
                                             else:
                                                 # Thread timeout, fallback to sync
                                                 logger.warning(f"[{call_uuid[:8]}] ⚠️ Background thread timeout")
                                                 logger.info(f"[{call_uuid[:8]}] 🔄 Falling back to synchronous transcription")
-                                                # No sleep needed: faster_whisper_stt.py has retry logic with progressive backoff
+                                                logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: Wait for thread (timeout): {wait_thread_time:.3f}s")
+
+                                                # Fallback synchrone
+                                                transcribe_start = time.time()
                                                 transcription = self._transcribe_file(call_uuid, record_file)
+                                                transcribe_time = time.time() - transcribe_start
+                                                total_latency = time.time() - start_time
+
                                                 logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
+                                                logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: Fallback transcription: {transcribe_time:.3f}s")
+                                                logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: TOTAL LATENCY (VAD+fallback): {total_latency:.3f}s")
+                                                logger.info(f"[{call_uuid[:8]}] ⚠️ PHASE 2 FALLBACK: Used synchronous path (no gain)")
                                                 return transcription
                                         else:
-                                            # Original path: synchronous transcription (no background thread)
+                                            # Original path: synchronous transcription (CONTINUOUS_TRANSCRIPTION_ENABLED=false)
                                             # No sleep needed: faster_whisper_stt.py has retry logic with progressive backoff (0.5s, 1.0s)
                                             # This ensures WAV header is finalized without hardcoded sleep here
 
@@ -1775,8 +1895,9 @@ class RobotFreeSWITCH:
                                             logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
                                             logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: Transcription: {transcribe_time:.3f}s")
                                             logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: TOTAL LATENCY (VAD+transcription): {total_latency:.3f}s")
+                                            logger.info(f"[{call_uuid[:8]}] 📊 PHASE 2 DISABLED: Using synchronous path (CONTINUOUS_TRANSCRIPTION_ENABLED=false)")
                                             return transcription
-                                        # ========== EXPERIMENTAL END ==========
+                                        # ========== PHASE 2 END ==========
 
                         last_file_size = current_size
 
