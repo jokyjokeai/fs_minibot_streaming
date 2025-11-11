@@ -886,6 +886,12 @@ class RobotFreeSWITCH:
                     self.call_sessions[call_uuid]["recording_file"] = str(record_file)
                     self.call_sessions[call_uuid]["audio_finished"] = False  # Flag pour arrêter thread VAD
 
+                # ========== EXPERIMENTAL: CONTINUOUS TRANSCRIPTION (BARGE-IN) ==========
+                # Shared state for background transcription thread
+                transcription_result_bargein = {"text": None, "error": None}
+                transcription_thread_bargein = None
+                # ========== EXPERIMENTAL END ==========
+
                 # 3. Lancer thread VAD barge-in detection (NOUVEAU _monitor_vad_playing)
                 vad_thread = threading.Thread(
                     target=self._monitor_vad_playing,
@@ -915,6 +921,53 @@ class RobotFreeSWITCH:
                         # Barge-in détecté ! Vérifier smooth delay
                         time_since_detection = time.time() - barge_in_time
 
+                        # ========== EXPERIMENTAL: LAUNCH BACKGROUND TRANSCRIPTION IMMEDIATELY ==========
+                        # Launch transcription in background as soon as barge-in detected
+                        # Thread will wait for smooth delay, then transcribe
+                        # Main thread continues to handle smooth delay
+                        if config.CONTINUOUS_TRANSCRIPTION_ENABLED and transcription_thread_bargein is None:
+                            def background_transcription_bargein():
+                                try:
+                                    # Wait for smooth delay
+                                    remaining_delay = config.PLAYING_SMOOTH_DELAY - time_since_detection
+                                    if remaining_delay > 0:
+                                        time.sleep(remaining_delay)
+
+                                    # Wait for recording to stop (main thread will stop it)
+                                    time.sleep(0.3)  # Wait for smooth delay + recording stop
+
+                                    # Monitor file stability
+                                    last_size = 0
+                                    stable_count = 0
+                                    for _ in range(20):  # Max 2s
+                                        if not Path(record_file).exists():
+                                            time.sleep(0.1)
+                                            continue
+
+                                        current_size = Path(record_file).stat().st_size
+                                        if current_size == last_size and current_size > 1024:
+                                            stable_count += 1
+                                            if stable_count >= 2:
+                                                # Stable, transcribe
+                                                time.sleep(0.05)
+                                                result = self._transcribe_file(call_uuid, str(record_file))
+                                                transcription_result_bargein["text"] = result
+                                                logger.debug(f"[{call_uuid[:8]}] 🧵 Background barge-in transcription: '{result[:50] if result else 'empty'}...'")
+                                                break
+                                        else:
+                                            stable_count = 0
+                                            last_size = current_size
+                                        time.sleep(0.1)
+
+                                except Exception as e:
+                                    logger.error(f"[{call_uuid[:8]}] 🧵 Background barge-in transcription error: {e}")
+                                    transcription_result_bargein["error"] = str(e)
+
+                            transcription_thread_bargein = threading.Thread(target=background_transcription_bargein, daemon=True)
+                            transcription_thread_bargein.start()
+                            logger.debug(f"[{call_uuid[:8]}] 🧵 Started background barge-in transcription")
+                        # ========== EXPERIMENTAL END ==========
+
                         if time_since_detection >= config.PLAYING_SMOOTH_DELAY:
                             # Smooth delay écoulé → Couper audio
                             logger.info(f"[{call_uuid[:8]}] ⏹️ BARGE-IN! Interrupting audio (smooth delay {config.PLAYING_SMOOTH_DELAY}s)")
@@ -925,19 +978,39 @@ class RobotFreeSWITCH:
                             # Stopper recording
                             self.esl_conn_api.api(f"uuid_record {call_uuid} stop {record_file}")
 
-                            # ========== EXPERIMENTAL: REDUCED SLEEP FOR LATENCY ==========
-                            # BEFORE: sleep(0.3) - wait for FreeSWITCH to finalize WAV header
-                            # NOW: sleep(0.05) - FreeSWITCH writes in real-time, minimal wait needed
-                            # Expected gain: ~0.2-0.25s per barge-in
-                            # Can be reverted to 0.3 if WAV header issues detected
-                            if config.CONTINUOUS_TRANSCRIPTION_ENABLED:
-                                time.sleep(0.05)  # Optimized latency (barge-in critical path)
-                            else:
-                                time.sleep(0.3)  # Safe fallback
-                            # ========== EXPERIMENTAL: REDUCED SLEEP END ==========
+                            # ========== EXPERIMENTAL: USE BACKGROUND TRANSCRIPTION RESULT ==========
+                            if config.CONTINUOUS_TRANSCRIPTION_ENABLED and transcription_thread_bargein:
+                                # Wait for background thread (max 2s)
+                                logger.debug(f"[{call_uuid[:8]}] 🧵 Waiting for background barge-in transcription...")
+                                transcription_thread_bargein.join(timeout=2.0)
 
-                            # Transcrire fichier barge-in
-                            transcription = self._transcribe_file(call_uuid, str(record_file))
+                                if transcription_result_bargein["text"] is not None:
+                                    transcription = transcription_result_bargein["text"]
+                                    logger.info(f"[{call_uuid[:8]}] ✅ Using background barge-in transcription")
+                                elif transcription_result_bargein["error"]:
+                                    logger.warning(f"[{call_uuid[:8]}] ⚠️ Background barge-in thread failed, using sync")
+                                    time.sleep(0.05)
+                                    transcription = self._transcribe_file(call_uuid, str(record_file))
+                                else:
+                                    logger.warning(f"[{call_uuid[:8]}] ⚠️ Background barge-in thread timeout, using sync")
+                                    time.sleep(0.05)
+                                    transcription = self._transcribe_file(call_uuid, str(record_file))
+                            else:
+                                # Original synchronous path
+                                # ========== EXPERIMENTAL: REDUCED SLEEP FOR LATENCY ==========
+                                # BEFORE: sleep(0.3) - wait for FreeSWITCH to finalize WAV header
+                                # NOW: sleep(0.05) - FreeSWITCH writes in real-time, minimal wait needed
+                                # Expected gain: ~0.2-0.25s per barge-in
+                                # Can be reverted to 0.3 if WAV header issues detected
+                                if config.CONTINUOUS_TRANSCRIPTION_ENABLED:
+                                    time.sleep(0.05)  # Optimized latency (barge-in critical path)
+                                else:
+                                    time.sleep(0.3)  # Safe fallback
+                                # ========== EXPERIMENTAL: REDUCED SLEEP END ==========
+
+                                # Transcrire fichier barge-in
+                                transcription = self._transcribe_file(call_uuid, str(record_file))
+                            # ========== EXPERIMENTAL END ==========
 
                             # Sauvegarder transcription barge-in
                             if call_uuid in self.call_sessions:
@@ -1554,6 +1627,13 @@ class RobotFreeSWITCH:
             silence_frames = 0
             last_file_size = 0
 
+            # ========== EXPERIMENTAL: CONTINUOUS TRANSCRIPTION ==========
+            # Phase 2: Launch transcription in background thread during speech
+            # Expected gain: ~0.3-0.5s (overlap transcription with VAD monitoring)
+            transcription_thread = None
+            transcription_result = {"text": None, "error": None}
+            # ========== EXPERIMENTAL END ==========
+
             start_time = time.time()
             end_of_speech_silence_ms = int(config.WAITING_END_OF_SPEECH_SILENCE * 1000)
 
@@ -1609,6 +1689,53 @@ class RobotFreeSWITCH:
                                     elapsed = time.time() - start_time
                                     logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: 🗣️ Speech START detected (at T+{elapsed:.1f}s)")
 
+                                    # ========== EXPERIMENTAL: START TRANSCRIPTION IN BACKGROUND ==========
+                                    # Launch transcription thread AFTER 0.5s of speech
+                                    # Thread transcribes incrementally and updates result
+                                    # Main thread continues VAD, uses thread result when ready
+                                    # Expected gain: ~0.3-0.5s (transcription overlaps with end of speech)
+                                    if config.CONTINUOUS_TRANSCRIPTION_ENABLED:
+                                        def background_transcription():
+                                            try:
+                                                # Wait 0.5s for enough audio content
+                                                time.sleep(0.5)
+
+                                                # Monitor recording: transcribe when stable
+                                                last_size = 0
+                                                stable_count = 0
+
+                                                while True:
+                                                    if not Path(record_file).exists():
+                                                        time.sleep(0.1)
+                                                        continue
+
+                                                    current_size = Path(record_file).stat().st_size
+
+                                                    # If size stable for 2 checks (0.2s), recording likely stopped
+                                                    if current_size == last_size and current_size > 1024:
+                                                        stable_count += 1
+                                                        if stable_count >= 2:
+                                                            # Recording stopped, transcribe now
+                                                            time.sleep(0.1)  # Minimal wait for WAV header
+                                                            result = self._transcribe_file(call_uuid, record_file)
+                                                            transcription_result["text"] = result
+                                                            logger.debug(f"[{call_uuid[:8]}] 🧵 Background transcription completed: '{result[:50] if result else 'empty'}...'")
+                                                            break
+                                                    else:
+                                                        stable_count = 0
+                                                        last_size = current_size
+
+                                                    time.sleep(0.1)
+
+                                            except Exception as e:
+                                                logger.error(f"[{call_uuid[:8]}] 🧵 Background transcription error: {e}")
+                                                transcription_result["error"] = str(e)
+
+                                        transcription_thread = threading.Thread(target=background_transcription, daemon=True)
+                                        transcription_thread.start()
+                                        logger.debug(f"[{call_uuid[:8]}] 🧵 Started background transcription thread")
+                                    # ========== EXPERIMENTAL END ==========
+
                                 last_speech_time = time.time()
 
                             else:
@@ -1628,21 +1755,50 @@ class RobotFreeSWITCH:
                                         self.esl_conn_api.api(stop_cmd)
                                         logger.debug(f"[{call_uuid[:8]}] 👂 WAITING: Recording stopped")
 
-                                        # ========== EXPERIMENTAL: REDUCED SLEEP FOR LATENCY ==========
-                                        # BEFORE: sleep(0.5) - wait for FreeSWITCH to finalize WAV header
-                                        # NOW: sleep(0.1) - FreeSWITCH writes in real-time, minimal wait needed
-                                        # Expected gain: ~0.3-0.4s per interaction
-                                        # Can be reverted to 0.5 if WAV header issues detected
-                                        if config.CONTINUOUS_TRANSCRIPTION_ENABLED:
-                                            time.sleep(0.1)  # Optimized latency
-                                        else:
-                                            time.sleep(0.5)  # Safe fallback
-                                        # ========== EXPERIMENTAL: REDUCED SLEEP END ==========
+                                        # ========== EXPERIMENTAL: USE BACKGROUND TRANSCRIPTION RESULT ==========
+                                        if config.CONTINUOUS_TRANSCRIPTION_ENABLED and transcription_thread:
+                                            # Wait for background thread (max 3s)
+                                            logger.debug(f"[{call_uuid[:8]}] 🧵 Waiting for background transcription...")
+                                            transcription_thread.join(timeout=3.0)
 
-                                        # Transcrire fichier complet
-                                        transcription = self._transcribe_file(call_uuid, record_file)
-                                        logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
-                                        return transcription
+                                            if transcription_result["text"] is not None:
+                                                # Thread completed successfully
+                                                logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: ✅ Using background transcription result")
+                                                return transcription_result["text"]
+                                            elif transcription_result["error"]:
+                                                # Thread failed, fallback to sync transcription
+                                                logger.warning(f"[{call_uuid[:8]}] ⚠️ Background thread failed: {transcription_result['error']}")
+                                                logger.info(f"[{call_uuid[:8]}] 🔄 Falling back to synchronous transcription")
+                                                time.sleep(0.1)
+                                                transcription = self._transcribe_file(call_uuid, record_file)
+                                                logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
+                                                return transcription
+                                            else:
+                                                # Thread timeout, fallback to sync
+                                                logger.warning(f"[{call_uuid[:8]}] ⚠️ Background thread timeout")
+                                                logger.info(f"[{call_uuid[:8]}] 🔄 Falling back to synchronous transcription")
+                                                time.sleep(0.1)
+                                                transcription = self._transcribe_file(call_uuid, record_file)
+                                                logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
+                                                return transcription
+                                        else:
+                                            # Original path: synchronous transcription
+                                            # ========== EXPERIMENTAL: REDUCED SLEEP FOR LATENCY ==========
+                                            # BEFORE: sleep(0.5) - wait for FreeSWITCH to finalize WAV header
+                                            # NOW: sleep(0.1) - FreeSWITCH writes in real-time, minimal wait needed
+                                            # Expected gain: ~0.3-0.4s per interaction
+                                            # Can be reverted to 0.5 if WAV header issues detected
+                                            if config.CONTINUOUS_TRANSCRIPTION_ENABLED:
+                                                time.sleep(0.1)  # Optimized latency
+                                            else:
+                                                time.sleep(0.5)  # Safe fallback
+                                            # ========== EXPERIMENTAL: REDUCED SLEEP END ==========
+
+                                            # Transcrire fichier complet
+                                            transcription = self._transcribe_file(call_uuid, record_file)
+                                            logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
+                                            return transcription
+                                        # ========== EXPERIMENTAL END ==========
 
                         last_file_size = current_size
 
@@ -1661,15 +1817,32 @@ class RobotFreeSWITCH:
                 self.esl_conn_api.api(stop_cmd)
                 logger.debug(f"[{call_uuid[:8]}] 👂 WAITING: Recording stopped (timeout)")
 
-                # ========== EXPERIMENTAL: REDUCED SLEEP FOR LATENCY ==========
-                if config.CONTINUOUS_TRANSCRIPTION_ENABLED:
-                    time.sleep(0.1)  # Optimized latency
+                # ========== EXPERIMENTAL: USE BACKGROUND TRANSCRIPTION RESULT (TIMEOUT CASE) ==========
+                if config.CONTINUOUS_TRANSCRIPTION_ENABLED and transcription_thread:
+                    logger.debug(f"[{call_uuid[:8]}] 🧵 Waiting for background transcription (timeout case)...")
+                    transcription_thread.join(timeout=3.0)
+
+                    if transcription_result["text"] is not None:
+                        logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: ✅ Using background transcription result (timeout)")
+                        return transcription_result["text"]
+                    else:
+                        logger.warning(f"[{call_uuid[:8]}] ⚠️ Background thread not ready, using sync transcription")
+                        time.sleep(0.1)
+                        transcription = self._transcribe_file(call_uuid, record_file)
+                        logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
+                        return transcription
                 else:
-                    time.sleep(0.5)  # Safe fallback
-                # ========== EXPERIMENTAL: REDUCED SLEEP END ==========
-                transcription = self._transcribe_file(call_uuid, record_file)
-                logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
-                return transcription
+                    # Original path
+                    # ========== EXPERIMENTAL: REDUCED SLEEP FOR LATENCY ==========
+                    if config.CONTINUOUS_TRANSCRIPTION_ENABLED:
+                        time.sleep(0.1)  # Optimized latency
+                    else:
+                        time.sleep(0.5)  # Safe fallback
+                    # ========== EXPERIMENTAL: REDUCED SLEEP END ==========
+                    transcription = self._transcribe_file(call_uuid, record_file)
+                    logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
+                    return transcription
+                # ========== EXPERIMENTAL END ==========
             else:
                 logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: ⏱️ Timeout {timeout}s reached WITHOUT speech → SILENCE")
 
