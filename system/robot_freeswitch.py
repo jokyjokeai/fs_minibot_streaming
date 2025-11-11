@@ -1406,9 +1406,10 @@ class RobotFreeSWITCH:
             bytes_per_frame_stereo = bytes_per_frame * 2  # Stereo = 2x plus grand (Left+Right)
 
             # État VAD
-            speech_frames = 0
+            speech_frames = 0  # Compteur frames de parole consécutives (pour mesure précise)
+            speech_frames_in_segment = 0  # Total frames dans segment actuel (pour durée précise)
             silence_frames = 0
-            speech_start_time = None
+            speech_start_time = None  # Timestamp pour logging seulement
             total_speech_duration = 0.0
             last_speech_duration = 0.0  # Dernière durée speech calculée (pour backchannel logging)
             last_file_size = 0
@@ -1474,16 +1475,19 @@ class RobotFreeSWITCH:
 
                             if is_speech:
                                 speech_frames += 1
+                                speech_frames_in_segment += 1  # Compteur frames dans segment actuel
                                 silence_frames = 0
 
                                 if speech_start_time is None:
                                     speech_start_time = time.time()
                                     current_segment_start = time.time()
+                                    speech_frames_in_segment = 1  # Reset compteur segment
                                     logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: 🗣️ Speech detected → Start")
 
-                                # Calculer durée parole
+                                # Calculer durée parole basée sur FRAMES (précis) au lieu de time.time() (imprécis)
                                 if speech_start_time:
-                                    total_speech_duration = time.time() - speech_start_time
+                                    # Durée audio réelle = nombre de frames * durée frame
+                                    total_speech_duration = (speech_frames_in_segment * frame_duration_ms) / 1000.0
                                     last_speech_duration = total_speech_duration  # Sauvegarder pour backchannel logging
 
                                     # Logger progression tous les 0.5s
@@ -1505,6 +1509,7 @@ class RobotFreeSWITCH:
                                                     logger.info(f"[{call_uuid[:8]}] 🔇 Echo detected → Ignoring barge-in")
                                                     # Reset compteurs et continuer
                                                     speech_frames = 0
+                                                    speech_frames_in_segment = 0
                                                     speech_start_time = None
                                                     total_speech_duration = 0.0
                                                     last_speech_duration = 0.0
@@ -1540,6 +1545,7 @@ class RobotFreeSWITCH:
                                         logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: 🔄 Reset (silence {config.PLAYING_SILENCE_RESET}s detected)")
 
                                     speech_frames = 0
+                                    speech_frames_in_segment = 0  # Reset compteur frames segment
                                     speech_start_time = None
                                     total_speech_duration = 0.0
                                     last_speech_duration = 0.0  # Reset last_speech_duration aussi
