@@ -300,6 +300,7 @@ class FasterWhisperSTT:
             temp_file = None
 
             if num_channels == 2:
+                extract_start = time.time()
                 logger.info(f"Stereo audio detected → Extracting left channel (client)")
 
                 # Créer fichier temporaire pour canal gauche
@@ -310,11 +311,14 @@ class FasterWhisperSTT:
                 # Extraire canal gauche
                 if self._extract_left_channel(str(audio_path), temp_path):
                     transcribe_path = Path(temp_path)
+                    extract_time = time.time() - extract_start
+                    logger.info(f"⏱️  PERF: Left channel extraction: {extract_time:.3f}s")
                     logger.debug(f"Using extracted left channel: {temp_path}")
                 else:
                     logger.warning("Failed to extract left channel, using original stereo file")
 
             # Transcription avec Faster-Whisper (sur fichier MONO maintenant!)
+            whisper_start = time.time()
             segments, info = self.model.transcribe(
                 str(transcribe_path),
                 language="fr",  # Force français
@@ -338,8 +342,11 @@ class FasterWhisperSTT:
                 total_confidence += confidence
                 segment_count += 1
 
+            whisper_time = time.time() - whisper_start
             transcription_time = time.time() - start_time
             transcription = " ".join(full_text).strip()
+
+            logger.info(f"⏱️  PERF: Whisper model inference: {whisper_time:.3f}s (audio: {info.duration:.2f}s, RTF: {whisper_time/info.duration:.2f}x)")
 
             # Calculer confidence moyenne
             avg_confidence = total_confidence / segment_count if segment_count > 0 else 0.0

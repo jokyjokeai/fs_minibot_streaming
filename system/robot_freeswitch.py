@@ -1720,12 +1720,19 @@ class RobotFreeSWITCH:
                                     if silence_frames > int(end_of_speech_silence_ms / frame_duration_ms):
                                         # Calculer durée basée sur FRAMES (précis) au lieu de timestamps (imprécis)
                                         speech_duration = (speech_frames_count * frame_duration_ms) / 1000.0
+                                        end_of_speech_time = time.time()
+                                        vad_processing_time = end_of_speech_time - start_time
+
                                         logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: ✅ END-OF-SPEECH detected!")
                                         logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Speech duration: {speech_duration:.2f}s | Silence: {config.WAITING_END_OF_SPEECH_SILENCE}s")
+                                        logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: VAD processing: {vad_processing_time:.3f}s (speech {speech_duration:.2f}s + end-of-speech {config.WAITING_END_OF_SPEECH_SILENCE}s)")
 
                                         # CRITICAL: Stopper recording pour finaliser le header WAV
+                                        stop_record_start = time.time()
                                         stop_cmd = f"uuid_record {call_uuid} stop {record_file}"
                                         self.esl_conn_api.api(stop_cmd)
+                                        stop_record_time = time.time() - stop_record_start
+                                        logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: uuid_record stop: {stop_record_time:.3f}s")
                                         logger.debug(f"[{call_uuid[:8]}] 👂 WAITING: Recording stopped")
 
                                         # ========== EXPERIMENTAL: USE BACKGROUND TRANSCRIPTION RESULT ==========
@@ -1756,12 +1763,18 @@ class RobotFreeSWITCH:
                                                 return transcription
                                         else:
                                             # Original path: synchronous transcription (no background thread)
-                                            # No sleep needed: faster_whisper_stt.py has retry logic with progressive backoff (0.5s, 1.0s, 1.5s)
+                                            # No sleep needed: faster_whisper_stt.py has retry logic with progressive backoff (0.5s, 1.0s)
                                             # This ensures WAV header is finalized without hardcoded sleep here
 
                                             # Transcrire fichier complet
+                                            transcribe_start = time.time()
                                             transcription = self._transcribe_file(call_uuid, record_file)
+                                            transcribe_time = time.time() - transcribe_start
+
+                                            total_latency = time.time() - start_time
                                             logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
+                                            logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: Transcription: {transcribe_time:.3f}s")
+                                            logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: TOTAL LATENCY (VAD+transcription): {total_latency:.3f}s")
                                             return transcription
                                         # ========== EXPERIMENTAL END ==========
 
@@ -2304,32 +2317,42 @@ class RobotFreeSWITCH:
             return None
         
         logger.info(f"[{call_uuid[:8]}] Step: {step_name} (type: {step_config.get('audio_type')})")
-        
+
         # 1. Jouer audio
         self._play_step_audio(call_uuid, step_config, variables, scenario)
-        
+
         # 2. Écouter réponse
+        step_start = time.time()
         timeout = step_config.get("timeout", 4)  # 4s par défaut (réduit de 10s)
         transcription = self._listen_for_response(call_uuid, timeout)
+        listen_time = time.time() - step_start
         
         # 3. Analyser intent
         intent = "silence"
         if transcription and self.nlp_service:
+            nlp_start = time.time()
             logger.info(f"[{call_uuid[:8]}] 🧠 NLP: Analyzing transcription: '{transcription}'")
             intent_result = self.nlp_service.analyze_intent(transcription, context="telemarketing")
+            nlp_time = time.time() - nlp_start
+
             intent = intent_result.get("intent", "unknown")
             confidence = intent_result.get("confidence", 0.0)
             logger.info(f"[{call_uuid[:8]}] 🧠 NLP: Result → Intent: {intent} (confidence: {confidence:.2f})")
+            logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: NLP analysis: {nlp_time:.3f}s")
             logger.debug(f"[{call_uuid[:8]}] 🧠 NLP: Full result: {intent_result}")
 
             # Sauvegarder
             call_history[step_name] = intent
         else:
             logger.warning(f"[{call_uuid[:8]}] ⏱️ Listen timeout ({timeout}s) - no response")
-        
+
+        # Log latence totale étape (listen + NLP)
+        total_step_time = time.time() - step_start
+        logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: TOTAL STEP LATENCY (listen+NLP): {total_step_time:.3f}s")
+
         # 4. Déterminer next step
         next_step = self.scenario_manager.get_next_step(scenario, step_name, intent)
-        
+
         return next_step
 
 
@@ -2441,12 +2464,16 @@ class RobotFreeSWITCH:
                 logger.warning(f"[{call_uuid[:8]}] NLP service not available")
                 break
 
+            nlp_start = time.time()
             logger.info(f"[{call_uuid[:8]}] 🧠 NLP: Analyzing transcription: '{transcription}'")
             intent_result = self.nlp_service.analyze_intent(transcription, context="telemarketing")
+            nlp_time = time.time() - nlp_start
+
             intent = intent_result.get("intent", "unknown")
             confidence = intent_result.get("confidence", 0.0)
 
             logger.info(f"[{call_uuid[:8]}] 🧠 NLP: Result → Intent: {intent} (confidence: {confidence:.2f})")
+            logger.info(f"[{call_uuid[:8]}] ⏱️  PERF: NLP analysis: {nlp_time:.3f}s")
             logger.debug(f"[{call_uuid[:8]}] 🧠 NLP: Full result: {intent_result}")
             
             # Sauvegarder
