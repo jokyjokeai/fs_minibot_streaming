@@ -32,6 +32,7 @@ from typing import Dict, List, Optional, Any, Callable
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
+from dataclasses import dataclass
 
 # FreeSWITCH ESL
 try:
@@ -43,7 +44,7 @@ except ImportError:
 # Services V3
 from system.services.faster_whisper_stt import FasterWhisperSTT
 from system.services.ollama_nlp import OllamaNLP
-# AMD géré par _monitor_vad_amd() inline (AMDService non utilisé)
+from system.services.amd_service import AMDService
 from system.services.echo_filter_advanced import AdvancedEchoFilter
 # StreamingASR V3 SUPPRIMÉ - Mode fichier uniquement
 
@@ -81,12 +82,76 @@ logger = get_logger(__name__)
 # DATACLASSES & BARGE-IN DETECTOR
 # ============================================================================
 
-# État des appels géré via dictionnaire self.call_sessions[call_uuid] = {...}
-# (Ancienne classe CallState supprimée - pas utilisée)
+@dataclass
+class CallState:
+    """
+    État immutable d'un appel
+
+    Permet tracking propre sans variables globales éparpillées.
+    """
+    call_uuid: str
+    phone_number: str
+    scenario_name: str
+    audio_state: str  # "PLAYING_AUDIO" ou "WAITING_RESPONSE"
+    speech_start_time: float = 0.0
+    speech_duration: float = 0.0
+    grace_period_active: bool = False
+    last_transcription: str = ""
+    barge_in_triggered: bool = False
 
 
-# Barge-in géré directement dans _monitor_vad_playing() avec config.PLAYING_BARGE_IN_THRESHOLD
-# (Ancienne classe BargeInDetector supprimée - logique inline maintenant)
+class BargeInDetector:
+    """
+    Détecteur de barge-in ULTRA SIMPLE
+
+    Une seule règle:
+    - PLAYING_AUDIO + durée >= 2.5s + pas grace period = BARGE-IN
+    - WAITING_RESPONSE = Toujours capturer (pas de barge-in)
+    """
+
+    DURATION_THRESHOLD = 2.5  # secondes (augmenté de 2.0s pour plus de naturel)
+
+    def should_trigger(
+        self,
+        audio_state: str,
+        speech_duration: float,
+        grace_period_active: bool
+    ) -> bool:
+        """
+        Décision barge-in simple et claire.
+
+        Args:
+            audio_state: "PLAYING_AUDIO" ou "WAITING_RESPONSE"
+            speech_duration: Durée de parole en secondes
+            grace_period_active: Grace period actif ou non
+
+        Returns:
+            True si barge-in doit être déclenché
+        """
+        # Log détaillé V3
+        logger.debug(
+            f"🔍 V3 Barge-in check: audio_state={audio_state}, "
+            f"duration={speech_duration:.2f}s, grace_period={grace_period_active}"
+        )
+
+        if audio_state != "PLAYING_AUDIO":
+            logger.debug("   ➜ WAITING_RESPONSE mode - no barge-in, capture speech")
+            return False
+
+        if grace_period_active:
+            logger.debug("   ➜ Grace period active - ignore speech")
+            return False
+
+        if speech_duration >= self.DURATION_THRESHOLD:
+            logger.info(
+                f"   ➜ ✅ BARGE-IN triggered (duration {speech_duration:.2f}s >= {self.DURATION_THRESHOLD}s)"
+            )
+            return True
+        else:
+            logger.info(
+                f"   ➜ ❌ Backchannel ignored (duration {speech_duration:.2f}s < {self.DURATION_THRESHOLD}s)"
+            )
+            return False
 
 
 class RobotFreeSWITCH:
@@ -139,6 +204,10 @@ class RobotFreeSWITCH:
         # === CALL SESSIONS (ex-call_sessions) ===
         self.call_sessions = {}  # {call_uuid: session_data}
 
+        # === BARGE-IN DETECTOR ===
+        self.barge_in_detector = BargeInDetector()
+        logger.info(f"✅ BargeInDetector initialized (threshold: {BargeInDetector.DURATION_THRESHOLD}s)")
+
         # === SERVICES INITIALIZATION ===
         logger.info("🤖 Loading AI services...")
 
@@ -166,7 +235,15 @@ class RobotFreeSWITCH:
             logger.error(f"❌ Failed to load Ollama NLP: {e}")
             self.nlp_service = None
 
-        # 3. Advanced Echo Filter (anti-feedback barge-in with librosa)
+        # 3. AMD Service
+        try:
+            self.amd_service = AMDService(esl_conn=None)  # Will set after connection
+            logger.info("✅ AMD Service loaded")
+        except Exception as e:
+            logger.error(f"❌ Failed to load AMD Service: {e}")
+            self.amd_service = None
+
+        # 4. Advanced Echo Filter (anti-feedback barge-in with librosa)
         try:
             self.echo_filter = AdvancedEchoFilter(enabled=True)
             logger.info("✅ Advanced Echo Filter loaded (librosa)")
@@ -247,6 +324,10 @@ class RobotFreeSWITCH:
                 
             logger.info("✅ ESL API connection established")
             logger.info(f"✅ Connected to FreeSWITCH ESL (2 connections)")
+
+            # Pass ESL connection to AMD service
+            if self.amd_service:
+                self.amd_service.set_esl_connection(self.esl_conn_api)
 
             return True
             
@@ -427,19 +508,8 @@ class RobotFreeSWITCH:
 
             # Caller ID (numéro émetteur)
             if hasattr(config, 'FREESWITCH_CALLER_ID'):
-                caller_id = config.FREESWITCH_CALLER_ID
-                variables["origination_caller_id_number"] = caller_id
-
-                # FIX BITCALL: Forcer CallerID dans From Display Name (GATEWAY2 UNIQUEMENT)
-                # Sans cette modification, Bitcall coupe l'appel après décrochage
-                # car le CallerID n'est que dans Remote-Party-ID, pas dans From header
-                if gateway == "gateway2":
-                    # sip_from_display = variable FreeSWITCH qui modifie le Display Name du From header
-                    # Résultat: From: "33609907845" <sip:Ericlaporte07@188.34.143.144>
-                    variables["sip_from_display"] = caller_id
-                    variables["effective_caller_id_name"] = caller_id
-                    variables["effective_caller_id_number"] = caller_id
-
+                variables["origination_caller_id_number"] = config.FREESWITCH_CALLER_ID
+            
             var_string = ",".join([f"{k}='{v}'" for k, v in variables.items()])
             
             # Commande originate
@@ -1343,16 +1413,11 @@ class RobotFreeSWITCH:
             total_speech_duration = 0.0
             last_speech_duration = 0.0  # Dernière durée speech calculée (pour backchannel logging)
             last_file_size = 0
-            audio_start_pos = None  # Position début audio (après header WAV) - optimisation lecture
 
             # Segments de parole détectés (pour logging backchannels)
             speech_segments = []
             current_segment_start = None
             last_progress_log = 0.0  # Pour logger progression tous les 0.5s
-
-            # Barge-in state
-            barge_in_triggered = False  # Flag: barge-in détecté, mais on continue jusqu'à EOS
-            barge_in_silence_frames = 0  # Compteur silence APRÈS barge-in
 
             start_time = time.time()
 
@@ -1380,22 +1445,23 @@ class RobotFreeSWITCH:
                         continue
 
                     with open(record_file, 'rb') as f:
-                        if audio_start_pos is None:
-                            # Première lecture: trouver position header WAV
-                            raw_data = f.read()
-                            data_marker = b'data'
-                            data_pos = raw_data.find(data_marker)
-                            if data_pos == -1:
-                                time.sleep(0.05)
-                                continue
-                            audio_start_pos = data_pos + 8
-                            new_audio_data = raw_data[audio_start_pos:]  # Tout l'audio initial
-                        else:
-                            # Lectures suivantes: seek + read seulement nouvelles données (OPTIMISÉ!)
-                            f.seek(last_file_size)
-                            new_audio_data = f.read()
+                        raw_data = f.read()
 
-                    if len(new_audio_data) > 0:
+                    # Skip WAV header
+                    data_marker = b'data'
+                    data_pos = raw_data.find(data_marker)
+                    if data_pos == -1:
+                        time.sleep(0.05)
+                        continue
+
+                    audio_start = data_pos + 8
+                    audio_data = raw_data[audio_start:]
+
+                    # Nouvelles données uniquement
+                    if current_size > last_file_size:
+                        new_bytes = current_size - last_file_size
+                        new_audio_data = audio_data[-(new_bytes):]
+
                         # Traiter frames STEREO → extraire canal gauche (client)
                         offset = 0
                         while offset + bytes_per_frame_stereo <= len(new_audio_data):
@@ -1411,7 +1477,6 @@ class RobotFreeSWITCH:
                                 speech_frames += 1
                                 speech_frames_in_segment += 1  # Compteur frames dans segment actuel
                                 silence_frames = 0
-                                barge_in_silence_frames = 0  # Reset silence barge-in aussi
 
                                 if speech_start_time is None:
                                     speech_start_time = time.time()
@@ -1431,7 +1496,7 @@ class RobotFreeSWITCH:
                                         last_progress_log = total_speech_duration
 
                                     # BARGE-IN si >= threshold
-                                    if total_speech_duration >= config.PLAYING_BARGE_IN_THRESHOLD and not barge_in_triggered:
+                                    if total_speech_duration >= config.PLAYING_BARGE_IN_THRESHOLD:
                                         logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: ⚡ BARGE-IN TRIGGERED! (speech {total_speech_duration:.2f}s >= {config.PLAYING_BARGE_IN_THRESHOLD}s)")
 
                                         # 🔇 Echo filter: Vérifier si probable echo AVANT de stopper playback
@@ -1455,29 +1520,12 @@ class RobotFreeSWITCH:
                                         if call_uuid in self.call_sessions:
                                             self.call_sessions[call_uuid]["barge_in_detected_time"] = time.time()
 
-                                        # Flag barge-in mais CONTINUER à enregistrer jusqu'à end-of-speech
-                                        barge_in_triggered = True
-                                        barge_in_silence_frames = 0  # Compteur pour EOS après barge-in
-                                        logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: Continuing to record until end-of-speech ({config.WAITING_END_OF_SPEECH_SILENCE}s silence)...")
-                                        # NE PAS return ici! On continue le VAD
+                                        return  # Thread terminé
 
                             else:
                                 # Silence
                                 silence_frames += 1
                                 silence_duration_s = (silence_frames * frame_duration_ms) / 1000.0
-
-                                # Si barge-in déjà triggéré: détecter end-of-speech (0.6s silence)
-                                if barge_in_triggered:
-                                    barge_in_silence_frames += 1
-                                    barge_in_silence_duration = (barge_in_silence_frames * frame_duration_ms) / 1000.0
-
-                                    # Calculer seuil EOS (0.6s)
-                                    eos_threshold_ms = int(config.WAITING_END_OF_SPEECH_SILENCE * 1000)
-                                    eos_frames_needed = int(eos_threshold_ms / frame_duration_ms)
-
-                                    if barge_in_silence_frames >= eos_frames_needed:
-                                        logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: ✅ End-of-speech after barge-in ({barge_in_silence_duration:.2f}s >= {config.WAITING_END_OF_SPEECH_SILENCE}s)")
-                                        return  # Fin du VAD - transcription va commencer
 
                                 # Reset si silence > PLAYING_SILENCE_RESET
                                 silence_reset_ms = int(config.PLAYING_SILENCE_RESET * 1000)
@@ -1678,7 +1726,6 @@ class RobotFreeSWITCH:
             speech_frames_count = 0  # Compteur frames de parole pour mesure précise
             silence_frames = 0
             last_file_size = 0
-            audio_start_pos = None  # Position début audio (après header WAV) - optimisation lecture
 
             # ========== EXPERIMENTAL: CONTINUOUS TRANSCRIPTION ==========
             # Phase 2: Launch transcription in background thread during speech
@@ -1705,22 +1752,23 @@ class RobotFreeSWITCH:
                         continue
 
                     with open(record_file, 'rb') as f:
-                        if audio_start_pos is None:
-                            # Première lecture: trouver position header WAV
-                            raw_data = f.read()
-                            data_marker = b'data'
-                            data_pos = raw_data.find(data_marker)
-                            if data_pos == -1:
-                                time.sleep(0.05)
-                                continue
-                            audio_start_pos = data_pos + 8
-                            new_audio_data = raw_data[audio_start_pos:]  # Tout l'audio initial
-                        else:
-                            # Lectures suivantes: seek + read seulement nouvelles données (OPTIMISÉ!)
-                            f.seek(last_file_size)
-                            new_audio_data = f.read()
+                        raw_data = f.read()
 
-                    if len(new_audio_data) > 0:
+                    # Skip WAV header
+                    data_marker = b'data'
+                    data_pos = raw_data.find(data_marker)
+                    if data_pos == -1:
+                        time.sleep(0.05)
+                        continue
+
+                    audio_start = data_pos + 8
+                    audio_data = raw_data[audio_start:]
+
+                    # Nouvelles données uniquement
+                    if current_size > last_file_size:
+                        new_bytes = current_size - last_file_size
+                        new_audio_data = audio_data[-(new_bytes):]
+
                         # Traiter frames STEREO → extraire canal gauche (client)
                         offset = 0
                         while offset + bytes_per_frame_stereo <= len(new_audio_data):
