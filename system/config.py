@@ -195,8 +195,8 @@ AMD_TRANSCRIBE_ALL = True  # Tout transcrire pour NLP
 
 # MODE 2: PLAYING_AUDIO (Barge-in intelligent)
 # Objectif: Détecter vraies interruptions vs. backchannels ("oui", "ok", "hum")
-# Comportement: Transcrire TOUT en continu, barge-in si parole >= 1.5s
-PLAYING_BARGE_IN_THRESHOLD = 1.0  # secondes - Parole continue >= 1.0s = barge-in (réactivité optimale)
+# Comportement: Transcrire TOUT en continu, barge-in si parole >= 1.8s
+PLAYING_BARGE_IN_THRESHOLD = 1.8  # secondes - Parole continue >= 1.8s = barge-in (évite faux positifs)
 PLAYING_BACKCHANNEL_MAX = 0.8  # secondes - Parole < 0.8s = backchannel (logger seulement)
 PLAYING_SILENCE_RESET = 2.0  # secondes - Reset compteur si silence >= 2.0s (filtre backchannels multiples)
 PLAYING_TRANSCRIBE_ALL = True  # Transcrire tous les segments (même backchannels)
