@@ -256,6 +256,8 @@ class FasterWhisperSTT:
         if not self.is_available or not self.model:
             return {"text": "", "confidence": 0.0, "error": "Faster-Whisper not available"}
 
+        temp_file = None  # Initialize to None to avoid UnboundLocalError in except block
+
         try:
             audio_path = Path(audio_file)
             if not audio_path.exists():
