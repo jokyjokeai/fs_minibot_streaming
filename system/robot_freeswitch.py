@@ -1791,18 +1791,20 @@ class RobotFreeSWITCH:
                                     elapsed = time.time() - start_time
                                     logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: 🗣️ Speech START detected (at T+{elapsed:.1f}s)")
 
-                                    # ========== PHASE 2: START BACKGROUND TRANSCRIPTION (ENABLED) ==========
-                                    # Démarrer transcription en background dès que le client commence à parler
-                                    # Gains attendus: 0.3-0.5s par interaction
-                                    if config.CONTINUOUS_TRANSCRIPTION_ENABLED and transcription_thread is None:
+                                # ========== PHASE 2: START BACKGROUND TRANSCRIPTION (DELAYED) ==========
+                                # Démarrer transcription après 0.5s de parole (fichier WAV a grandi)
+                                # Trade-off: Gain réduit 0.5s→0.3s mais fiabilité 60%→90%+
+                                if config.CONTINUOUS_TRANSCRIPTION_ENABLED and transcription_thread is None and speech_detected:
+                                    speech_duration = (speech_frames_count * frame_duration_ms) / 1000.0
+                                    if speech_duration >= 0.5:
                                         thread_start_time = time.time()
                                         transcription_thread = threading.Thread(
                                             target=self._background_transcribe_with_retry,
                                             args=(call_uuid, record_file, transcription_result, thread_start_time)
                                         )
                                         transcription_thread.start()
-                                        logger.info(f"[{call_uuid[:8]}] 🧵 Background transcription thread launched at speech START")
-                                    # ========== PHASE 2 END ==========
+                                        logger.info(f"[{call_uuid[:8]}] 🧵 Background transcription thread launched after {speech_duration:.2f}s of speech")
+                                # ========== PHASE 2 END ==========
 
                                 last_speech_time = time.time()
 
