@@ -200,14 +200,14 @@ PLAYING_BARGE_IN_THRESHOLD = 1.8  # secondes - Parole continue >= 1.8s = barge-i
 PLAYING_BACKCHANNEL_MAX = 0.8  # secondes - Parole < 0.8s = backchannel (logger seulement)
 PLAYING_SILENCE_RESET = 2.0  # secondes - Reset compteur si silence >= 2.0s (filtre backchannels multiples)
 PLAYING_TRANSCRIBE_ALL = True  # Transcrire tous les segments (même backchannels)
-PLAYING_SMOOTH_DELAY = 0.5  # secondes - Délai avant interruption (finir phrase naturellement) - Optimisé pour réactivité
+PLAYING_SMOOTH_DELAY = 0.3  # secondes - Délai avant interruption (finir phrase naturellement) - Ultra réactif
 
 # MODE 3: WAITING_RESPONSE (End-of-speech detection)
 # Objectif: Détecter début/fin de parole, transcrire réponse complète
 # Comportement: Détecter début parole dès 300ms, fin si silence >= 0.4s
 WAITING_TIMEOUT = 10.0  # secondes - Timeout total avant retry_silence
 WAITING_MIN_SPEECH_DURATION = 0.3  # secondes - Détecter début parole
-WAITING_END_OF_SPEECH_SILENCE = 0.4  # secondes - Silence pour fin de parole (ultra réactif) - Optimisé latence
+WAITING_END_OF_SPEECH_SILENCE = 0.5  # secondes - Silence pour fin de parole (équilibre réactivité/confort)
 WAITING_TRANSCRIBE_CONTINUOUS = True  # Transcrire pendant que client parle (latence minimale)
 
 # ============================================================================
