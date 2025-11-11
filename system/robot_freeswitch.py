@@ -788,20 +788,25 @@ class RobotFreeSWITCH:
     # SECTION 4: AUDIO SYSTEM
     # ========================================================================
 
-    def _play_audio(self, call_uuid: str, audio_file: str) -> bool:
+    def _play_audio(self, call_uuid: str, audio_file: str, enable_barge_in: bool = True) -> bool:
         """
-        Joue un fichier audio avec barge-in VAD intelligent
+        Joue un fichier audio avec barge-in VAD intelligent (optionnel)
 
-        NOUVEAU WORKFLOW (V3 - 3 modes VAD):
+        WORKFLOW si enable_barge_in=True (V3 - 3 modes VAD):
         1. Lancer uuid_broadcast (robot parle)
         2. EN PARALLÈLE: uuid_record (enregistrer client)
         3. EN PARALLÈLE: _monitor_vad_playing() (barge-in intelligent)
         4. Si barge-in >= 2.5s → uuid_break + transcription
         5. Si backchannels (<0.8s) → Logger seulement, continuer
 
+        WORKFLOW si enable_barge_in=False:
+        1. Lancer uuid_broadcast (robot parle)
+        2. Attendre fin audio (pas de recording, pas de barge-in)
+
         Args:
             call_uuid: UUID de l'appel
             audio_file: Chemin absolu vers fichier audio
+            enable_barge_in: Activer barge-in (défaut: True, contrôlé par metadata.barge_in_default)
 
         Returns:
             True si lecture complète, False si interrompu par barge-in
@@ -825,7 +830,10 @@ class RobotFreeSWITCH:
             if call_uuid in self.call_sessions:
                 self.call_sessions[call_uuid]["barge_in_detected_time"] = 0
 
-            logger.info(f"[{call_uuid[:8]}] 🎬 PLAYING_AUDIO (duration: {audio_duration:.1f}s, barge-in if >= {config.PLAYING_BARGE_IN_THRESHOLD}s)")
+            if enable_barge_in:
+                logger.info(f"[{call_uuid[:8]}] 🎬 PLAYING_AUDIO (duration: {audio_duration:.1f}s, barge-in if >= {config.PLAYING_BARGE_IN_THRESHOLD}s)")
+            else:
+                logger.info(f"[{call_uuid[:8]}] 🎬 PLAYING_AUDIO (duration: {audio_duration:.1f}s, barge-in DISABLED)")
 
             # 1. Garder RTP timeout à 15s pendant playback (hérité de l'originate)
             # Note: 15s est suffisant pour hello.wav (15.5s) et détecte rapidement le hangup
@@ -853,107 +861,128 @@ class RobotFreeSWITCH:
                 "timestamp": datetime.now()
             })
 
-            # 🔇 Echo filter: Sauvegarder audio robot pour détection echo
-            if self.echo_filter:
+            # 🔇 Echo filter: Sauvegarder audio robot pour détection echo (si barge-in activé)
+            if enable_barge_in and self.echo_filter:
                 self.echo_filter.set_robot_audio(audio_file)
 
-            # 2. Lancer uuid_record EN PARALLÈLE (enregistrer client UNIQUEMENT)
-            # STEREO: Left=client, Right=robot → VAD traite SEULEMENT le canal gauche
-            self.esl_conn_api.api(f"uuid_setvar {call_uuid} RECORD_STEREO true")
-            logger.info(f"[{call_uuid[:8]}] 📝 RECORD_STEREO=true (Left=client, Right=robot)")
+            # === MODE BARGE-IN ACTIVÉ ===
+            if enable_barge_in:
+                # 2. Lancer uuid_record EN PARALLÈLE (enregistrer client UNIQUEMENT)
+                # STEREO: Left=client, Right=robot → VAD traite SEULEMENT le canal gauche
+                self.esl_conn_api.api(f"uuid_setvar {call_uuid} RECORD_STEREO true")
+                logger.info(f"[{call_uuid[:8]}] 📝 RECORD_STEREO=true (Left=client, Right=robot)")
 
-            record_file = config.RECORDINGS_DIR / f"bargein_{call_uuid}_{int(time.time())}.wav"
-            record_cmd = f"uuid_record {call_uuid} start {record_file}"
-            logger.debug(f"[{call_uuid[:8]}] Sending: {record_cmd}")
+                record_file = config.RECORDINGS_DIR / f"bargein_{call_uuid}_{int(time.time())}.wav"
+                record_cmd = f"uuid_record {call_uuid} start {record_file}"
+                logger.debug(f"[{call_uuid[:8]}] Sending: {record_cmd}")
 
-            record_result = self.esl_conn_api.api(record_cmd)
-            record_result_str = record_result.getBody() if hasattr(record_result, 'getBody') else str(record_result)
-            logger.debug(f"[{call_uuid[:8]}] uuid_record result: {record_result_str}")
-            logger.info(f"[{call_uuid[:8]}] 📝 Recording started: {record_file.name}")
+                record_result = self.esl_conn_api.api(record_cmd)
+                record_result_str = record_result.getBody() if hasattr(record_result, 'getBody') else str(record_result)
+                logger.debug(f"[{call_uuid[:8]}] uuid_record result: {record_result_str}")
+                logger.info(f"[{call_uuid[:8]}] 📝 Recording started: {record_file.name}")
 
-            # Sauvegarder dans session
-            if call_uuid in self.call_sessions:
-                self.call_sessions[call_uuid]["recording_file"] = str(record_file)
-                self.call_sessions[call_uuid]["audio_finished"] = False  # Flag pour arrêter thread VAD
+                # Sauvegarder dans session
+                if call_uuid in self.call_sessions:
+                    self.call_sessions[call_uuid]["recording_file"] = str(record_file)
+                    self.call_sessions[call_uuid]["audio_finished"] = False  # Flag pour arrêter thread VAD
 
-            # 3. Lancer thread VAD barge-in detection (NOUVEAU _monitor_vad_playing)
-            vad_thread = threading.Thread(
-                target=self._monitor_vad_playing,
-                args=(call_uuid, str(record_file), audio_duration),
-                daemon=True
-            )
-            vad_thread.start()
+                # 3. Lancer thread VAD barge-in detection (NOUVEAU _monitor_vad_playing)
+                vad_thread = threading.Thread(
+                    target=self._monitor_vad_playing,
+                    args=(call_uuid, str(record_file), audio_duration),
+                    daemon=True
+                )
+                vad_thread.start()
 
-            # 4. Surveiller si barge-in détecté
-            max_duration = audio_duration + 1.0
-            check_interval = 0.1
-            elapsed = 0.0
+                # 4. Surveiller si barge-in détecté
+                max_duration = audio_duration + 1.0
+                check_interval = 0.1
+                elapsed = 0.0
 
-            while elapsed < max_duration:
-                # Vérifier hangup (flag depuis event handler)
-                if call_uuid not in self.call_sessions or self.call_sessions[call_uuid].get("hangup_detected", False):
-                    logger.warning(f"[{call_uuid[:8]}] 📞 Hangup detected (flag) - stopping playback & recording")
-                    self.esl_conn_api.api(f"uuid_break {call_uuid}")
-                    self.esl_conn_api.api(f"uuid_record {call_uuid} stop {record_file}")
-                    return False
-
-                # Vérifier si barge-in détecté par VAD
-                session = self.call_sessions.get(call_uuid, {})
-                barge_in_time = session.get("barge_in_detected_time", 0)
-
-                if barge_in_time > 0:
-                    # Barge-in détecté ! Vérifier smooth delay
-                    time_since_detection = time.time() - barge_in_time
-
-                    if time_since_detection >= config.PLAYING_SMOOTH_DELAY:
-                        # Smooth delay écoulé → Couper audio
-                        logger.info(f"[{call_uuid[:8]}] ⏹️ BARGE-IN! Interrupting audio (smooth delay {config.PLAYING_SMOOTH_DELAY}s)")
-
-                        # Stopper audio
+                while elapsed < max_duration:
+                    # Vérifier hangup (flag depuis event handler)
+                    if call_uuid not in self.call_sessions or self.call_sessions[call_uuid].get("hangup_detected", False):
+                        logger.warning(f"[{call_uuid[:8]}] 📞 Hangup detected (flag) - stopping playback & recording")
                         self.esl_conn_api.api(f"uuid_break {call_uuid}")
-
-                        # Stopper recording
                         self.esl_conn_api.api(f"uuid_record {call_uuid} stop {record_file}")
-
-                        # Attendre que FreeSWITCH finalise le fichier WAV
-                        time.sleep(0.3)
-
-                        # Transcrire fichier barge-in
-                        transcription = self._transcribe_file(call_uuid, str(record_file))
-
-                        # Sauvegarder transcription barge-in
-                        if call_uuid in self.call_sessions:
-                            self.call_sessions[call_uuid]["last_barge_in_transcription"] = transcription
-                            logger.info(f"[{call_uuid[:8]}] 📝 Barge-in transcription: '{transcription}'")
-
-                        # Reset flag
-                        self.call_sessions[call_uuid]["barge_in_detected_time"] = 0
-                        self.barge_in_active[call_uuid] = True
-
-                        logger.info(f"[{call_uuid[:8]}] 🎧 Barge-in completed")
                         return False
 
-                time.sleep(check_interval)
-                elapsed += check_interval
+                    # Vérifier si barge-in détecté par VAD
+                    session = self.call_sessions.get(call_uuid, {})
+                    barge_in_time = session.get("barge_in_detected_time", 0)
 
-            # Audio terminé normalement - marquer flag pour arrêter thread VAD
-            logger.debug(f"[{call_uuid[:8]}] ✅ Audio completed - signaling VAD thread to stop")
-            if call_uuid in self.call_sessions:
-                self.call_sessions[call_uuid]["audio_finished"] = True
+                    if barge_in_time > 0:
+                        # Barge-in détecté ! Vérifier smooth delay
+                        time_since_detection = time.time() - barge_in_time
 
-            # Attendre que thread VAD se termine (max 0.5s)
-            time.sleep(0.5)
+                        if time_since_detection >= config.PLAYING_SMOOTH_DELAY:
+                            # Smooth delay écoulé → Couper audio
+                            logger.info(f"[{call_uuid[:8]}] ⏹️ BARGE-IN! Interrupting audio (smooth delay {config.PLAYING_SMOOTH_DELAY}s)")
 
-            # Stopper recording
-            logger.debug(f"[{call_uuid[:8]}] 📝 Stopping recording (audio finished normally)")
-            self.esl_conn_api.api(f"uuid_record {call_uuid} stop {record_file}")
+                            # Stopper audio
+                            self.esl_conn_api.api(f"uuid_break {call_uuid}")
 
-            # Supprimer fichier (pas de barge-in)
-            try:
-                if Path(record_file).exists():
-                    Path(record_file).unlink()
-            except:
-                pass
+                            # Stopper recording
+                            self.esl_conn_api.api(f"uuid_record {call_uuid} stop {record_file}")
+
+                            # Attendre que FreeSWITCH finalise le fichier WAV
+                            time.sleep(0.3)
+
+                            # Transcrire fichier barge-in
+                            transcription = self._transcribe_file(call_uuid, str(record_file))
+
+                            # Sauvegarder transcription barge-in
+                            if call_uuid in self.call_sessions:
+                                self.call_sessions[call_uuid]["last_barge_in_transcription"] = transcription
+                                logger.info(f"[{call_uuid[:8]}] 📝 Barge-in transcription: '{transcription}'")
+
+                            # Reset flag
+                            self.call_sessions[call_uuid]["barge_in_detected_time"] = 0
+                            self.barge_in_active[call_uuid] = True
+
+                            logger.info(f"[{call_uuid[:8]}] 🎧 Barge-in completed")
+                            return False
+
+                    time.sleep(check_interval)
+                    elapsed += check_interval
+
+                # Audio terminé normalement - marquer flag pour arrêter thread VAD
+                logger.debug(f"[{call_uuid[:8]}] ✅ Audio completed - signaling VAD thread to stop")
+                if call_uuid in self.call_sessions:
+                    self.call_sessions[call_uuid]["audio_finished"] = True
+
+                # Attendre que thread VAD se termine (max 0.5s)
+                time.sleep(0.5)
+
+                # Stopper recording
+                logger.debug(f"[{call_uuid[:8]}] 📝 Stopping recording (audio finished normally)")
+                self.esl_conn_api.api(f"uuid_record {call_uuid} stop {record_file}")
+
+                # Supprimer fichier (pas de barge-in)
+                try:
+                    if Path(record_file).exists():
+                        Path(record_file).unlink()
+                except:
+                    pass
+
+            # === MODE BARGE-IN DÉSACTIVÉ ===
+            else:
+                # Mode simple: juste attendre la fin de l'audio
+                max_duration = audio_duration + 0.5
+                check_interval = 0.2
+                elapsed = 0.0
+
+                while elapsed < max_duration:
+                    # Vérifier hangup uniquement
+                    if call_uuid not in self.call_sessions or self.call_sessions[call_uuid].get("hangup_detected", False):
+                        logger.warning(f"[{call_uuid[:8]}] 📞 Hangup detected - stopping playback")
+                        self.esl_conn_api.api(f"uuid_break {call_uuid}")
+                        return False
+
+                    time.sleep(check_interval)
+                    elapsed += check_interval
+
+                logger.debug(f"[{call_uuid[:8]}] ✅ Audio completed (no barge-in mode)")
 
             # ⚡ QUICK CHECK: Vérifier si channel encore actif APRÈS playback
             if not self._is_channel_alive(call_uuid, quick_check=True):
@@ -2232,9 +2261,10 @@ class RobotFreeSWITCH:
                 voice = scenario.get("metadata", {}).get("voice") or scenario.get("voice", config.DEFAULT_VOICE)
                 retry_audio = step_config.get("retry_audio", "retry_silence.wav")
                 retry_path = config.get_audio_path(voice, "base", retry_audio)
-                
+                enable_barge_in = scenario.get("metadata", {}).get("barge_in_default", True)
+
                 if retry_path.exists():
-                    self._play_audio(call_uuid, str(retry_path))
+                    self._play_audio(call_uuid, str(retry_path), enable_barge_in=enable_barge_in)
                 else:
                     logger.error(f"[{call_uuid[:8]}]   ❌ Retry audio not found: {retry_path}")
                 
@@ -2285,7 +2315,8 @@ class RobotFreeSWITCH:
                             audio_path = self._resolve_audio_path(call_uuid, match["audio_path"], scenario)
                             if audio_path:
                                 logger.info(f"[{call_uuid[:8]}]   🔊 Playing pre-recorded answer")
-                                self._play_audio(call_uuid, audio_path)
+                                enable_barge_in = scenario.get("metadata", {}).get("barge_in_default", True)
+                                self._play_audio(call_uuid, audio_path, enable_barge_in=enable_barge_in)
                             else:
                                 logger.warning(f"[{call_uuid[:8]}]   ⚠️ Audio file not found: {match['audio_path']}")
                         
@@ -2310,9 +2341,10 @@ class RobotFreeSWITCH:
                     voice = scenario.get("metadata", {}).get("voice") or scenario.get("voice", config.DEFAULT_VOICE)
                     fallback_audio = step_config.get("fallback_audio", "not_understood.wav")
                     fallback_path = config.get_audio_path(voice, "base", fallback_audio)
-                    
+                    enable_barge_in = scenario.get("metadata", {}).get("barge_in_default", True)
+
                     if fallback_path.exists():
-                        self._play_audio(call_uuid, str(fallback_path))
+                        self._play_audio(call_uuid, str(fallback_path), enable_barge_in=enable_barge_in)
                     else:
                         logger.error(f"[{call_uuid[:8]}]   ❌ Fallback audio not found: {fallback_path}")
                 
@@ -2392,9 +2424,12 @@ class RobotFreeSWITCH:
             voice = scenario.get("metadata", {}).get("voice") or scenario.get("voice", config.DEFAULT_VOICE)
             audio_path = config.get_audio_path(voice, "base", audio_filename)
             audio_file = str(audio_path)
-        
+
+        # Récupérer flag barge_in depuis metadata (défaut: True)
+        enable_barge_in = scenario.get("metadata", {}).get("barge_in_default", True)
+
         # Jouer
-        self._play_audio(call_uuid, audio_file)
+        self._play_audio(call_uuid, audio_file, enable_barge_in=enable_barge_in)
 
     def _resolve_audio_path(self, call_uuid: str, audio_path: str, scenario: Dict[str, Any]) -> Optional[str]:
         """
