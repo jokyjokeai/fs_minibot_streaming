@@ -1980,6 +1980,10 @@ class RobotFreeSWITCH:
                 timestamp = int(time.time() * 1000)
                 record_file = str(config.RECORDINGS_DIR / f"waiting_{call_uuid}_{timestamp}.wav")
 
+                # Activer STEREO (Left=client, Right=robot)
+                self.esl_conn_api.api(f"uuid_setvar {call_uuid} RECORD_STEREO true")
+                logger.debug(f"[{call_uuid[:8]}] 👂 RECORD_STEREO=true (Left=client, Right=robot)")
+
                 # Démarrer enregistrement
                 cmd = f"uuid_record {call_uuid} start {record_file}"
                 result = self.esl_conn_api.api(cmd)
@@ -2074,6 +2078,10 @@ class RobotFreeSWITCH:
             temp_dir = Path("/tmp/minibot_responses")
             temp_dir.mkdir(exist_ok=True)
             record_file = temp_dir / f"{call_uuid}_{int(time.time())}.wav"
+
+            # Activer STEREO (Left=client, Right=robot)
+            self.esl_conn_api.api(f"uuid_setvar {call_uuid} RECORD_STEREO true")
+            logger.debug(f"[{call_uuid[:8]}] 👂 Fallback: RECORD_STEREO=true (Left=client, Right=robot)")
 
             # Démarrer enregistrement avec limite de durée
             # uuid_record format: uuid_record <uuid> start <path> [<limit_secs>]
