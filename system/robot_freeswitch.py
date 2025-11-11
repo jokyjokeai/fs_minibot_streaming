@@ -933,8 +933,8 @@ class RobotFreeSWITCH:
                                     if remaining_delay > 0:
                                         time.sleep(remaining_delay)
 
-                                    # Wait for recording to stop (main thread will stop it)
-                                    time.sleep(0.3)  # Wait for smooth delay + recording stop
+                                    # FIX: Wait longer for FreeSWITCH to finalize WAV (was 0.3s, now 0.5s)
+                                    time.sleep(0.5)
 
                                     # Monitor file stability
                                     last_size = 0
@@ -945,9 +945,10 @@ class RobotFreeSWITCH:
                                             continue
 
                                         current_size = Path(record_file).stat().st_size
-                                        if current_size == last_size and current_size > 1024:
+                                        # FIX: Increased stability checks (3 instead of 2) and min size (8KB instead of 1KB)
+                                        if current_size == last_size and current_size > 8192:
                                             stable_count += 1
-                                            if stable_count >= 2:
+                                            if stable_count >= 3:
                                                 # Stable, transcribe
                                                 time.sleep(0.05)
                                                 result = self._transcribe_file(call_uuid, str(record_file))
@@ -980,9 +981,9 @@ class RobotFreeSWITCH:
 
                             # ========== EXPERIMENTAL: USE BACKGROUND TRANSCRIPTION RESULT ==========
                             if config.CONTINUOUS_TRANSCRIPTION_ENABLED and transcription_thread_bargein:
-                                # Wait for background thread (max 2s)
+                                # FIX: Increased timeout to 4s (was 2s) to account for longer wait + transcription
                                 logger.debug(f"[{call_uuid[:8]}] 🧵 Waiting for background barge-in transcription...")
-                                transcription_thread_bargein.join(timeout=2.0)
+                                transcription_thread_bargein.join(timeout=4.0)
 
                                 if transcription_result_bargein["text"] is not None:
                                     transcription = transcription_result_bargein["text"]
@@ -1697,8 +1698,9 @@ class RobotFreeSWITCH:
                                     if config.CONTINUOUS_TRANSCRIPTION_ENABLED:
                                         def background_transcription():
                                             try:
-                                                # Wait 0.5s for enough audio content
-                                                time.sleep(0.5)
+                                                # FIX: Wait 1.0s for FreeSWITCH to write enough data + finalize header
+                                                # BEFORE: 0.5s was too short, caused "fmt chunk missing" errors
+                                                time.sleep(1.0)
 
                                                 # Monitor recording: transcribe when stable
                                                 last_size = 0
@@ -1711,10 +1713,11 @@ class RobotFreeSWITCH:
 
                                                     current_size = Path(record_file).stat().st_size
 
-                                                    # If size stable for 2 checks (0.2s), recording likely stopped
-                                                    if current_size == last_size and current_size > 1024:
+                                                    # FIX: Increased stability checks (3 instead of 2) and min size (8KB instead of 1KB)
+                                                    # More reliable detection of recording completion
+                                                    if current_size == last_size and current_size > 8192:
                                                         stable_count += 1
-                                                        if stable_count >= 2:
+                                                        if stable_count >= 3:
                                                             # Recording stopped, transcribe now
                                                             time.sleep(0.1)  # Minimal wait for WAV header
                                                             result = self._transcribe_file(call_uuid, record_file)
@@ -1757,9 +1760,9 @@ class RobotFreeSWITCH:
 
                                         # ========== EXPERIMENTAL: USE BACKGROUND TRANSCRIPTION RESULT ==========
                                         if config.CONTINUOUS_TRANSCRIPTION_ENABLED and transcription_thread:
-                                            # Wait for background thread (max 3s)
+                                            # FIX: Increased timeout to 5s (was 3s) to account for longer wait + transcription
                                             logger.debug(f"[{call_uuid[:8]}] 🧵 Waiting for background transcription...")
-                                            transcription_thread.join(timeout=3.0)
+                                            transcription_thread.join(timeout=5.0)
 
                                             if transcription_result["text"] is not None:
                                                 # Thread completed successfully
@@ -1820,7 +1823,7 @@ class RobotFreeSWITCH:
                 # ========== EXPERIMENTAL: USE BACKGROUND TRANSCRIPTION RESULT (TIMEOUT CASE) ==========
                 if config.CONTINUOUS_TRANSCRIPTION_ENABLED and transcription_thread:
                     logger.debug(f"[{call_uuid[:8]}] 🧵 Waiting for background transcription (timeout case)...")
-                    transcription_thread.join(timeout=3.0)
+                    transcription_thread.join(timeout=5.0)
 
                     if transcription_result["text"] is not None:
                         logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: ✅ Using background transcription result (timeout)")
