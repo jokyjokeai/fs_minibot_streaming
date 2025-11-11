@@ -200,14 +200,14 @@ PLAYING_BARGE_IN_THRESHOLD = 1.8  # secondes - Parole continue >= 1.8s = barge-i
 PLAYING_BACKCHANNEL_MAX = 0.8  # secondes - Parole < 0.8s = backchannel (logger seulement)
 PLAYING_SILENCE_RESET = 2.0  # secondes - Reset compteur si silence >= 2.0s (filtre backchannels multiples)
 PLAYING_TRANSCRIBE_ALL = True  # Transcrire tous les segments (même backchannels)
-PLAYING_SMOOTH_DELAY = 0.5  # secondes - Délai avant interruption (finir phrase naturellement) - Optimisé pour réactivité
+PLAYING_SMOOTH_DELAY = 0.3  # secondes - Délai avant interruption (finir phrase naturellement) - Optimisé pour réactivité
 
 # MODE 3: WAITING_RESPONSE (End-of-speech detection)
 # Objectif: Détecter début/fin de parole, transcrire réponse complète
 # Comportement: Détecter début parole dès 300ms, fin si silence >= 0.4s
 WAITING_TIMEOUT = 10.0  # secondes - Timeout total avant retry_silence
 WAITING_MIN_SPEECH_DURATION = 0.3  # secondes - Détecter début parole
-WAITING_END_OF_SPEECH_SILENCE = 0.4  # secondes - Silence pour fin de parole (ultra réactif) - Optimisé latence
+WAITING_END_OF_SPEECH_SILENCE = 0.5  # secondes - Silence pour fin de parole (équilibre réactivité/pauses naturelles)
 WAITING_TRANSCRIBE_CONTINUOUS = True  # Transcrire pendant que client parle (latence minimale)
 
 # ============================================================================
@@ -218,13 +218,32 @@ WAITING_TRANSCRIBE_CONTINUOUS = True  # Transcrire pendant que client parle (lat
 # Applies to both BARGE-IN and WAITING_RESPONSE modes
 CONTINUOUS_TRANSCRIPTION_ENABLED = os.getenv("CONTINUOUS_TRANSCRIPTION_ENABLED", "true").lower() == "true"
 
-# Compatibilité ancienne config (DEPRECATED - utiliser configs spécifiques ci-dessus)
-BARGE_IN_ENABLED = True
-BARGE_IN_DURATION_THRESHOLD = PLAYING_BARGE_IN_THRESHOLD
-BARGE_IN_SILENCE_RESET = PLAYING_SILENCE_RESET
-GRACE_PERIOD_SECONDS = 2.0  # Grace period au début audio (à retirer si non utilisé)
-SMOOTH_DELAY_SECONDS = PLAYING_SMOOTH_DELAY
-BARGE_IN_SMOOTH_DELAY = PLAYING_SMOOTH_DELAY
+# ============================================================================
+# DEPRECATED PARAMETERS (Kept for backward compatibility - NOT USED in V3)
+# ============================================================================
+# Ces paramètres sont conservés pour compatibilité mais ne sont PLUS utilisés
+# dans le code V3. Utiliser les paramètres spécifiques ci-dessus.
+
+# DEPRECATED: Logique AMD inline dans _monitor_vad_amd()
+AMD_MIN_SPEECH_DURATION_DEPRECATED = 0.3  # Non utilisé
+AMD_TRANSCRIBE_ALL_DEPRECATED = True  # Comportement par défaut
+
+# DEPRECATED: WAITING timeout géré par step.timeout
+WAITING_TIMEOUT_DEPRECATED = 10.0  # Utiliser step.timeout à la place
+WAITING_MIN_SPEECH_DURATION_DEPRECATED = 0.3  # Non utilisé
+WAITING_TRANSCRIBE_CONTINUOUS_DEPRECATED = True  # Remplacé par CONTINUOUS_TRANSCRIPTION_ENABLED
+
+# DEPRECATED: PLAYING - comportement par défaut
+PLAYING_TRANSCRIBE_ALL_DEPRECATED = True  # Comportement par défaut
+GRACE_PERIOD_SECONDS_DEPRECATED = 2.0  # Non implémenté dans V3
+
+# DEPRECATED: Alias pour compatibilité (utiliser PLAYING_* directement)
+BARGE_IN_ENABLED = True  # Toujours True (contrôlé per-step par metadata.barge_in_default)
+BARGE_IN_DURATION_THRESHOLD = PLAYING_BARGE_IN_THRESHOLD  # Alias
+BARGE_IN_SILENCE_RESET = PLAYING_SILENCE_RESET  # Alias
+GRACE_PERIOD_SECONDS = GRACE_PERIOD_SECONDS_DEPRECATED  # Alias
+SMOOTH_DELAY_SECONDS = PLAYING_SMOOTH_DELAY  # Alias
+BARGE_IN_SMOOTH_DELAY = PLAYING_SMOOTH_DELAY  # Alias
 
 # ============================================================================
 # APPELS & RETRY
