@@ -1765,7 +1765,8 @@ class RobotFreeSWITCH:
                                                 # Thread failed, fallback to sync transcription
                                                 logger.warning(f"[{call_uuid[:8]}] ⚠️ Background thread failed: {transcription_result['error']}")
                                                 logger.info(f"[{call_uuid[:8]}] 🔄 Falling back to synchronous transcription")
-                                                time.sleep(0.1)
+                                                # FIX: Wait longer for FreeSWITCH to finalize WAV header (was 0.1s, now 0.5s)
+                                                time.sleep(0.5)
                                                 transcription = self._transcribe_file(call_uuid, record_file)
                                                 logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
                                                 return transcription
@@ -1773,7 +1774,8 @@ class RobotFreeSWITCH:
                                                 # Thread timeout, fallback to sync
                                                 logger.warning(f"[{call_uuid[:8]}] ⚠️ Background thread timeout")
                                                 logger.info(f"[{call_uuid[:8]}] 🔄 Falling back to synchronous transcription")
-                                                time.sleep(0.1)
+                                                # FIX: Wait longer for FreeSWITCH to finalize WAV header (was 0.1s, now 0.5s)
+                                                time.sleep(0.5)
                                                 transcription = self._transcribe_file(call_uuid, record_file)
                                                 logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
                                                 return transcription
@@ -1823,18 +1825,15 @@ class RobotFreeSWITCH:
                         return transcription_result["text"]
                     else:
                         logger.warning(f"[{call_uuid[:8]}] ⚠️ Background thread not ready, using sync transcription")
-                        time.sleep(0.1)
+                        # FIX: Wait longer for FreeSWITCH to finalize WAV header (was 0.1s, now 0.5s)
+                        time.sleep(0.5)
                         transcription = self._transcribe_file(call_uuid, record_file)
                         logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
                         return transcription
                 else:
                     # Original path
-                    # ========== EXPERIMENTAL: REDUCED SLEEP FOR LATENCY ==========
-                    if config.CONTINUOUS_TRANSCRIPTION_ENABLED:
-                        time.sleep(0.1)  # Optimized latency
-                    else:
-                        time.sleep(0.5)  # Safe fallback
-                    # ========== EXPERIMENTAL: REDUCED SLEEP END ==========
+                    # FIX: Always wait 0.5s for FreeSWITCH to finalize WAV header (was 0.1s optimization)
+                    time.sleep(0.5)
                     transcription = self._transcribe_file(call_uuid, record_file)
                     logger.info(f"[{call_uuid[:8]}] 👂 WAITING VAD: Transcription result: '{transcription}'")
                     return transcription
