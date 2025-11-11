@@ -503,7 +503,7 @@ class RobotFreeSWITCH:
                 "campaign_id": str(campaign_id),
                 "retry_count": str(retry),
                 "ignore_early_media": "true",
-                "rtp_timeout_sec": "15",  # Timeout RTP 15s (détection hangup rapide)
+                "rtp_timeout_sec": "60",  # Timeout RTP 60s (évite MEDIA_TIMEOUT pendant WAITING_RESPONSE)
             }
 
             # Caller ID (numéro émetteur)
@@ -1580,17 +1580,15 @@ class RobotFreeSWITCH:
         thread_start_time: float
     ):
         """
-        Phase 2: Background transcription avec retry progressif (exponential backoff + jitter).
+        Phase 2: Background transcription avec retry optimisé.
 
         Lance la transcription en background pendant que le client parle.
-        Utilise retry intelligent pour gérer le timing header WAV FreeSWITCH.
+        Utilise retry progressif pour attendre que FreeSWITCH flush le header WAV.
 
         Stratégie:
-        - Tentative 1: 50ms (détection rapide si WAV prêt)
-        - Tentative 2: 150ms (header peut prendre du temps)
-        - Tentative 3: 300ms (fallback avant timeout)
-        - Jitter ±20% pour éviter synchronisation
-        - Timeout total: ~500ms avant abandon
+        - Plus de retries (5 au lieu de 3) pour plus de chances
+        - Delays progressifs: 50ms, 100ms, 200ms, 350ms, 500ms
+        - Total: ~1.2s timeout (acceptable car on gagne 1-2s si succès)
 
         Args:
             call_uuid: UUID appel
@@ -1599,20 +1597,15 @@ class RobotFreeSWITCH:
             thread_start_time: Timestamp démarrage thread (pour logs performance)
         """
         import os
-        import random
         import wave
 
         MIN_FILE_SIZE = 8192  # 8KB minimum (garantit header + ~200ms audio 16kHz)
-        RETRY_DELAYS = [0.05, 0.15, 0.3]  # 50ms, 150ms, 300ms (total: 0.5s) - Optimisé réactivité
-        JITTER_FACTOR = 0.2  # ±20%
+        RETRY_DELAYS = [0.05, 0.1, 0.2, 0.35, 0.5]  # Progressif: 50ms → 500ms (total: 1.2s)
 
         logger.debug(f"[{call_uuid[:8]}] 🧵 Background transcription thread started")
 
         try:
-            for attempt, base_delay in enumerate(RETRY_DELAYS, 1):
-                # Exponential backoff avec jitter
-                jitter = base_delay * JITTER_FACTOR * (random.random() * 2 - 1)
-                delay = base_delay + jitter
+            for attempt, delay in enumerate(RETRY_DELAYS, 1):
                 time.sleep(delay)
 
                 elapsed_thread = time.time() - thread_start_time

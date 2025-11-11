@@ -207,7 +207,7 @@ PLAYING_SMOOTH_DELAY = 0.3  # secondes - Délai avant interruption (finir phrase
 # Comportement: Détecter début parole dès 300ms, fin si silence >= 0.4s
 WAITING_TIMEOUT = 10.0  # secondes - Timeout total avant retry_silence
 WAITING_MIN_SPEECH_DURATION = 0.3  # secondes - Détecter début parole
-WAITING_END_OF_SPEECH_SILENCE = 0.5  # secondes - Silence pour fin de parole (équilibre réactivité/confort)
+WAITING_END_OF_SPEECH_SILENCE = 0.3  # secondes - Silence pour fin de parole - OPTIMISÉ réactivité (gain -0.2s/step)
 WAITING_TRANSCRIBE_CONTINUOUS = True  # Transcrire pendant que client parle (latence minimale)
 
 # ============================================================================
