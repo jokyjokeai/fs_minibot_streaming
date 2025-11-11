@@ -1603,7 +1603,7 @@ class RobotFreeSWITCH:
         import wave
 
         MIN_FILE_SIZE = 8192  # 8KB minimum (garantit header + ~200ms audio 16kHz)
-        RETRY_DELAYS = [0.1, 0.3, 0.6]  # 100ms, 300ms, 600ms (total: 1.0s) - Augmenté pour reliability 95%+
+        RETRY_DELAYS = [0.05, 0.15, 0.3]  # 50ms, 150ms, 300ms (total: 0.5s) - Optimisé réactivité
         JITTER_FACTOR = 0.2  # ±20%
 
         logger.debug(f"[{call_uuid[:8]}] 🧵 Background transcription thread started")
