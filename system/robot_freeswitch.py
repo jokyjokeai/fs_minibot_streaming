@@ -204,6 +204,9 @@ class RobotFreeSWITCH:
         # === CALL SESSIONS (ex-call_sessions) ===
         self.call_sessions = {}  # {call_uuid: session_data}
 
+        # === WAV HEADER OFFSET CACHE (Phase 1.2 optimization) ===
+        self._wav_header_offset_cache = {}  # {call_uuid: audio_start_offset}
+
         # === BARGE-IN DETECTOR ===
         self.barge_in_detector = BargeInDetector()
         logger.info(f"✅ BargeInDetector initialized (threshold: {BargeInDetector.DURATION_THRESHOLD}s)")
@@ -462,6 +465,7 @@ class RobotFreeSWITCH:
         self.call_sequences.pop(call_uuid, None)
         self.barge_in_active.pop(call_uuid, None)
         self.background_audio_active.pop(call_uuid, None)
+        self._wav_header_offset_cache.pop(call_uuid, None)  # Phase 1.2: cleanup cache
         logger.info(f"[{call_uuid[:8]}] 📞 Cleanup complete - call session terminated")
 
     def _handle_dtmf(self, call_uuid: str, event):
@@ -602,6 +606,16 @@ class RobotFreeSWITCH:
                         self.hangup_call(call_uuid)
                         return
                     # Si HUMAN ou UNKNOWN, continuer normalement
+
+                    # === VAD WARM-UP (Phase 1.3 optimization) ===
+                    # Warm-up VAD with dummy frames to eliminate first-frame latency in WAITING_RESPONSE
+                    if self.vad:
+                        try:
+                            dummy_frame = b'\x00' * 480  # 30ms @ 8kHz stereo (2 * 240 samples)
+                            self.vad.is_speech(dummy_frame, 8000)
+                            logger.debug(f"[{call_uuid[:8]}] ⚡ VAD warm-up completed")
+                        except Exception as vad_err:
+                            logger.debug(f"[{call_uuid[:8]}] VAD warm-up failed (non-critical): {vad_err}")
 
                 except Exception as e:
                     logger.warning(f"[{call_uuid[:8]}] AMD error: {e} - continuing anyway")
@@ -1116,8 +1130,7 @@ class RobotFreeSWITCH:
             frame_size = int(sample_rate * frame_duration_ms / 1000)  # 240 samples @ 8kHz
             bytes_per_frame = frame_size * 2  # 16-bit = 2 bytes
     
-            # État VAD
-            speech_frames = 0
+            # État VAD (Phase 1.5: removed redundant speech_frames - using time-based tracking)
             silence_frames = 0
             speech_start_time = None
             total_speech_duration = 0.0
@@ -1125,102 +1138,114 @@ class RobotFreeSWITCH:
 
             start_time = time.time()
 
-            while time.time() - start_time < max_duration:
-                # Vérifier si hangup ou audio terminé
-                session = self.call_sessions.get(call_uuid)
-                if not session or session.get("hangup_detected", False):
-                    logger.debug(f"[{call_uuid[:8]}] VAD: Hangup detected - stopping")
-                    break
+            # Phase 2.1: Persistent file handle for streaming read (avoid reopen/reread overhead)
+            with open(record_file, 'rb') as wav_file:
+                file_position = 0  # Track current position in file
 
-                # Lire fichier WAV en mode RAW (skip header corrompu)
-                try:
-                    # Vérifier si fichier a grandi (nouvelles données)
-                    current_size = Path(record_file).stat().st_size
-                    if current_size <= last_file_size:
-                        # Pas de nouvelles données, attendre
-                        time.sleep(0.05)
-                        continue
+                while time.time() - start_time < max_duration:
+                    # Vérifier si hangup ou audio terminé
+                    session = self.call_sessions.get(call_uuid)
+                    if not session or session.get("hangup_detected", False):
+                        logger.debug(f"[{call_uuid[:8]}] VAD: Hangup detected - stopping")
+                        break
 
-                    # Lire tout le fichier en binaire (y compris header)
-                    with open(record_file, 'rb') as f:
-                        raw_data = f.read()
+                    # Lire fichier WAV en streaming (Phase 2.1: persistent file handle)
+                    try:
+                        # Vérifier si fichier a grandi (nouvelles données)
+                        current_size = Path(record_file).stat().st_size
+                        if current_size <= last_file_size:
+                            # Pas de nouvelles données, attendre
+                            time.sleep(0.05)
+                            continue
 
-                    # Skip WAV header (premier "data" chunk)
-                    # Format WAV standard: RIFF (12 bytes) + fmt (24 bytes) + LIST (variable) + data (8 bytes + audio)
-                    # On cherche le marker "data" pour trouver le début de l'audio
-                    data_marker = b'data'
-                    data_pos = raw_data.find(data_marker)
+                        # Phase 2.1: Stream read - only read new data from file_position
+                        if file_position == 0:
+                            # First read: need to find WAV header
+                            wav_file.seek(0)
+                            raw_data = wav_file.read(current_size)
 
-                    if data_pos == -1:
-                        # Pas encore de marker data, fichier trop petit
-                        time.sleep(0.05)
-                        continue
-
-                    # Skip "data" + 4 bytes de size = audio commence après
-                    audio_start = data_pos + 8
-                    audio_data = raw_data[audio_start:]
-
-                    # Ne traiter que les NOUVELLES données depuis la dernière lecture
-                    if current_size > last_file_size:
-                        new_bytes = current_size - last_file_size
-                        # Lire seulement les nouvelles frames
-                        new_audio_data = audio_data[-(new_bytes):]
-
-                        # Traiter par frames de 30ms (480 bytes @ 8kHz 16-bit)
-                        offset = 0
-                        while offset + bytes_per_frame <= len(new_audio_data):
-                            frame = new_audio_data[offset:offset + bytes_per_frame]
-                            offset += bytes_per_frame
-
-                            # VAD sur cette frame
-                            is_speech = self.vad.is_speech(frame, sample_rate)
-
-                            if is_speech:
-                                speech_frames += 1
-                                silence_frames = 0
-
-                                if speech_start_time is None:
-                                    speech_start_time = time.time()
-                                    logger.debug(f"[{call_uuid[:8]}] VAD: Speech started!")
-
-                                # Calculer durée parole
-                                if speech_start_time:
-                                    total_speech_duration = time.time() - speech_start_time
-
-                                    # BARGE-IN si >= 2.5s !
-                                    if total_speech_duration >= config.BARGE_IN_DURATION_THRESHOLD:
-                                        logger.info(f"[{call_uuid[:8]}] 🎙️ VAD: Speech detected >= {config.BARGE_IN_DURATION_THRESHOLD}s → BARGE-IN!")
-
-                                        # Marquer timestamp barge-in
-                                        if call_uuid in self.call_sessions:
-                                            self.call_sessions[call_uuid]["barge_in_detected_time"] = time.time()
-
-                                        return  # Thread terminé
-
+                            # Skip WAV header (utiliser cache si disponible - Phase 1.2 optimization)
+                            if call_uuid in self._wav_header_offset_cache:
+                                audio_start = self._wav_header_offset_cache[call_uuid]
                             else:
-                                # Silence
-                                silence_frames += 1
+                                # Find header and cache it
+                                data_marker = b'data'
+                                data_pos = raw_data.find(data_marker)
+                                if data_pos == -1:
+                                    time.sleep(0.05)
+                                    continue
+                                audio_start = data_pos + 8
+                                self._wav_header_offset_cache[call_uuid] = audio_start
 
-                                # Reset si silence > BARGE_IN_SILENCE_RESET (2.0s par défaut)
-                                # Permet de filtrer backchannels multiples ("oui" + pause + "oui")
-                                silence_reset_ms = int(config.BARGE_IN_SILENCE_RESET * 1000)
-                                if silence_frames > int(silence_reset_ms / frame_duration_ms):
-                                    if speech_start_time and total_speech_duration > 0:
-                                        logger.debug(f"[{call_uuid[:8]}] VAD: Speech ended after {silence_reset_ms}ms silence ({total_speech_duration:.2f}s < threshold)")
+                            file_position = audio_start
+                            new_audio_data = raw_data[audio_start:]
+                        else:
+                            # Subsequent reads: only read new bytes
+                            wav_file.seek(file_position)
+                            new_audio_data = wav_file.read(current_size - file_position)
+                            file_position = current_size
 
-                                    speech_frames = 0
-                                    speech_start_time = None
-                                    total_speech_duration = 0.0
+                        # Traiter les nouvelles données
+                        if len(new_audio_data) > 0:
+                            # Traiter par frames de 30ms (480 bytes @ 8kHz 16-bit)
+                            offset = 0
+                            while offset + bytes_per_frame <= len(new_audio_data):
+                                frame = new_audio_data[offset:offset + bytes_per_frame]
+                                offset += bytes_per_frame
 
-                        # Mettre à jour dernière position lue
-                        last_file_size = current_size
+                                # VAD sur cette frame
+                                is_speech = self.vad.is_speech(frame, sample_rate)
 
-                except Exception as e:
-                    # Log l'erreur pour debugging
-                    logger.debug(f"[{call_uuid[:8]}] VAD read error (retry): {e}")
-                    pass
+                                if is_speech:
+                                    # Phase 1.5: Removed redundant speech_frames increment (using time-based tracking)
+                                    silence_frames = 0
 
-                time.sleep(0.05)  # Check toutes les 50ms
+                                    if speech_start_time is None:
+                                        speech_start_time = time.time()
+                                        logger.debug(f"[{call_uuid[:8]}] VAD: Speech started!")
+
+                                    # Calculer durée parole
+                                    if speech_start_time:
+                                        total_speech_duration = time.time() - speech_start_time
+
+                                        # BARGE-IN si >= 2.5s !
+                                        if total_speech_duration >= config.BARGE_IN_DURATION_THRESHOLD:
+                                            logger.info(f"[{call_uuid[:8]}] 🎙️ VAD: Speech detected >= {config.BARGE_IN_DURATION_THRESHOLD}s → BARGE-IN!")
+
+                                            # Marquer timestamp barge-in
+                                            if call_uuid in self.call_sessions:
+                                                self.call_sessions[call_uuid]["barge_in_detected_time"] = time.time()
+
+                                            return  # Thread terminé
+
+                                else:
+                                    # Silence
+                                    silence_frames += 1
+
+                                    # Reset si silence > BARGE_IN_SILENCE_RESET (2.0s par défaut)
+                                    # Permet de filtrer backchannels multiples ("oui" + pause + "oui")
+                                    silence_reset_ms = int(config.BARGE_IN_SILENCE_RESET * 1000)
+                                    if silence_frames > int(silence_reset_ms / frame_duration_ms):
+                                        if speech_start_time and total_speech_duration > 0:
+                                            logger.debug(f"[{call_uuid[:8]}] VAD: Speech ended after {silence_reset_ms}ms silence ({total_speech_duration:.2f}s < threshold)")
+
+                                        # Phase 1.5: Removed redundant speech_frames reset
+                                        speech_start_time = None
+                                        total_speech_duration = 0.0
+
+                            # Mettre à jour dernière position lue
+                            last_file_size = current_size
+
+                    except Exception as e:
+                        # Log l'erreur pour debugging
+                        logger.debug(f"[{call_uuid[:8]}] VAD read error (retry): {e}")
+                        pass
+
+                    # Phase 1.4: Adaptive polling (10ms during speech, 50ms during silence)
+                    if speech_start_time is not None:
+                        time.sleep(0.01)  # Speech detected - high reactivity (10ms)
+                    else:
+                        time.sleep(0.05)  # Silence - CPU efficiency (50ms)
     
             logger.debug(f"[{call_uuid[:8]}] VAD monitoring ended (no barge-in)")
     
@@ -1421,144 +1446,144 @@ class RobotFreeSWITCH:
 
             start_time = time.time()
 
-            while time.time() - start_time < max_duration:
-                # Check hangup ou audio terminé
-                session = self.call_sessions.get(call_uuid)
-                if not session:
-                    logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Session closed")
-                    break
+            # Phase 2.1: Persistent file handle for streaming read
+            with open(record_file, 'rb') as wav_file:
+                file_position = 0
 
-                if session.get("hangup_detected", False):
-                    logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Hangup detected")
-                    break
+                while time.time() - start_time < max_duration:
+                    # Check hangup ou audio terminé
+                    session = self.call_sessions.get(call_uuid)
+                    if not session:
+                        logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Session closed")
+                        break
 
-                # CRITICAL: Arrêter si audio terminé normalement (pas de barge-in)
-                if session.get("audio_finished", False):
-                    logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Audio finished normally - stopping VAD monitoring")
-                    break
+                    if session.get("hangup_detected", False):
+                        logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Hangup detected")
+                        break
 
-                # Lire fichier WAV en mode RAW
-                try:
-                    current_size = Path(record_file).stat().st_size
-                    if current_size <= last_file_size:
-                        time.sleep(0.05)
-                        continue
+                    # CRITICAL: Arrêter si audio terminé normalement (pas de barge-in)
+                    if session.get("audio_finished", False):
+                        logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Audio finished normally - stopping VAD monitoring")
+                        break
 
-                    with open(record_file, 'rb') as f:
-                        raw_data = f.read()
+                    # Lire fichier WAV en streaming (Phase 2.1)
+                    try:
+                        current_size = Path(record_file).stat().st_size
+                        if current_size <= last_file_size:
+                            time.sleep(0.05)
+                            continue
 
-                    # Skip WAV header
-                    data_marker = b'data'
-                    data_pos = raw_data.find(data_marker)
-                    if data_pos == -1:
-                        time.sleep(0.05)
-                        continue
-
-                    audio_start = data_pos + 8
-                    audio_data = raw_data[audio_start:]
-
-                    # Nouvelles données uniquement
-                    if current_size > last_file_size:
-                        new_bytes = current_size - last_file_size
-                        new_audio_data = audio_data[-(new_bytes):]
-
-                        # Traiter frames STEREO → extraire canal gauche (client)
-                        offset = 0
-                        while offset + bytes_per_frame_stereo <= len(new_audio_data):
-                            stereo_frame = new_audio_data[offset:offset + bytes_per_frame_stereo]
-                            offset += bytes_per_frame_stereo
-
-                            # Extraire canal gauche (client) uniquement
-                            mono_frame = self._extract_left_channel_from_stereo(stereo_frame)
-
-                            is_speech = self.vad.is_speech(mono_frame, sample_rate)
-
-                            if is_speech:
-                                speech_frames += 1
-                                speech_frames_in_segment += 1  # Compteur frames dans segment actuel
-                                silence_frames = 0
-
-                                if speech_start_time is None:
-                                    speech_start_time = time.time()
-                                    current_segment_start = time.time()
-                                    speech_frames_in_segment = 1  # Reset compteur segment
-                                    logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: 🗣️ Speech detected → Start")
-
-                                # Calculer durée parole basée sur FRAMES (précis) au lieu de time.time() (imprécis)
-                                if speech_start_time:
-                                    # Durée audio réelle = nombre de frames * durée frame
-                                    total_speech_duration = (speech_frames_in_segment * frame_duration_ms) / 1000.0
-                                    last_speech_duration = total_speech_duration  # Sauvegarder pour backchannel logging
-
-                                    # Logger progression tous les 0.5s
-                                    if total_speech_duration - last_progress_log >= 0.5:
-                                        logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: Speech ongoing [{total_speech_duration:.1f}s / {config.PLAYING_BARGE_IN_THRESHOLD}s threshold]")
-                                        last_progress_log = total_speech_duration
-
-                                    # BARGE-IN si >= threshold
-                                    if total_speech_duration >= config.PLAYING_BARGE_IN_THRESHOLD:
-                                        logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: ⚡ BARGE-IN TRIGGERED! (speech {total_speech_duration:.2f}s >= {config.PLAYING_BARGE_IN_THRESHOLD}s)")
-
-                                        # 🔇 Echo filter: Vérifier si probable echo AVANT de stopper playback
-                                        if self.echo_filter and call_uuid in self.call_sessions:
-                                            record_path = self.call_sessions[call_uuid].get("current_recording_path")
-                                            if record_path and Path(record_path).exists():
-                                                # Attendre 100ms pour que fichier soit écrit
-                                                time.sleep(0.1)
-                                                if self.echo_filter.is_probable_echo(str(record_path)):
-                                                    logger.info(f"[{call_uuid[:8]}] 🔇 Echo detected → Ignoring barge-in")
-                                                    # Reset compteurs et continuer
-                                                    speech_frames = 0
-                                                    speech_frames_in_segment = 0
-                                                    speech_start_time = None
-                                                    total_speech_duration = 0.0
-                                                    last_speech_duration = 0.0
-                                                    current_segment_start = None
-                                                    continue  # Continuer monitoring
-
-                                        # Marquer timestamp barge-in
-                                        if call_uuid in self.call_sessions:
-                                            self.call_sessions[call_uuid]["barge_in_detected_time"] = time.time()
-
-                                        return  # Thread terminé
-
+                        # Phase 2.1: Stream read
+                        if file_position == 0:
+                            wav_file.seek(0)
+                            raw_data = wav_file.read(current_size)
+                            if call_uuid in self._wav_header_offset_cache:
+                                audio_start = self._wav_header_offset_cache[call_uuid]
                             else:
-                                # Silence
-                                silence_frames += 1
-                                silence_duration_s = (silence_frames * frame_duration_ms) / 1000.0
+                                data_marker = b'data'
+                                data_pos = raw_data.find(data_marker)
+                                if data_pos == -1:
+                                    time.sleep(0.05)
+                                    continue
+                                audio_start = data_pos + 8
+                                self._wav_header_offset_cache[call_uuid] = audio_start
+                            file_position = audio_start
+                            new_audio_data = raw_data[audio_start:]
+                        else:
+                            wav_file.seek(file_position)
+                            new_audio_data = wav_file.read(current_size - file_position)
+                            file_position = current_size
 
-                                # Reset si silence > PLAYING_SILENCE_RESET
-                                silence_reset_ms = int(config.PLAYING_SILENCE_RESET * 1000)
-                                if silence_frames > int(silence_reset_ms / frame_duration_ms):
+                        # Traiter nouvelles données
+                        if len(new_audio_data) > 0:
+                            # Traiter frames STEREO → extraire canal gauche (client)
+                            offset = 0
+                            while offset + bytes_per_frame_stereo <= len(new_audio_data):
+                                stereo_frame = new_audio_data[offset:offset + bytes_per_frame_stereo]
+                                offset += bytes_per_frame_stereo
+
+                                # Extraire canal gauche (client) uniquement
+                                mono_frame = self._extract_left_channel_from_stereo(stereo_frame)
+
+                                is_speech = self.vad.is_speech(mono_frame, sample_rate)
+
+                                if is_speech:
+                                    speech_frames += 1
+                                    speech_frames_in_segment += 1
+                                    silence_frames = 0
+
+                                    if speech_start_time is None:
+                                        speech_start_time = time.time()
+                                        current_segment_start = time.time()
+                                        speech_frames_in_segment = 1
+                                        logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: 🗣️ Speech detected → Start")
+
                                     if speech_start_time:
-                                        # Segment terminé - utiliser last_speech_duration (calculé au dernier frame de speech)
-                                        segment_duration = last_speech_duration
+                                        total_speech_duration = (speech_frames_in_segment * frame_duration_ms) / 1000.0
+                                        last_speech_duration = total_speech_duration
 
-                                        # Backchannel ou vraie parole ?
-                                        if segment_duration < config.PLAYING_BACKCHANNEL_MAX:
-                                            logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: 💬 Backchannel detected ({segment_duration:.2f}s < {config.PLAYING_BACKCHANNEL_MAX}s) → Ignored")
-                                            speech_segments.append(("backchannel", segment_duration))
-                                        else:
-                                            logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: 🗣️ Speech segment ended ({segment_duration:.2f}s, but < {config.PLAYING_BARGE_IN_THRESHOLD}s barge-in threshold)")
-                                            speech_segments.append(("speech", segment_duration))
+                                        if total_speech_duration - last_progress_log >= 0.5:
+                                            logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: Speech ongoing [{total_speech_duration:.1f}s / {config.PLAYING_BARGE_IN_THRESHOLD}s threshold]")
+                                            last_progress_log = total_speech_duration
 
-                                        logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: 🔄 Reset (silence {config.PLAYING_SILENCE_RESET}s detected)")
+                                        if total_speech_duration >= config.PLAYING_BARGE_IN_THRESHOLD:
+                                            logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: ⚡ BARGE-IN TRIGGERED! (speech {total_speech_duration:.2f}s >= {config.PLAYING_BARGE_IN_THRESHOLD}s)")
 
-                                    speech_frames = 0
-                                    speech_frames_in_segment = 0  # Reset compteur frames segment
-                                    speech_start_time = None
-                                    total_speech_duration = 0.0
-                                    last_speech_duration = 0.0  # Reset last_speech_duration aussi
-                                    current_segment_start = None
-                                    last_progress_log = 0.0  # Reset progress
+                                            if self.echo_filter and call_uuid in self.call_sessions:
+                                                record_path = self.call_sessions[call_uuid].get("current_recording_path")
+                                                if record_path and Path(record_path).exists():
+                                                    if self.echo_filter.is_probable_echo(str(record_path)):
+                                                        logger.info(f"[{call_uuid[:8]}] 🔇 Echo detected → Ignoring barge-in")
+                                                        speech_frames = 0
+                                                        speech_frames_in_segment = 0
+                                                        speech_start_time = None
+                                                        total_speech_duration = 0.0
+                                                        last_speech_duration = 0.0
+                                                        current_segment_start = None
+                                                        continue
 
-                        last_file_size = current_size
+                                            if call_uuid in self.call_sessions:
+                                                self.call_sessions[call_uuid]["barge_in_detected_time"] = time.time()
 
-                except Exception as e:
-                    logger.debug(f"[{call_uuid[:8]}] PLAYING VAD read error: {e}")
-                    pass
+                                            return
 
-                time.sleep(0.05)
+                                else:
+                                    silence_frames += 1
+                                    silence_duration_s = (silence_frames * frame_duration_ms) / 1000.0
+
+                                    silence_reset_ms = int(config.PLAYING_SILENCE_RESET * 1000)
+                                    if silence_frames > int(silence_reset_ms / frame_duration_ms):
+                                        if speech_start_time:
+                                            segment_duration = last_speech_duration
+
+                                            if segment_duration < config.PLAYING_BACKCHANNEL_MAX:
+                                                logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: 💬 Backchannel detected ({segment_duration:.2f}s < {config.PLAYING_BACKCHANNEL_MAX}s) → Ignored")
+                                                speech_segments.append(("backchannel", segment_duration))
+                                            else:
+                                                logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: 🗣️ Speech segment ended ({segment_duration:.2f}s, but < {config.PLAYING_BARGE_IN_THRESHOLD}s barge-in threshold)")
+                                                speech_segments.append(("speech", segment_duration))
+
+                                            logger.info(f"[{call_uuid[:8]}] 🎙️ PLAYING VAD: 🔄 Reset (silence {config.PLAYING_SILENCE_RESET}s detected)")
+
+                                        speech_frames = 0
+                                        speech_frames_in_segment = 0
+                                        speech_start_time = None
+                                        total_speech_duration = 0.0
+                                        last_speech_duration = 0.0
+                                        current_segment_start = None
+                                        last_progress_log = 0.0
+
+                            last_file_size = current_size
+
+                    except Exception as e:
+                        logger.debug(f"[{call_uuid[:8]}] PLAYING VAD read error: {e}")
+                        pass
+
+                    # Phase 1.4: Adaptive polling (10ms during speech, 50ms during silence)
+                    if speech_start_time is not None:
+                        time.sleep(0.01)  # Speech detected - high reactivity (10ms)
+                    else:
+                        time.sleep(0.05)  # Silence - CPU efficiency (50ms)
 
             # Audio terminé sans barge-in
             logger.debug(f"[{call_uuid[:8]}] PLAYING VAD: Monitoring ended (no barge-in)")
@@ -1747,15 +1772,22 @@ class RobotFreeSWITCH:
                     with open(record_file, 'rb') as f:
                         raw_data = f.read()
 
-                    # Skip WAV header
-                    data_marker = b'data'
-                    data_pos = raw_data.find(data_marker)
-                    if data_pos == -1:
-                        time.sleep(0.05)
-                        continue
+                    # Skip WAV header (utiliser cache si disponible - Phase 1.2 optimization)
+                    if call_uuid in self._wav_header_offset_cache:
+                        # Cache hit: utiliser offset déjà calculé
+                        audio_start = self._wav_header_offset_cache[call_uuid]
+                        audio_data = raw_data[audio_start:]
+                    else:
+                        # Cache miss: chercher header et cacher pour prochaine fois
+                        data_marker = b'data'
+                        data_pos = raw_data.find(data_marker)
+                        if data_pos == -1:
+                            time.sleep(0.05)
+                            continue
 
-                    audio_start = data_pos + 8
-                    audio_data = raw_data[audio_start:]
+                        audio_start = data_pos + 8
+                        self._wav_header_offset_cache[call_uuid] = audio_start  # Cache it
+                        audio_data = raw_data[audio_start:]
 
                     # Nouvelles données uniquement
                     if current_size > last_file_size:
@@ -1900,7 +1932,11 @@ class RobotFreeSWITCH:
                     logger.debug(f"[{call_uuid[:8]}] WAITING VAD read error: {e}")
                     pass
 
-                time.sleep(0.05)
+                # Phase 1.4: Adaptive polling (10ms during speech, 50ms during silence)
+                if speech_detected:
+                    time.sleep(0.01)  # Speech detected - high reactivity (10ms)
+                else:
+                    time.sleep(0.05)  # Silence - CPU efficiency (50ms)
 
             # Timeout atteint
             if speech_detected:
