@@ -1,354 +1,575 @@
+# -*- coding: utf-8 -*-
 """
-Configuration MiniBotPanel - ULTRA SIMPLIFIÉE
-==============================================
+Configuration Manager - MiniBotPanel v3 FILE-BASED Optimized
 
-Configuration épurée avec uniquement l'essentiel:
-- Chemins et dossiers
-- Database
-- FreeSWITCH ESL
-- Services IA (Faster-Whisper, Ollama)
-- AMD (Answering Machine Detection)
-- Barge-in (détection interruption client)
-- Gestion appels et retry
+Configuration centralis�e pour le robot d'appel marketing automatis�.
+
+Architecture 3 PHASES :
+- Phase 1 : AMD (Answering Machine Detection)
+- Phase 2 : PLAYING AUDIO (avec barge-in VAD)
+- Phase 3 : WAITING RESPONSE (�coute client)
+
+Optimisations latence :
+- Intent detection via KEYWORDS (NO Ollama) � -200 � -400ms
+- Barge-in VAD sans transcription � -100ms
+- Faster-Whisper GPU batch processing � -50 � -100ms
+- FILE-BASED mode (fiable, pas de WebSocket drops)
+
+Objectif : Conversation INSTANTAN�E, FLUIDE, NATURELLE (<1s par cycle)
 """
 
 import os
-import sys
+import logging
 from pathlib import Path
-from dotenv import load_dotenv
+from typing import Dict, List, Any, Optional
 
-load_dotenv()
+logger = logging.getLogger(__name__)
 
-# ============================================================================
-# AUTO-CONFIGURE GPU LIBRARIES (cuDNN)
-# ============================================================================
-def _setup_gpu_libraries():
-    """
-    Configure cuDNN libraries automatiquement.
 
-    Si cuDNN détecté dans venv et LD_LIBRARY_PATH pas configuré,
-    re-lance Python avec LD_LIBRARY_PATH correct.
-    """
-    # Si déjà configuré, skip
-    if os.environ.get("_GPU_LIBS_SET"):
-        return
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+# 1. ENVIRONNEMENT & CHEMINS
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
 
-    try:
-        # Chercher cuDNN dans venv
-        venv_base = Path(sys.executable).parent.parent
-        cudnn_lib = venv_base / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages" / "nvidia" / "cudnn" / "lib"
-        cublas_lib = venv_base / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages" / "nvidia" / "cublas" / "lib"
+# Base directory (racine du projet)
+BASE_DIR = Path(__file__).parent.parent.resolve()
 
-        new_paths = []
-        if cudnn_lib.exists():
-            new_paths.append(str(cudnn_lib))
-        if cublas_lib.exists():
-            new_paths.append(str(cublas_lib))
-
-        if new_paths:
-            # Vérifier si LD_LIBRARY_PATH contient déjà cuDNN
-            current_ld = os.environ.get("LD_LIBRARY_PATH", "")
-            if str(cudnn_lib) not in current_ld:
-                # Pas configuré, re-lancer avec LD_LIBRARY_PATH
-                new_ld = ":".join(new_paths + ([current_ld] if current_ld else []))
-
-                env = os.environ.copy()
-                env["LD_LIBRARY_PATH"] = new_ld
-                env["_GPU_LIBS_SET"] = "1"
-
-                # Re-lancer script actuel
-                os.execvpe(sys.executable, [sys.executable] + sys.argv, env)
-    except Exception:
-        pass
-
-# Configurer GPU automatiquement au chargement du module
-_setup_gpu_libraries()
-
-# ============================================================================
-# CHEMINS
-# ============================================================================
-BASE_DIR = Path(__file__).parent.parent
-AUDIO_DIR = BASE_DIR / "audio"
+# Dossiers principaux
 LOGS_DIR = BASE_DIR / "logs"
-EXPORTS_DIR = BASE_DIR / "exports"
-# FreeSWITCH recordings - Utiliser répertoire natif FreeSWITCH
-# Avantages: permissions correctes, pas de header WAV corrompu, standard FreeSWITCH
-RECORDINGS_DIR = Path(os.getenv(
-    "FREESWITCH_RECORDINGS_DIR",
-    "/usr/local/freeswitch/recordings"
-))
+AUDIO_DIR = BASE_DIR / "audio"
+RECORDINGS_DIR = BASE_DIR / "audio_recordings"
+SCENARIOS_DIR = BASE_DIR / "scenarios"
+MODELS_DIR = BASE_DIR / "models"
 
-# Audio FreeSWITCH
-FREESWITCH_SOUNDS_DIR = Path(os.getenv(
-    "FREESWITCH_SOUNDS_DIR",
-    "/usr/share/freeswitch/sounds/minibot"
-))
-DEFAULT_VOICE = os.getenv("DEFAULT_VOICE", "julie")
+# Cr�er dossiers si inexistants
+for directory in [LOGS_DIR, AUDIO_DIR, RECORDINGS_DIR, SCENARIOS_DIR, MODELS_DIR]:
+    directory.mkdir(parents=True, exist_ok=True)
 
-def get_freeswitch_audio_path(voice: str, audio_type: str, filename: str) -> Path:
-    """
-    Retourne chemin FreeSWITCH pour audio.
 
-    Args:
-        voice: julie, marie, etc.
-        audio_type: base, objections
-        filename: nom fichier avec .wav
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+# 2. FREESWITCH ESL (Event Socket Layer)
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
 
-    Returns:
-        Path: /usr/share/freeswitch/sounds/minibot/{voice}/{audio_type}/{filename}
-    """
-    if not filename.endswith('.wav'):
-        filename = f"{filename}.wav"
-    return FREESWITCH_SOUNDS_DIR / voice / audio_type / filename
+FREESWITCH_ESL_HOST = os.getenv("FREESWITCH_ESL_HOST", "127.0.0.1")
+FREESWITCH_ESL_PORT = int(os.getenv("FREESWITCH_ESL_PORT", 8021))
+FREESWITCH_ESL_PASSWORD = os.getenv("FREESWITCH_ESL_PASSWORD", "ClueCon")
 
-# ============================================================================
-# DATABASE
-# ============================================================================
+# Timeouts ESL
+ESL_CONNECT_TIMEOUT = 5  # secondes
+ESL_RECONNECT_DELAY = 3  # secondes
+ESL_MAX_RECONNECT_ATTEMPTS = 5
+
+
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+# 3. POSTGRESQL DATABASE
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://minibot:minibot@localhost:5432/minibot_freeswitch"
+    "postgresql://minibot:minibot@localhost:5432/minibot"
 )
 
-# ============================================================================
-# FREESWITCH
-# ============================================================================
-FREESWITCH_HOST = os.getenv("FREESWITCH_HOST", "localhost")
-FREESWITCH_ESL_HOST = os.getenv("FREESWITCH_ESL_HOST", "localhost")
-FREESWITCH_ESL_PORT = int(os.getenv("FREESWITCH_ESL_PORT", "8021"))
-FREESWITCH_ESL_PASSWORD = os.getenv("FREESWITCH_ESL_PASSWORD", "ClueCon")
-FREESWITCH_GATEWAY = os.getenv("FREESWITCH_GATEWAY", "gateway1")
-FREESWITCH_CALLER_ID = os.getenv("FREESWITCH_CALLER_ID", "33609907845")
 
-# ============================================================================
-# IA SERVICES
-# ============================================================================
-# STT Engine Selection
-STT_ENGINE = os.getenv("STT_ENGINE", "faster_whisper")  # "faster_whisper" or "vosk"
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+# 4. GPU AUTO-DETECTION (Faster-Whisper)
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
 
-# GPU Auto-Detection pour Faster-Whisper
-def _detect_gpu_device():
+def _detect_gpu_device() -> str:
     """
-    Détecte automatiquement si GPU disponible + cuDNN installé.
+    D�tecte automatiquement si GPU CUDA disponible pour Faster-Whisper.
 
     Returns:
-        str: "cuda" si GPU disponible et cuDNN OK, sinon "cpu"
+        "cuda" si GPU disponible, sinon "cpu"
     """
     try:
         import torch
         if not torch.cuda.is_available():
+            logger.warning("�  CUDA not available, using CPU (slower)")
             return "cpu"
 
-        # Tester si cuDNN disponible (essayer import)
+        # V�rifier CTranslate2 (requis pour Faster-Whisper)
         try:
             from ctranslate2 import __version__
-            # Si on arrive ici, ctranslate2 est installé
-            # On peut tester CUDA
+            logger.info(f" GPU CUDA detected, CTranslate2 {__version__}")
             return "cuda"
-        except Exception:
+        except ImportError:
+            logger.warning("�  CTranslate2 not found, using CPU")
             return "cpu"
     except ImportError:
+        logger.warning("�  PyTorch not found, using CPU")
         return "cpu"
 
-# Faster-Whisper STT (Primary - GPU accelerated)
-FASTER_WHISPER_MODEL = os.getenv("FASTER_WHISPER_MODEL", "small")  # tiny, base, small, medium, large (small = best quality/speed balance)
-FASTER_WHISPER_DEVICE = os.getenv("FASTER_WHISPER_DEVICE", _detect_gpu_device())  # auto-detect GPU
-FASTER_WHISPER_COMPUTE_TYPE = os.getenv("FASTER_WHISPER_COMPUTE_TYPE", "auto")  # auto, float16, int8
 
-# Vosk STT (Fallback)
-VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "models/vosk-model-fr-0.6-linto-2.2.0")
-VOSK_SAMPLE_RATE = int(os.getenv("VOSK_SAMPLE_RATE", "16000"))
+DEVICE = _detect_gpu_device()
 
-# Ollama NLP
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
-OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "30"))
 
-# ============================================================================
-# AMD (Answering Machine Detection)
-# ============================================================================
-AMD_ENABLED = os.getenv("AMD_ENABLED", "true").lower() == "true"
-AMD_LISTEN_DURATION = float(os.getenv("AMD_LISTEN_DURATION", "2.5"))
-AMD_WORD_THRESHOLD = int(os.getenv("AMD_WORD_THRESHOLD", "8"))
-AMD_INITIAL_DELAY = float(os.getenv("AMD_INITIAL_DELAY", "2.5"))  # Délai avant de parler
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+# 5. PHASE 1 - AMD (Answering Machine Detection)
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
 
-# ============================================================================
-# STREAMING ASR & VAD
-# ============================================================================
-# VAD (Voice Activity Detection)
-VAD_SILENCE_THRESHOLD = float(os.getenv("VAD_SILENCE_THRESHOLD", "0.8"))  # secondes
-VAD_SPEECH_START_THRESHOLD = float(os.getenv("VAD_SPEECH_START_THRESHOLD", "0.5"))
+# Dur�e max d'�coute pour AMD (en secondes)
+AMD_MAX_DURATION = 1.5
 
-# WebSocket
-WEBSOCKET_HOST = os.getenv("WEBSOCKET_HOST", "127.0.0.1")
-WEBSOCKET_PORT = int(os.getenv("WEBSOCKET_PORT", "8080"))
+# Keywords pour d�tecter HUMAIN
+AMD_KEYWORDS_HUMAN = [
+    "all�", "allo", "oui", "ouais", "bonjour", "bonsoir",
+    "j'�coute", "je vous �coute", "qui", "quoi", "c'est qui"
+]
 
-# ============================================================================
-# VAD MODES - 3 comportements distincts (Best Practices 2025)
-# ============================================================================
+# Keywords pour d�tecter R�PONDEUR/MACHINE
+AMD_KEYWORDS_MACHINE = [
+    "messagerie", "repondeur", "message", "bip", "signal sonore",
+    "laissez", "apres le bip", "absent", "indisponible",
+    "rappeler", "vous etes bien", "bonjour vous etes"
+]
 
-# MODE 1: AMD (Answering Machine Detection)
-# Objectif: Détecter HUMAN vs MACHINE rapidement
-# Comportement: Transcrire TOUT (même "allô", bip, silence), pas de seuil minimum
-AMD_TIMEOUT = 1.3  # secondes (ultra rapide)
-AMD_MIN_SPEECH_DURATION = 0.3  # secondes - Détecter dès 300ms de parole
-AMD_TRANSCRIBE_ALL = True  # Tout transcrire pour NLP
+# Timeout silence AMD (si aucun son d�tect�)
+AMD_SILENCE_TIMEOUT = 2.0  # secondes
 
-# MODE 2: PLAYING_AUDIO (Barge-in intelligent)
-# Objectif: Détecter vraies interruptions vs. backchannels ("oui", "ok", "hum")
-# Comportement: Transcrire TOUT en continu, barge-in si parole >= 1.8s
-PLAYING_BARGE_IN_THRESHOLD = 1.8  # secondes - Parole continue >= 1.8s = barge-in (évite faux positifs)
-PLAYING_BACKCHANNEL_MAX = 0.8  # secondes - Parole < 0.8s = backchannel (logger seulement)
-PLAYING_SILENCE_RESET = 2.0  # secondes - Reset compteur si silence >= 2.0s (filtre backchannels multiples)
-PLAYING_TRANSCRIBE_ALL = True  # Transcrire tous les segments (même backchannels)
-PLAYING_SMOOTH_DELAY = 0.3  # secondes - Délai avant interruption (finir phrase naturellement) - Ultra réactif
+# Confidence minimum pour consid�rer d�tection valide
+AMD_MIN_CONFIDENCE = 0.5
 
-# MODE 3: WAITING_RESPONSE (End-of-speech detection)
-# Objectif: Détecter début/fin de parole, transcrire réponse complète
-# Comportement: Détecter début parole dès 300ms, fin si silence >= 0.4s
-WAITING_TIMEOUT = 10.0  # secondes - Timeout total avant retry_silence
-WAITING_MIN_SPEECH_DURATION = 0.3  # secondes - Détecter début parole
-WAITING_END_OF_SPEECH_SILENCE = 0.3  # secondes - Silence pour fin de parole - OPTIMISÉ réactivité (gain -0.2s/step)
-WAITING_TRANSCRIBE_CONTINUOUS = True  # Transcrire pendant que client parle (latence minimale)
 
-# ============================================================================
-# EXPERIMENTAL: CONTINUOUS TRANSCRIPTION (can be easily disabled if issues)
-# ============================================================================
-# Expected gain: ~0.3-0.5s per interaction
-# Launch transcription DURING speech instead of waiting for end-of-speech
-# Applies to both BARGE-IN and WAITING_RESPONSE modes
-CONTINUOUS_TRANSCRIPTION_ENABLED = os.getenv("CONTINUOUS_TRANSCRIPTION_ENABLED", "true").lower() == "true"
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+# 6. PHASE 2 - PLAYING AUDIO (Barge-in)
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
 
-# Compatibilité ancienne config (DEPRECATED - utiliser configs spécifiques ci-dessus)
+# Barge-in activ� par d�faut
 BARGE_IN_ENABLED = True
-BARGE_IN_DURATION_THRESHOLD = PLAYING_BARGE_IN_THRESHOLD
-BARGE_IN_SILENCE_RESET = PLAYING_SILENCE_RESET
-GRACE_PERIOD_SECONDS = 2.0  # Grace period au début audio (à retirer si non utilisé)
-SMOOTH_DELAY_SECONDS = PLAYING_SMOOTH_DELAY
-BARGE_IN_SMOOTH_DELAY = PLAYING_SMOOTH_DELAY
 
-# ============================================================================
-# APPELS & RETRY
-# ============================================================================
-MAX_SIMULTANEOUS_CALLS = int(os.getenv("MAX_SIMULTANEOUS_CALLS", "10"))
-CALL_TIMEOUT_SECONDS = int(os.getenv("CALL_TIMEOUT_SECONDS", "300"))
+# Seuil de parole pour d�clencher barge-in (en secondes)
+# Parole <1.5s (respirations, "oui", "non") � ignor�e
+# Parole e1.5s � barge-in d�clench�
+BARGE_IN_THRESHOLD = 1.5
 
-# Retry
-RETRY_ENABLED = os.getenv("RETRY_ENABLED", "true").lower() == "true"
-MAX_RETRIES = int(os.getenv("MAX_RETRIES", "2"))
-RETRY_DELAY_MINUTES = int(os.getenv("RETRY_DELAY_MINUTES", "30"))
+# Smooth delay apr�s d�tection barge-in (pour naturel)
+# Robot coupe pas direct, attend 0.3s pour effet naturel
+BARGE_IN_SMOOTH_DELAY = 0.3
 
-# ============================================================================
-# RECORDING CLEANUP
-# ============================================================================
-# Automatic cleanup of old recordings to prevent disk saturation
-RECORDING_CLEANUP_ENABLED = os.getenv("RECORDING_CLEANUP_ENABLED", "true").lower() == "true"
-RECORDING_RETENTION_DAYS = int(os.getenv("RECORDING_RETENTION_DAYS", "7"))  # Delete recordings older than 7 days
-RECORDING_CLEANUP_DISK_THRESHOLD = float(os.getenv("RECORDING_CLEANUP_DISK_THRESHOLD", "80"))  # Trigger cleanup at 80% disk usage
-RECORDING_CLEANUP_DISK_TARGET = float(os.getenv("RECORDING_CLEANUP_DISK_TARGET", "70"))  # Target 70% after cleanup
+# VAD aggressiveness (0-3, 3 = plus agressif)
+VAD_AGGRESSIVENESS = 3
 
-# ============================================================================
-# LOGGING
-# ============================================================================
+
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+# 7. PHASE 3 - WAITING RESPONSE (�coute client)
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+
+# Seuil de silence pour d�tecter fin de parole client (en secondes)
+# Client parle � silence 0.6s � consid�r� comme "fini de parler"
+SILENCE_THRESHOLD = 0.6
+
+# Timeout max d'attente pour r�ponse client (en secondes)
+WAITING_TIMEOUT = 10.0
+
+# Nombre max de silences cons�cutifs avant hangup NO_ANSWER
+MAX_CONSECUTIVE_SILENCES = 2
+
+# Nombre max de "no match" objections cons�cutifs avant hangup
+MAX_CONSECUTIVE_NO_MATCH = 3
+
+
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+# 8. STT - FASTER-WHISPER (Speech-to-Text)
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+
+# Mod�le Faster-Whisper
+# Options : "tiny", "base", "small", "medium", "large-v2", "large-v3"
+# Recommandation : "base" (bon balance vitesse/pr�cision)
+FASTER_WHISPER_MODEL = os.getenv("FASTER_WHISPER_MODEL", "base")
+
+# Device (auto-d�tect�)
+FASTER_WHISPER_DEVICE = os.getenv("FASTER_WHISPER_DEVICE", DEVICE)
+
+# Compute type (GPU optimis�)
+# Options : "float16" (GPU rapide), "int8" (CPU rapide), "float32" (pr�cis mais lent)
+FASTER_WHISPER_COMPUTE_TYPE = "float16" if DEVICE == "cuda" else "int8"
+
+# Langue
+FASTER_WHISPER_LANGUAGE = "fr"
+
+# Beam size (pr�cision transcription, 1-10)
+# Plus �lev� = plus pr�cis mais plus lent
+# Recommandation : 1 pour vitesse max, 5 pour balance
+FASTER_WHISPER_BEAM_SIZE = 1
+
+# VAD filter (supprime silences avant/apr�s)
+FASTER_WHISPER_VAD_FILTER = True
+
+
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+# 9. VAD - WEBRTC (Voice Activity Detection)
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+
+# Aggressiveness VAD (0-3)
+# 0 = moins agressif (d�tecte + de parole, risque faux positifs)
+# 3 = plus agressif (d�tecte uniquement parole claire)
+# Recommandation : 3 pour barge-in r�actif sans faux positifs
+WEBRTC_VAD_AGGRESSIVENESS = 3
+
+# Frame duration pour VAD (millisecondes)
+# Options : 10, 20, 30
+# Recommandation : 30 (balance r�activit�/fiabilit�)
+WEBRTC_VAD_FRAME_DURATION_MS = 30
+
+# Sample rate pour VAD (Hz)
+# Doit �tre 8000, 16000, 32000, ou 48000
+WEBRTC_VAD_SAMPLE_RATE = 8000
+
+
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+# 10. INTENT DETECTION - KEYWORDS MATCHING (NO Ollama)
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+
+# FIXED EXPRESSIONS (Multi-Word Expressions) - PRIORITE ABSOLUE
+# Ces expressions doivent etre detectees AVANT les keywords simples
+# Basees sur best practices NLP: MWEs representent 30-50% du vocabulaire
+FIXED_EXPRESSIONS: Dict[str, List[str]] = {
+    # Affirm: Expressions positives multi-mots
+    "affirm": [
+        "pourquoi pas",      # vs "pourquoi" (question)
+        "pas mal",           # vs "mal" (negatif)
+        "pas bete",          # vs "bete" (negatif)
+        "ca m'interesse",    # vs "ca m'interesse pas" (deny)
+        "bien sur",          # expression complete
+        "tout a fait",       # expression complete
+        "avec plaisir",      # expression complete
+        "bien entendu",      # expression complete
+        "d'accord",          # expression complete
+        "allons-y",          # expression complete
+    ],
+
+    # Deny: Negations d'expressions positives
+    "deny": [
+        "ca marche pas",        # vs "ca marche" (affirm)
+        "ca m'interesse pas",   # vs "ca m'interesse" (affirm)
+        "ca va pas",            # vs "ca va" (affirm)
+        "pas vraiment",         # negation de "vraiment"
+        "peut-etre pas",        # negation de "peut-etre"
+        "pas pour moi",         # vs "pour moi" (affirm)
+        "pas question",         # vs "question" (question)
+        "hors de question",     # vs "question" (question)
+        "pas du tout",          # negation forte
+        "pas interesse",        # negation
+        "non merci",            # refus poli
+        "jamais de la vie",     # refus fort
+        "absolument pas",       # negation forte
+        "en aucun cas",         # negation forte
+        "surtout pas",          # negation forte
+    ],
+
+    # Question: Questions avec mots affirm
+    "question": [
+        "comment ca marche",    # vs "ca marche" (affirm)
+        "ca marche comment",    # vs "ca marche" (affirm)
+        "pourquoi ca",          # question avec "ca"
+        "c'est quoi",           # question complete
+        "qu'est-ce que",        # question complete
+        "combien ca coute",     # question complete
+        "comment ca",           # question avec "ca"
+    ],
+
+    # Unsure: Expressions d'hesitation
+    "unsure": [
+        "je sais pas",          # vs "je sais" (affirm potentiel)
+        "sais pas trop",        # hesitation
+        "faut voir",            # hesitation
+        "on verra",             # hesitation
+    ]
+}
+
+# NEGATION WORDS - Detection negations francais parle (sans "ne")
+# Basees sur research NLP francais: "ne" souvent omis en parle
+NEGATION_WORDS: List[str] = [
+    "non", "pas", "jamais", "aucun", "aucune", "rien"
+]
+
+# NEGATION PHRASES - Negations explicites (override tout)
+NEGATION_PHRASES: List[str] = [
+    "non merci",
+    "pas du tout",
+    "absolument pas",
+    "hors de question",
+    "jamais de la vie",
+    "en aucun cas",
+    "surtout pas"
+]
+
+# INTERROGATIVE WORDS - Mots interrogatifs en debut de phrase
+# Si detectes en position 0-2, override intent = "question"
+# Exception: "pourquoi pas" (expression figee affirm)
+# Note: "ou" retire (trop ambigu - match dans "pour", "beaucoup", etc.)
+INTERROGATIVE_WORDS: List[str] = [
+    "comment", "pourquoi", "combien", "quoi",
+    "quel", "quelle", "qui", "quand"
+]
+
+# Mapping keywords � intent
+# Optimisation : keywords matching au lieu d'Ollama (gain -200 � -400ms)
+INTENT_KEYWORDS: Dict[str, List[str]] = {
+    # Intent 1: AFFIRM (acceptation positive)
+    # Mots ambigus retires: "interesse", "ca m'interesse", "ca marche"
+    # (maintenant dans FIXED_EXPRESSIONS uniquement)
+    "affirm": [
+        "oui", "ok", "daccord", "parfait", "volontiers",
+        "tres bien", "entendu", "certainement",
+        "curieux", "je veux bien", "attentif",
+        # Nouveaux mots surs
+        "go", "allez-y", "banco", "carrementx",
+        "nickel", "super", "genial", "top",
+        "evidemment", "absolument"
+    ],
+
+    # Intent 2: DENY (refus/rejet)
+    # Renforce avec +10 keywords pour detecter refus/negations
+    "deny": [
+        "non", "jamais", "arretez", "stop",
+        # Nouveaux keywords negations
+        "aucune", "refuse", "je refuse", "hors sujet",
+        "ca va aller", "c'est bon", "laissez",
+        "pas trop", "pas tellement", "vraiment pas"
+    ],
+
+    # Intent 3: UNSURE (hesitation)
+    # Ajoute +6 keywords pour mieux detecter hesitations
+    "unsure": [
+        "peut-etre", "hesite", "voir", "reflechir",
+        "penser", "hesiter", "doute",
+        # Nouveaux keywords hesitation
+        "bof", "mouais", "euh",
+        "je vois", "je sais plus", "chais pas",
+        "sais pas vraiment", "pas sur"
+    ],
+
+    # Intent 4: QUESTION (demande information)
+    # Ajoute +7 keywords pour mieux detecter questions
+    "question": [
+        "comment", "pourquoi", "combien", "quoi", "quelle", "quel",
+        "expliquer", "details", "fonctionnement", "preciser",
+        # Nouveaux keywords questions ("ou" retire - trop ambigu)
+        "qui", "quand",
+        "dites-moi", "expliquez-moi", "je comprends pas",
+        "exemple", "par exemple", "ca veut dire quoi"
+    ],
+
+    # Intent 5: OBJECTION (objection specifique - pour ObjectionMatcher)
+    "objection": [
+        # Prix / Budget
+        "cher", "prix", "cout", "budget", "argent",
+        "trop cher", "hors de prix", "pas les moyens",
+
+        # Temps
+        "temps", "occupe", "pas le temps", "plus tard", "rappeler",
+        "derangez", "moment", "disponible", "rappel", "recontacter",
+
+        # Confiance
+        "arnaque", "serieux", "fiable", "confiance", "mefiance",
+
+        # Deja equipe
+        "deja", "ai deja", "possede deja", "equipe",
+
+        # Autres objections
+        "pas maintenant", "autre moment"
+    ]
+}
+
+# Intent par d�faut si aucun keyword match�
+DEFAULT_INTENT = "unsure"
+
+# Poids minimum de matching pour consid�rer intent valide
+# Ex: si 2 keywords "affirm" et 1 keyword "deny" � affirm (2 > 1)
+INTENT_MIN_WEIGHT = 1
+
+
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+# 11. OBJECTION MATCHER
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+
+# Score minimum pour consid�rer match valide (0.0-1.0)
+# 0.6 = 60% similarit� minimum
+OBJECTION_MIN_SCORE = 0.6
+
+# Score "high confidence" (e0.8) vs "medium confidence" (0.6-0.8)
+OBJECTION_HIGH_CONFIDENCE_THRESHOLD = 0.8
+
+# Top N candidats � �valuer (optimisation)
+OBJECTION_TOP_N = 3
+
+
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+# 12. AUDIO SETTINGS (FreeSWITCH)
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+
+# Sample rate t�l�phonie standard
+AUDIO_SAMPLE_RATE = 8000  # Hz
+
+# Channels (MONO = �vite echo, robot n'entend pas sa propre voix)
+AUDIO_CHANNELS = 1  # Mono
+
+# Format audio
+AUDIO_FORMAT = "wav"
+
+# Codec FreeSWITCH (G.711 �-law pour t�l�phonie)
+AUDIO_CODEC = "PCMU"
+
+# R�pertoire audios pr�-enregistr�s
+PRERECORDED_AUDIO_DIR = AUDIO_DIR / "prerecorded"
+PRERECORDED_AUDIO_DIR.mkdir(exist_ok=True)
+
+
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+# 13. LOGGING
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+
+# Niveau de log (DEBUG pour d�veloppement, INFO pour production)
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 
-# ============================================================================
-# CLASSE CONFIG (pour import facile)
-# ============================================================================
+# Format logs (JSON structur� pour parsing)
+LOG_FORMAT_JSON = True
+
+# Logs d�taill�s avec latences
+LOG_LATENCIES = True
+
+# R�pertoires logs
+LOG_CALLS_DIR = LOGS_DIR / "calls"
+LOG_SYSTEM_DIR = LOGS_DIR / "system"
+LOG_PERFORMANCE_DIR = LOGS_DIR / "performance"
+
+for log_dir in [LOG_CALLS_DIR, LOG_SYSTEM_DIR, LOG_PERFORMANCE_DIR]:
+    log_dir.mkdir(exist_ok=True)
+
+# R�tention logs (jours)
+LOG_RETENTION_DAYS = 30
+
+# R�tention fichiers audio enregistr�s (jours)
+AUDIO_RETENTION_DAYS = 7
+
+
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+# 14. OLLAMA (Sentiment Analysis uniquement - OPTIONNEL)
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+
+# NOTE : Ollama PAS utilis� pour intent detection (trop lent)
+# Gard� UNIQUEMENT pour sentiment analysis (optionnel, non-bloquant)
+
+OLLAMA_ENABLED = os.getenv("OLLAMA_ENABLED", "false").lower() == "true"
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral:7b")
+OLLAMA_TIMEOUT = 5.0  # secondes (sentiment analysis non-bloquant)
+
+
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+# 15. QUALIFICATIONS LEADS
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+
+# Statuts possibles pour qualification leads
+LEAD_STATUS_NEW = "NEW"  # Initial
+LEAD_STATUS_NO_ANSWER = "NO_ANSWER"  # Pas de r�ponse, rappeler
+LEAD_STATUS_NOT_INTERESTED = "NOT_INTERESTED"  # Pas int�ress�
+LEAD_STATUS_LEAD = "LEAD"  # Qualifi� comme lead
+
+
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+# 16. CONFIGURATION OBJECT (pour compatibilit�)
+# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+
 class Config:
-    """Config - Simplifié et propre"""
+    """Configuration object pour acc�s via config.PARAM_NAME"""
 
     # Chemins
     BASE_DIR = BASE_DIR
-    AUDIO_DIR = AUDIO_DIR
     LOGS_DIR = LOGS_DIR
-    EXPORTS_DIR = EXPORTS_DIR
+    AUDIO_DIR = AUDIO_DIR
     RECORDINGS_DIR = RECORDINGS_DIR
-    FREESWITCH_SOUNDS_DIR = FREESWITCH_SOUNDS_DIR
-    DEFAULT_VOICE = DEFAULT_VOICE
+    SCENARIOS_DIR = SCENARIOS_DIR
+    MODELS_DIR = MODELS_DIR
+
+    # FreeSWITCH
+    FREESWITCH_ESL_HOST = FREESWITCH_ESL_HOST
+    FREESWITCH_ESL_PORT = FREESWITCH_ESL_PORT
+    FREESWITCH_ESL_PASSWORD = FREESWITCH_ESL_PASSWORD
 
     # Database
     DATABASE_URL = DATABASE_URL
 
-    # FreeSWITCH
-    FREESWITCH_HOST = FREESWITCH_HOST
-    FREESWITCH_ESL_HOST = FREESWITCH_ESL_HOST
-    FREESWITCH_ESL_PORT = FREESWITCH_ESL_PORT
-    FREESWITCH_ESL_PASSWORD = FREESWITCH_ESL_PASSWORD
-    FREESWITCH_GATEWAY = FREESWITCH_GATEWAY
-    FREESWITCH_CALLER_ID = FREESWITCH_CALLER_ID
+    # GPU
+    DEVICE = DEVICE
 
-    # IA Services - STT
-    STT_ENGINE = STT_ENGINE
+    # Phase 1 - AMD
+    AMD_MAX_DURATION = AMD_MAX_DURATION
+    AMD_KEYWORDS_HUMAN = AMD_KEYWORDS_HUMAN
+    AMD_KEYWORDS_MACHINE = AMD_KEYWORDS_MACHINE
+    AMD_SILENCE_TIMEOUT = AMD_SILENCE_TIMEOUT
+    AMD_MIN_CONFIDENCE = AMD_MIN_CONFIDENCE
+
+    # Phase 2 - Playing (Barge-in)
+    BARGE_IN_ENABLED = BARGE_IN_ENABLED
+    BARGE_IN_THRESHOLD = BARGE_IN_THRESHOLD
+    BARGE_IN_SMOOTH_DELAY = BARGE_IN_SMOOTH_DELAY
+    VAD_AGGRESSIVENESS = VAD_AGGRESSIVENESS
+
+    # Phase 3 - Waiting
+    SILENCE_THRESHOLD = SILENCE_THRESHOLD
+    WAITING_TIMEOUT = WAITING_TIMEOUT
+    MAX_CONSECUTIVE_SILENCES = MAX_CONSECUTIVE_SILENCES
+    MAX_CONSECUTIVE_NO_MATCH = MAX_CONSECUTIVE_NO_MATCH
+
+    # STT
     FASTER_WHISPER_MODEL = FASTER_WHISPER_MODEL
     FASTER_WHISPER_DEVICE = FASTER_WHISPER_DEVICE
     FASTER_WHISPER_COMPUTE_TYPE = FASTER_WHISPER_COMPUTE_TYPE
-    VOSK_MODEL_PATH = VOSK_MODEL_PATH
-    VOSK_SAMPLE_RATE = VOSK_SAMPLE_RATE
+    FASTER_WHISPER_LANGUAGE = FASTER_WHISPER_LANGUAGE
+    FASTER_WHISPER_BEAM_SIZE = FASTER_WHISPER_BEAM_SIZE
+    FASTER_WHISPER_VAD_FILTER = FASTER_WHISPER_VAD_FILTER
 
-    # IA Services - NLP
-    OLLAMA_URL = OLLAMA_URL
-    OLLAMA_MODEL = OLLAMA_MODEL
-    OLLAMA_TIMEOUT = OLLAMA_TIMEOUT
+    # VAD
+    WEBRTC_VAD_AGGRESSIVENESS = WEBRTC_VAD_AGGRESSIVENESS
+    WEBRTC_VAD_FRAME_DURATION_MS = WEBRTC_VAD_FRAME_DURATION_MS
+    WEBRTC_VAD_SAMPLE_RATE = WEBRTC_VAD_SAMPLE_RATE
 
-    # AMD
-    AMD_ENABLED = AMD_ENABLED
-    AMD_LISTEN_DURATION = AMD_LISTEN_DURATION
-    AMD_WORD_THRESHOLD = AMD_WORD_THRESHOLD
-    AMD_INITIAL_DELAY = AMD_INITIAL_DELAY
+    # Intent Keywords
+    INTENT_KEYWORDS = INTENT_KEYWORDS
+    DEFAULT_INTENT = DEFAULT_INTENT
+    INTENT_MIN_WEIGHT = INTENT_MIN_WEIGHT
 
-    # Streaming ASR & VAD
-    VAD_SILENCE_THRESHOLD = VAD_SILENCE_THRESHOLD
-    VAD_SPEECH_START_THRESHOLD = VAD_SPEECH_START_THRESHOLD
-    WEBSOCKET_HOST = WEBSOCKET_HOST
-    WEBSOCKET_PORT = WEBSOCKET_PORT
+    # Intent Detection BETON ARME (nouvelles constantes)
+    FIXED_EXPRESSIONS = FIXED_EXPRESSIONS
+    NEGATION_WORDS = NEGATION_WORDS
+    NEGATION_PHRASES = NEGATION_PHRASES
+    INTERROGATIVE_WORDS = INTERROGATIVE_WORDS
 
-    # VAD Modes (3 comportements distincts)
-    # Mode 1: AMD (1.3s ultra agressive!)
-    AMD_TIMEOUT = AMD_TIMEOUT
-    AMD_MIN_SPEECH_DURATION = AMD_MIN_SPEECH_DURATION
-    AMD_TRANSCRIBE_ALL = AMD_TRANSCRIBE_ALL
+    # Objection Matcher
+    OBJECTION_MIN_SCORE = OBJECTION_MIN_SCORE
+    OBJECTION_HIGH_CONFIDENCE_THRESHOLD = OBJECTION_HIGH_CONFIDENCE_THRESHOLD
+    OBJECTION_TOP_N = OBJECTION_TOP_N
 
-    # Mode 2: PLAYING_AUDIO
-    PLAYING_BARGE_IN_THRESHOLD = PLAYING_BARGE_IN_THRESHOLD
-    PLAYING_BACKCHANNEL_MAX = PLAYING_BACKCHANNEL_MAX
-    PLAYING_SILENCE_RESET = PLAYING_SILENCE_RESET
-    PLAYING_TRANSCRIBE_ALL = PLAYING_TRANSCRIBE_ALL
-    PLAYING_SMOOTH_DELAY = PLAYING_SMOOTH_DELAY
-
-    # Mode 3: WAITING_RESPONSE
-    WAITING_TIMEOUT = WAITING_TIMEOUT
-    WAITING_MIN_SPEECH_DURATION = WAITING_MIN_SPEECH_DURATION
-    WAITING_END_OF_SPEECH_SILENCE = WAITING_END_OF_SPEECH_SILENCE
-    WAITING_TRANSCRIBE_CONTINUOUS = WAITING_TRANSCRIBE_CONTINUOUS
-
-    # EXPERIMENTAL: Continuous Transcription
-    CONTINUOUS_TRANSCRIPTION_ENABLED = CONTINUOUS_TRANSCRIPTION_ENABLED
-
-    # Compatibilité ancienne config (DEPRECATED)
-    BARGE_IN_ENABLED = BARGE_IN_ENABLED
-    BARGE_IN_DURATION_THRESHOLD = BARGE_IN_DURATION_THRESHOLD
-    BARGE_IN_SILENCE_RESET = BARGE_IN_SILENCE_RESET
-    GRACE_PERIOD_SECONDS = GRACE_PERIOD_SECONDS
-    SMOOTH_DELAY_SECONDS = SMOOTH_DELAY_SECONDS
-    BARGE_IN_SMOOTH_DELAY = BARGE_IN_SMOOTH_DELAY
-
-    # Appels
-    MAX_SIMULTANEOUS_CALLS = MAX_SIMULTANEOUS_CALLS
-    CALL_TIMEOUT_SECONDS = CALL_TIMEOUT_SECONDS
-    RETRY_ENABLED = RETRY_ENABLED
-    MAX_RETRIES = MAX_RETRIES
-    RETRY_DELAY_MINUTES = RETRY_DELAY_MINUTES
-
-    # Recording Cleanup
-    RECORDING_CLEANUP_ENABLED = RECORDING_CLEANUP_ENABLED
-    RECORDING_RETENTION_DAYS = RECORDING_RETENTION_DAYS
-    RECORDING_CLEANUP_DISK_THRESHOLD = RECORDING_CLEANUP_DISK_THRESHOLD
-    RECORDING_CLEANUP_DISK_TARGET = RECORDING_CLEANUP_DISK_TARGET
+    # Audio
+    AUDIO_SAMPLE_RATE = AUDIO_SAMPLE_RATE
+    AUDIO_CHANNELS = AUDIO_CHANNELS
+    AUDIO_FORMAT = AUDIO_FORMAT
+    AUDIO_CODEC = AUDIO_CODEC
+    PRERECORDED_AUDIO_DIR = PRERECORDED_AUDIO_DIR
 
     # Logging
     LOG_LEVEL = LOG_LEVEL
-    LOG_FORMAT = LOG_FORMAT
+    LOG_FORMAT_JSON = LOG_FORMAT_JSON
+    LOG_LATENCIES = LOG_LATENCIES
+    LOG_CALLS_DIR = LOG_CALLS_DIR
+    LOG_SYSTEM_DIR = LOG_SYSTEM_DIR
+    LOG_PERFORMANCE_DIR = LOG_PERFORMANCE_DIR
+    LOG_RETENTION_DAYS = LOG_RETENTION_DAYS
+    AUDIO_RETENTION_DAYS = AUDIO_RETENTION_DAYS
+
+    # Ollama (optionnel)
+    OLLAMA_ENABLED = OLLAMA_ENABLED
+    OLLAMA_BASE_URL = OLLAMA_BASE_URL
+    OLLAMA_MODEL = OLLAMA_MODEL
+    OLLAMA_TIMEOUT = OLLAMA_TIMEOUT
+
+    # Leads
+    LEAD_STATUS_NEW = LEAD_STATUS_NEW
+    LEAD_STATUS_NO_ANSWER = LEAD_STATUS_NO_ANSWER
+    LEAD_STATUS_NOT_INTERESTED = LEAD_STATUS_NOT_INTERESTED
+    LEAD_STATUS_LEAD = LEAD_STATUS_LEAD
+
 
 # Instance globale
 config = Config()

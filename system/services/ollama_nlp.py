@@ -1,345 +1,220 @@
+# -*- coding: utf-8 -*-
 """
 Ollama NLP Service - MiniBotPanel v3
 
-Service d'analyse NLP (Intent + Sentiment) via Ollama.
-Adapté de nlp_intent.py pour FreeSWITCH.
-
-Fonctionnalités:
-- Détection intent (Positif, Négatif, Neutre, Unsure)
-- Analyse sentiment
-- Score de confiance
-- Fallback mots-clés si Ollama indisponible
-- Prompts contextuels pour différentes étapes du scénario
-
-Utilisation:
-    from system.services.ollama_nlp import OllamaNLP
-
-    nlp = OllamaNLP()
-    result = nlp.analyze_intent("Oui d'accord ça m'intéresse")
-    # result = {"intent": "affirm", "sentiment": "positive", "confidence": 0.92}
+Sentiment Analysis ONLY (NO intent detection)
+Intent detection = keywords matching (faster)
 """
 
-import json
+import logging
 import time
-import re
-from typing import Dict, Any, Optional
+from typing import Dict, Optional, Any
 
-from system.config import config
-from system.logger import get_logger
-
-logger = get_logger(__name__)
-
-# Import Ollama avec fallback
-try:
-    import ollama
-    OLLAMA_AVAILABLE = True
-    logger.info("✅ Ollama imported successfully")
-except ImportError as e:
-    OLLAMA_AVAILABLE = False
-    logger.warning(f"⚠️ Ollama not available: {e}")
+logger = logging.getLogger(__name__)
 
 
 class OllamaNLP:
     """
-    Service NLP Ollama pour analyse d'intention et sentiment.
-    Adapté de IntentEngine pour FreeSWITCH.
+    Ollama NLP Service for Sentiment Analysis ONLY
+
+    NOTE: Intent detection is done via keywords matching (faster)
+    Ollama is used ONLY for sentiment analysis (optional, non-blocking)
     """
 
-    def __init__(self):
-        """Initialise le service Ollama NLP."""
-        logger.info("Initializing OllamaNLP...")
-
-        self.is_available = OLLAMA_AVAILABLE
-        self.ollama_client = None
-
-        # Configuration
-        self.ollama_config = {
-            "url": config.OLLAMA_URL,
-            "model": config.OLLAMA_MODEL,
-            "timeout": config.OLLAMA_TIMEOUT
-        }
-
-        # Statistiques
-        self.stats = {
-            "total_requests": 0,
-            "ollama_success": 0,
-            "fallback_used": 0,
-            "avg_latency_ms": 0.0
-        }
-
-        # Mapping intents vers statuts standard
-        self.intent_to_status = {
-            "Positif": "affirm",
-            "Négatif": "deny",
-            "Question": "question",
-            "Objection": "objection",
-            "Neutre": "unsure",
-            "Unsure": "unsure"
-        }
-
-        # Prompts système pour différents contextes
-        self.system_prompts = {
-            "general": """Tu es un module NLP pour un robot d'appel de prospection.
-
-Tu analyses les réponses des prospects français.
-Réponds UNIQUEMENT en JSON au format {"intent": "...", "confidence": 0.9}.
-
-Intents possibles (6 seulement) :
-- "Positif" : oui, d'accord, ok, intéressé, absolument, évidemment, j'aimerais en savoir plus, ça me convient
-- "Négatif" : non, pas intéressé, pas le temps, ça ne m'intéresse pas, arrêtez, jamais
-- "Question" : qui êtes-vous, c'est quoi, pourquoi, comment ça marche, c'est combien, quand
-- "Objection" : c'est trop cher, j'ai pas le temps, j'ai déjà un fournisseur, rappellez plus tard
-- "Neutre" : peut-être, je ne sais pas, il faut que je réfléchisse, ça dépend
-- "Unsure" : je n'ai pas compris, pouvez-vous répéter, pardon, comment, hein
-
-Réponds TOUJOURS en JSON valide.""",
-
-            "greeting": """Tu analyses la réponse à l'introduction.
-Réponds UNIQUEMENT en JSON : {"intent": "...", "confidence": 0.9}
-
-Le prospect répond à l'introduction.
-
-Intents :
-- "Positif" : oui, ok, d'accord, allez-y, je vous écoute, pourquoi pas
-- "Négatif" : non, pas le temps, pas intéressé, raccrochez, ça ne m'intéresse pas
-- "Question" : qui êtes-vous, c'est pour quoi, qu'est-ce que vous voulez, c'est quoi votre société
-- "Objection" : j'ai pas le temps, rappelez plus tard, je suis occupé, pas maintenant
-- "Neutre" : peut-être, ça dépend, voyons, je ne sais pas
-- "Unsure" : je n'ai pas compris, pardon, comment, hein""",
-
-            "qualification": """Tu analyses la réponse aux questions de qualification.
-Réponds UNIQUEMENT en JSON : {"intent": "...", "confidence": 0.9}
-
-Intents :
-- "Positif" : oui, j'ai, effectivement, bien sûr, tout à fait
-- "Négatif" : non, je n'ai pas, pas du tout, jamais
-- "Question" : pourquoi vous me demandez ça, c'est pour quoi faire, ça sert à quoi
-- "Objection" : ça ne vous regarde pas, je ne veux pas répondre, c'est privé
-- "Neutre" : je ne sais pas, peut-être, il faut voir, ça dépend
-- "Unsure" : je n'ai pas compris, pardon, comment, hein""",
-
-            "final_offer": """Tu analyses la réponse à l'offre finale.
-Réponds UNIQUEMENT en JSON : {"intent": "...", "confidence": 0.9}
-
-Le prospect répond à la proposition finale.
-
-Intents :
-- "Positif" : oui, d'accord, ok, parfait, allez-y, très bien
-- "Négatif" : non, pas intéressé, ça ne m'intéresse pas, merci mais non
-- "Question" : c'est combien, quelles sont les conditions, ça marche comment, vous avez des garanties
-- "Objection" : c'est trop cher, j'ai pas le budget, je dois demander à mon patron, j'ai déjà quelque chose
-- "Neutre" : oui mais plus tard, pas cette semaine, dans un mois, je réfléchis
-- "Unsure" : je n'ai pas compris, pardon, comment, hein"""
-        }
-
-        # Mots-clés pour fallback
-        self.keyword_patterns = {
-            "affirm": [
-                r"\b(oui|ok|d'accord|bien sur|absolument|evidemment|parfait|allez-y|je veux bien)\b",
-                r"\b(intéress|pourquoi pas|volontiers)\b"
-            ],
-            "deny": [
-                r"\b(non|pas intéress|pas le temps|rappel|pas maintenant|jamais)\b",
-                r"\b(arrêt|stop|fiche|tranquille)\b"
-            ],
-            "unsure": [
-                r"\b(peut-être|je sais pas|réfléchir|voir|dépend)\b",
-                r"\b(hésit|incertain)\b"
-            ],
-            "question": [
-                r"\b(qui|quoi|comment|pourquoi|combien|quand|où)\b",
-                r"\?(.*)\?"
-            ]
-        }
-
-        if not self.is_available:
-            logger.warning("🚫 OllamaNLP not available - using keyword fallback")
-            return
-
-        # Tester connexion Ollama
-        self._test_ollama_connection()
-
-        logger.info(f"{'✅' if self.is_available else '❌'} OllamaNLP initialized")
-
-    def prewarm(self) -> bool:
+    def __init__(
+        self,
+        base_url: str = "http://localhost:11434",
+        model: str = "mistral:7b",
+        timeout: float = 5.0,
+        enabled: bool = False
+    ):
         """
-        Pré-charge le modèle Ollama (Phase 8).
-
-        Cette méthode force Ollama à charger le modèle en mémoire avant
-        la première vraie requête, réduisant la latence du premier appel.
-
-        Utilise l'API generate avec keep_alive pour maintenir le modèle chaud.
-
-        Returns:
-            True si succès, False sinon
-        """
-        if not self.is_available or not OLLAMA_AVAILABLE:
-            logger.warning("Ollama not available, cannot prewarm")
-            return False
-
-        try:
-            logger.info(f"🔥 Prewarming Ollama model: {self.ollama_config['model']}...")
-            start_time = time.time()
-
-            # Requête minimale pour charger le modèle
-            response = ollama.generate(
-                model=self.ollama_config['model'],
-                prompt="Hello",  # Prompt minimal
-                options={
-                    "num_predict": 1,  # Générer juste 1 token
-                    "temperature": 0
-                },
-                keep_alive="30m"  # Phase 8: Garder modèle chaud 30min
-            )
-
-            latency = (time.time() - start_time) * 1000
-
-            if response:
-                logger.info(f"✅ Ollama prewarmed successfully ({latency:.0f}ms)")
-                logger.info(f"   Model will stay loaded for 30 minutes")
-                return True
-            else:
-                logger.warning("⚠️ Ollama prewarm returned empty response")
-                return False
-
-        except Exception as e:
-            logger.error(f"❌ Failed to prewarm Ollama: {e}")
-            return False
-
-    def _test_ollama_connection(self):
-        """Teste la connexion à Ollama"""
-        try:
-            if not OLLAMA_AVAILABLE:
-                return False
-
-            # Test simple
-            response = ollama.list()
-            logger.info(f"✅ Ollama connection OK - {len(response.get('models', []))} models available")
-            return True
-
-        except Exception as e:
-            logger.warning(f"⚠️ Ollama connection failed: {e}")
-            self.is_available = False
-            return False
-
-    def analyze_intent(self, text: str, context: str = "general") -> Dict[str, Any]:
-        """
-        Analyse texte pour détecter intention.
+        Initialize Ollama NLP
 
         Args:
-            text: Texte à analyser
-            context: Contexte (general, greeting, qualification, final_offer)
-
-        Returns:
-            Dict avec intent, confidence
+            base_url: Ollama API URL
+            model: Model name
+            timeout: Request timeout (seconds)
+            enabled: Enable/disable sentiment analysis
         """
-        self.stats["total_requests"] += 1
+        self.base_url = base_url
+        self.model = model
+        self.timeout = timeout
+        self.enabled = enabled
 
-        # Nettoyer texte
-        text = text.strip().lower()
+        if not self.enabled:
+            logger.info("Ollama NLP DISABLED (sentiment analysis optional)")
+            return
 
-        if not text:
-            return {"intent": "silence", "confidence": 0.0}
-
-        # Essayer Ollama si disponible
-        if self.is_available and OLLAMA_AVAILABLE:
-            start_time = time.time()
-            result = self._analyze_with_ollama(text, context)
-
-            if result:
-                latency = (time.time() - start_time) * 1000
-                self.stats["ollama_success"] += 1
-                self.stats["avg_latency_ms"] = (
-                    (self.stats["avg_latency_ms"] * (self.stats["ollama_success"] - 1) + latency)
-                    / self.stats["ollama_success"]
-                )
-                return result
-
-        # Fallback mots-clés
-        self.stats["fallback_used"] += 1
-        return self._analyze_with_keywords(text)
-
-    def _analyze_with_ollama(self, text: str, context: str) -> Optional[Dict[str, Any]]:
-        """Analyse avec Ollama"""
-        try:
-            # Sélectionner prompt selon contexte
-            system_prompt = self.system_prompts.get(context, self.system_prompts["general"])
-
-            # Appel Ollama
-            response = ollama.chat(
-                model=self.ollama_config["model"],
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Réponse du prospect: {text}"}
-                ],
-                options={
-                    "temperature": 0.1,  # Peu de créativité, cohérence maximale
-                    "num_predict": 50     # Réponse courte (JSON)
-                }
-            )
-
-            # Parser réponse
-            content = response.get("message", {}).get("content", "")
-
-            # Extraire JSON
-            try:
-                # Chercher JSON dans la réponse
-                json_match = re.search(r'\{[^}]+\}', content)
-                if json_match:
-                    result = json.loads(json_match.group())
-                    intent = result.get("intent", "Unsure")
-                    confidence = result.get("confidence", 0.5)
-
-                    # Convertir intent Ollama vers format standard
-                    standard_intent = self.intent_to_status.get(intent, "unsure")
-
-                    logger.debug(f"Ollama: '{text}' → {standard_intent} ({confidence:.2f})")
-
-                    return {
-                        "intent": standard_intent,
-                        "confidence": confidence,
-                        "raw_intent": intent
-                    }
-
-            except json.JSONDecodeError:
-                logger.warning(f"Failed to parse Ollama JSON: {content}")
-
-            return None
-
-        except Exception as e:
-            logger.error(f"Ollama analysis error: {e}")
-            return None
-
-    def _analyze_with_keywords(self, text: str) -> Dict[str, Any]:
-        """Analyse avec mots-clés (fallback)"""
-        # Chercher patterns
-        for intent, patterns in self.keyword_patterns.items():
-            for pattern in patterns:
-                if re.search(pattern, text, re.IGNORECASE):
-                    logger.debug(f"Keyword fallback: '{text}' → {intent}")
-                    return {
-                        "intent": intent,
-                        "confidence": 0.7,  # Confiance plus basse pour fallback
-                        "method": "keywords"
-                    }
-
-        # Par défaut : unsure
-        return {
-            "intent": "unsure",
-            "confidence": 0.3,
-            "method": "default"
-        }
-
-    def get_stats(self) -> Dict[str, Any]:
-        """Retourne statistiques NLP"""
-        success_rate = (
-            (self.stats["ollama_success"] / self.stats["total_requests"] * 100)
-            if self.stats["total_requests"] > 0 else 0
+        logger.info(
+            f"Ollama NLP init: "
+            f"model={model}, url={base_url}, timeout={timeout}s"
         )
 
+        # Test connection
+        self._test_connection()
+
+    def _test_connection(self):
+        """Test Ollama connection"""
+        try:
+            import requests
+
+            response = requests.get(
+                f"{self.base_url}/api/tags",
+                timeout=2.0
+            )
+
+            if response.status_code == 200:
+                logger.info("Ollama connection OK")
+            else:
+                logger.warning(f"Ollama connection issue: {response.status_code}")
+                self.enabled = False
+
+        except Exception as e:
+            logger.warning(f"Ollama not available: {e}")
+            self.enabled = False
+
+    def analyze_sentiment(self, text: str) -> Dict[str, Any]:
+        """
+        Analyze sentiment of text
+
+        Args:
+            text: Text to analyze
+
+        Returns:
+            {
+                "sentiment": "positive" | "negative" | "neutral",
+                "confidence": 0.0-1.0,
+                "latency_ms": 200.0
+            }
+        """
+        if not self.enabled:
+            return {
+                "sentiment": "neutral",
+                "confidence": 0.0,
+                "latency_ms": 0.0,
+                "disabled": True
+            }
+
+        if not text or not text.strip():
+            return {
+                "sentiment": "neutral",
+                "confidence": 0.0,
+                "latency_ms": 0.0
+            }
+
+        try:
+            import requests
+
+            start_time = time.time()
+
+            # Prompt for sentiment analysis
+            prompt = f"""Analyse le sentiment de ce texte et reponds UNIQUEMENT par un mot: positive, negative, ou neutral.
+
+Texte: "{text}"
+
+Sentiment:"""
+
+            payload = {
+                "model": self.model,
+                "prompt": prompt,
+                "stream": False
+            }
+
+            response = requests.post(
+                f"{self.base_url}/api/generate",
+                json=payload,
+                timeout=self.timeout
+            )
+
+            latency_ms = (time.time() - start_time) * 1000
+
+            if response.status_code == 200:
+                result = response.json()
+                sentiment_text = result.get("response", "").strip().lower()
+
+                # Parse sentiment
+                if "positive" in sentiment_text or "positif" in sentiment_text:
+                    sentiment = "positive"
+                    confidence = 0.8
+                elif "negative" in sentiment_text or "negatif" in sentiment_text:
+                    sentiment = "negative"
+                    confidence = 0.8
+                else:
+                    sentiment = "neutral"
+                    confidence = 0.6
+
+                logger.info(
+                    f"Sentiment: {sentiment} "
+                    f"(conf: {confidence:.2f}, latency: {latency_ms:.0f}ms)"
+                )
+
+                return {
+                    "sentiment": sentiment,
+                    "confidence": confidence,
+                    "latency_ms": latency_ms
+                }
+            else:
+                logger.error(f"Ollama API error: {response.status_code}")
+                return {
+                    "sentiment": "neutral",
+                    "confidence": 0.0,
+                    "latency_ms": latency_ms,
+                    "error": f"api_error_{response.status_code}"
+                }
+
+        except Exception as e:
+            logger.error(f"Sentiment analysis error: {e}")
+            return {
+                "sentiment": "neutral",
+                "confidence": 0.0,
+                "latency_ms": 0.0,
+                "error": str(e)
+            }
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Return Ollama service stats"""
         return {
-            **self.stats,
-            "is_available": self.is_available,
-            "success_rate_pct": round(success_rate, 1),
-            "model": self.ollama_config["model"]
+            "enabled": self.enabled,
+            "base_url": self.base_url,
+            "model": self.model,
+            "timeout": self.timeout
         }
+
+
+# Unit tests
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+
+    print("=" * 80)
+    print("Ollama NLP - Unit Tests")
+    print("=" * 80)
+
+    # Test with disabled (default)
+    ollama_disabled = OllamaNLP(enabled=False)
+    print("\nTest 1: Disabled mode")
+    result = ollama_disabled.analyze_sentiment("Je suis tres content!")
+    print(f"  Sentiment: {result['sentiment']}")
+    print(f"  Disabled: {result.get('disabled', False)}")
+    print("  PASS" if result.get('disabled') else "  FAIL")
+
+    # Test with enabled (requires Ollama running)
+    print("\nTest 2: Enabled mode (requires Ollama)")
+    ollama_enabled = OllamaNLP(enabled=True)
+    
+    if ollama_enabled.enabled:
+        test_texts = [
+            "Je suis tres content, c'est parfait!",
+            "C'est nul, je deteste ca",
+            "Ok d'accord"
+        ]
+
+        for text in test_texts:
+            result = ollama_enabled.analyze_sentiment(text)
+            print(f"  Text: '{text[:30]}...'")
+            print(f"  Sentiment: {result['sentiment']} (latency: {result['latency_ms']:.0f}ms)")
+    else:
+        print("  SKIPPED - Ollama not available")
+
+    print("\nNOTE: Ollama is OPTIONAL for this project")
+    print("Intent detection uses keywords matching (faster)")
