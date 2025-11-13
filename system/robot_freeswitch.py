@@ -2652,6 +2652,601 @@ class RobotFreeSWITCH:
                 "latency_ms": 0.0
             }
 
+    def _execute_phase_playing(
+        self,
+        call_uuid: str,
+        audio_path: str,
+        enable_barge_in: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Phase 2: PLAYING (Robot plays audio with barge-in detection)
+
+        Complex:
+        - Record STEREO (left=client, right=robot)
+        - Broadcast audio (non-blocking)
+        - VAD monitoring for barge-in (1.5s threshold)
+        - Background transcription (snapshot at 0.5s)
+        - Smooth delay (0.3s) before stop
+
+        Args:
+            call_uuid: Call UUID
+            audio_path: Audio file to play
+            enable_barge_in: Enable barge-in detection
+
+        Returns:
+            {
+                "barged_in": bool,
+                "transcription": str,
+                "audio_duration": float,
+                "latency_ms": float
+            }
+        """
+        short_uuid = call_uuid[:8]
+        phase_start = time.time()
+
+        logger.info(f"🎙️ [{short_uuid}] === PHASE 2: PLAYING START ===")
+        logger.info(
+            f"🎙️ [{short_uuid}] Audio: {Path(audio_path).name}, "
+            f"Barge-in: {'ENABLED' if enable_barge_in else 'DISABLED'}"
+        )
+
+        # Recording file
+        record_file = f"/tmp/playing_{call_uuid}.wav"
+
+        # Shared state for VAD monitoring thread
+        monitoring_state = {
+            "barged_in": False,
+            "audio_finished": False,
+            "transcription": None,
+            "bg_ready": False,
+            "stop_monitoring": False
+        }
+
+        try:
+            # Step 1: Start recording STEREO
+            if not self._start_recording(call_uuid, record_file, stereo=True):
+                logger.error(f"❌ [{short_uuid}] PLAYING: Recording start failed!")
+                return {
+                    "barged_in": False,
+                    "transcription": "",
+                    "audio_duration": 0.0,
+                    "latency_ms": 0.0
+                }
+
+            # Step 2: Start audio playback (non-blocking)
+            play_cmd = f"uuid_broadcast {call_uuid} {audio_path} aleg"
+            play_result = self._execute_esl_command(play_cmd)
+
+            if not play_result or "+OK" not in play_result:
+                logger.error(f"❌ [{short_uuid}] Audio playback failed: {play_result}")
+                self._stop_recording(call_uuid, record_file)
+                return {
+                    "barged_in": False,
+                    "transcription": "",
+                    "audio_duration": 0.0,
+                    "latency_ms": 0.0
+                }
+
+            logger.info(f"🗣️ [{short_uuid}] Audio playback started")
+
+            # Step 3: Monitor VAD for barge-in (if enabled)
+            if enable_barge_in:
+                vad_thread = threading.Thread(
+                    target=self._monitor_vad_playing,
+                    args=(call_uuid, record_file, monitoring_state),
+                    daemon=True
+                )
+                vad_thread.start()
+
+                # Wait for barge-in or audio finish
+                # Check every 100ms
+                while not monitoring_state["barged_in"] and not monitoring_state["audio_finished"]:
+                    time.sleep(0.1)
+
+                # Stop monitoring
+                monitoring_state["stop_monitoring"] = True
+                vad_thread.join(timeout=1.0)
+
+                if monitoring_state["barged_in"]:
+                    logger.info(f"⚡ [{short_uuid}] BARGE-IN detected!")
+
+                    # Smooth delay (natural interruption)
+                    logger.info(f"⏱️ [{short_uuid}] Smooth delay: {config.BARGE_IN_SMOOTH_DELAY}s...")
+                    time.sleep(config.BARGE_IN_SMOOTH_DELAY)
+
+                    # Stop audio playback
+                    break_cmd = f"uuid_break {call_uuid}"
+                    self._execute_esl_command(break_cmd)
+                    logger.info(f"🔇 [{short_uuid}] Audio stopped")
+
+            else:
+                # No barge-in: wait for audio to finish
+                # Estimate audio duration (TODO: get real duration)
+                estimated_duration = 10.0  # Default
+                time.sleep(estimated_duration)
+                monitoring_state["audio_finished"] = True
+
+            # Step 4: Stop recording
+            self._stop_recording(call_uuid, record_file)
+
+            # Step 5: Get transcription
+            transcription = ""
+            if monitoring_state["barged_in"]:
+                # Check if background transcription ready
+                if monitoring_state["bg_ready"] and monitoring_state["transcription"]:
+                    transcription = monitoring_state["transcription"]
+                    logger.info(f"🚀 [{short_uuid}] Background transcription ready!")
+                else:
+                    # Fallback: sync transcription
+                    logger.info(f"🔄 [{short_uuid}] Fallback sync transcription...")
+                    result = self.stt_service.transcribe_file(record_file)
+                    transcription = result.get("text", "").strip()
+
+                logger.info(f"📝 [{short_uuid}] Transcription: '{transcription}'")
+
+            # Cleanup
+            try:
+                Path(record_file).unlink()
+            except:
+                pass
+
+            # Total latency
+            total_latency = (time.time() - phase_start) * 1000
+
+            logger.info(
+                f"⏱️ [{short_uuid}] === PHASE 2: PLAYING END === "
+                f"Total: {total_latency:.0f}ms"
+            )
+
+            return {
+                "barged_in": monitoring_state["barged_in"],
+                "transcription": transcription,
+                "audio_duration": total_latency / 1000.0,
+                "latency_ms": total_latency
+            }
+
+        except Exception as e:
+            logger.error(f"❌ [{short_uuid}] PLAYING error: {e}")
+            import traceback
+            traceback.print_exc()
+
+            # Cleanup
+            try:
+                self._stop_recording(call_uuid, record_file)
+                Path(record_file).unlink()
+            except:
+                pass
+
+            return {
+                "barged_in": False,
+                "transcription": "",
+                "audio_duration": 0.0,
+                "latency_ms": 0.0
+            }
+
+    def _monitor_vad_playing(
+        self,
+        call_uuid: str,
+        record_file: str,
+        state: Dict[str, Any]
+    ):
+        """
+        VAD monitoring thread for Phase 2 PLAYING
+
+        Monitors for barge-in (1.5s continuous speech)
+        Launches background transcription at 0.5s
+
+        Args:
+            call_uuid: Call UUID
+            record_file: Recording file path
+            state: Shared state dict (modified in-place)
+        """
+        short_uuid = call_uuid[:8]
+
+        # VAD state
+        speech_frames = 0
+        speech_start_time = None
+        speech_duration = 0.0
+        bg_thread = None
+        snapshot_file = None
+
+        # Frame params
+        frame_duration_ms = config.WEBRTC_VAD_FRAME_DURATION_MS
+        sample_rate = config.WEBRTC_VAD_SAMPLE_RATE
+        frame_size = int(sample_rate * frame_duration_ms / 1000)
+
+        try:
+            # Wait for WAV file to be created
+            retries = 0
+            while not Path(record_file).exists() and retries < 20:
+                time.sleep(0.05)
+                retries += 1
+
+            if not Path(record_file).exists():
+                logger.warning(f"⚠️ [{short_uuid}] Recording file not found for VAD")
+                return
+
+            # Small delay for WAV header
+            time.sleep(0.1)
+
+            logger.info(f"🎙️ [{short_uuid}] VAD monitoring started")
+
+            # Stream frames from WAV
+            for frame in self._get_audio_frames_from_wav(record_file, frame_duration_ms=frame_duration_ms):
+                if state["stop_monitoring"]:
+                    break
+
+                # Check if frame is speech
+                try:
+                    is_speech = self.vad.is_speech(frame, sample_rate)
+                except:
+                    # Invalid frame, skip
+                    continue
+
+                if is_speech:
+                    if speech_start_time is None:
+                        # Start of speech
+                        speech_frames = 1
+                        speech_start_time = time.time()
+                    else:
+                        speech_frames += 1
+                        speech_duration = time.time() - speech_start_time
+
+                    # Check for start speech detection (0.3s)
+                    if speech_duration >= config.PLAYING_START_SPEECH_DURATION:
+                        if speech_start_time is not None and bg_thread is None:
+                            logger.info(f"🗣️ [{short_uuid}] Start speech detected ({speech_duration:.1f}s)")
+
+                    # Launch background transcription at 0.5s
+                    if speech_duration >= config.PLAYING_BG_TRANSCRIBE_TRIGGER and bg_thread is None:
+                        logger.info(
+                            f"⏱️ [{short_uuid}] Speech {speech_duration:.1f}s "
+                            f"→ 🚀 Launching background transcription"
+                        )
+
+                        # Create snapshot
+                        snapshot_file = f"{record_file}.snapshot"
+                        try:
+                            import shutil
+                            shutil.copy2(record_file, snapshot_file)
+
+                            # Launch background thread
+                            bg_thread = threading.Thread(
+                                target=self._background_transcribe_snapshot,
+                                args=(snapshot_file, state),
+                                daemon=True
+                            )
+                            bg_thread.start()
+                        except Exception as e:
+                            logger.error(f"❌ [{short_uuid}] Snapshot error: {e}")
+
+                    # Check for barge-in threshold (1.5s)
+                    if speech_duration >= config.BARGE_IN_THRESHOLD:
+                        logger.info(
+                            f"⚡ [{short_uuid}] BARGE-IN TRIGGERED! "
+                            f"(speech: {speech_duration:.1f}s > {config.BARGE_IN_THRESHOLD}s)"
+                        )
+                        state["barged_in"] = True
+                        break
+
+                else:
+                    # Silence: reset if short speech
+                    if speech_start_time is not None and speech_duration < config.PLAYING_START_SPEECH_DURATION:
+                        # Too short, probably noise
+                        speech_frames = 0
+                        speech_start_time = None
+                        speech_duration = 0.0
+
+                # Small delay
+                time.sleep(0.01)
+
+            logger.info(f"🎙️ [{short_uuid}] VAD monitoring ended")
+
+        except Exception as e:
+            logger.error(f"❌ [{short_uuid}] VAD monitoring error: {e}")
+
+    def _background_transcribe_snapshot(
+        self,
+        snapshot_file: str,
+        state: Dict[str, Any]
+    ):
+        """
+        Background transcription thread
+
+        Transcribes snapshot file and stores result in state
+
+        Args:
+            snapshot_file: Snapshot WAV file
+            state: Shared state dict (modified in-place)
+        """
+        try:
+            result = self.stt_service.transcribe_file(snapshot_file)
+            transcription = result.get("text", "").strip()
+
+            state["transcription"] = transcription
+            state["bg_ready"] = True
+
+            # Cleanup snapshot
+            try:
+                Path(snapshot_file).unlink()
+            except:
+                pass
+
+        except Exception as e:
+            logger.error(f"Background transcription error: {e}")
+            state["bg_ready"] = False
+
+    def _execute_phase_waiting(
+        self,
+        call_uuid: str,
+        timeout: float = None
+    ) -> Dict[str, Any]:
+        """
+        Phase 3: WAITING (Listen for client response)
+
+        Simple:
+        - Record MONO (robot not speaking)
+        - VAD monitoring for end-of-speech (0.6s silence)
+        - Background transcription (snapshot at 0.5s)
+        - Timeout for silence (3s → retry_silence)
+
+        Args:
+            call_uuid: Call UUID
+            timeout: Silence timeout (default: WAITING_SILENCE_TIMEOUT)
+
+        Returns:
+            {
+                "transcription": str,
+                "silence": bool,
+                "latency_ms": float
+            }
+        """
+        short_uuid = call_uuid[:8]
+        phase_start = time.time()
+
+        if timeout is None:
+            timeout = config.WAITING_SILENCE_TIMEOUT
+
+        logger.info(f"👂 [{short_uuid}] === PHASE 3: WAITING START ===")
+        logger.info(
+            f"👂 [{short_uuid}] Silence timeout: {timeout}s, "
+            f"End-of-speech: {config.SILENCE_THRESHOLD}s"
+        )
+
+        # Recording file
+        record_file = f"/tmp/waiting_{call_uuid}.wav"
+
+        # Shared state for VAD monitoring
+        monitoring_state = {
+            "speech_detected": False,
+            "end_of_speech": False,
+            "silence_timeout": False,
+            "transcription": None,
+            "bg_ready": False,
+            "stop_monitoring": False
+        }
+
+        try:
+            # Step 1: Start recording MONO
+            if not self._start_recording(call_uuid, record_file, stereo=False):
+                logger.error(f"❌ [{short_uuid}] WAITING: Recording start failed!")
+                return {
+                    "transcription": "",
+                    "silence": True,
+                    "latency_ms": 0.0
+                }
+
+            # Step 2: Monitor VAD for end-of-speech
+            vad_thread = threading.Thread(
+                target=self._monitor_vad_waiting,
+                args=(call_uuid, record_file, timeout, monitoring_state),
+                daemon=True
+            )
+            vad_thread.start()
+
+            # Wait for end-of-speech or timeout
+            while not monitoring_state["end_of_speech"] and not monitoring_state["silence_timeout"]:
+                time.sleep(0.1)
+
+            # Stop monitoring
+            monitoring_state["stop_monitoring"] = True
+            vad_thread.join(timeout=1.0)
+
+            # Step 3: Stop recording
+            self._stop_recording(call_uuid, record_file)
+
+            # Step 4: Get transcription
+            transcription = ""
+            if monitoring_state["speech_detected"]:
+                # Check if background transcription ready
+                if monitoring_state["bg_ready"] and monitoring_state["transcription"]:
+                    transcription = monitoring_state["transcription"]
+                    logger.info(f"🚀 [{short_uuid}] Background transcription ready!")
+                else:
+                    # Fallback: sync transcription
+                    logger.info(f"🔄 [{short_uuid}] Fallback sync transcription...")
+                    result = self.stt_service.transcribe_file(record_file)
+                    transcription = result.get("text", "").strip()
+
+                logger.info(f"📝 [{short_uuid}] Transcription: '{transcription}'")
+            else:
+                logger.info(f"🔇 [{short_uuid}] No speech detected (silence)")
+
+            # Cleanup
+            try:
+                Path(record_file).unlink()
+            except:
+                pass
+
+            # Total latency
+            total_latency = (time.time() - phase_start) * 1000
+
+            logger.info(
+                f"⏱️ [{short_uuid}] === PHASE 3: WAITING END === "
+                f"Total: {total_latency:.0f}ms"
+            )
+
+            return {
+                "transcription": transcription,
+                "silence": monitoring_state["silence_timeout"],
+                "latency_ms": total_latency
+            }
+
+        except Exception as e:
+            logger.error(f"❌ [{short_uuid}] WAITING error: {e}")
+            import traceback
+            traceback.print_exc()
+
+            # Cleanup
+            try:
+                self._stop_recording(call_uuid, record_file)
+                Path(record_file).unlink()
+            except:
+                pass
+
+            return {
+                "transcription": "",
+                "silence": True,
+                "latency_ms": 0.0
+            }
+
+    def _monitor_vad_waiting(
+        self,
+        call_uuid: str,
+        record_file: str,
+        silence_timeout: float,
+        state: Dict[str, Any]
+    ):
+        """
+        VAD monitoring thread for Phase 3 WAITING
+
+        Monitors for end-of-speech (0.6s silence after speech)
+        Launches background transcription at 0.5s
+
+        Args:
+            call_uuid: Call UUID
+            record_file: Recording file path
+            silence_timeout: Timeout if no speech detected (seconds)
+            state: Shared state dict (modified in-place)
+        """
+        short_uuid = call_uuid[:8]
+
+        # VAD state
+        speech_frames = 0
+        speech_start_time = None
+        speech_duration = 0.0
+        last_speech_time = None
+        silence_duration = 0.0
+        bg_thread = None
+        snapshot_file = None
+
+        # Frame params
+        frame_duration_ms = config.WEBRTC_VAD_FRAME_DURATION_MS
+        sample_rate = config.WEBRTC_VAD_SAMPLE_RATE
+
+        # Timeout tracking
+        start_time = time.time()
+
+        try:
+            # Wait for WAV file
+            retries = 0
+            while not Path(record_file).exists() and retries < 20:
+                time.sleep(0.05)
+                retries += 1
+
+            if not Path(record_file).exists():
+                logger.warning(f"⚠️ [{short_uuid}] Recording file not found for VAD")
+                state["silence_timeout"] = True
+                return
+
+            # Small delay for WAV header
+            time.sleep(0.1)
+
+            logger.info(f"👂 [{short_uuid}] VAD monitoring started")
+
+            # Stream frames from WAV
+            for frame in self._get_audio_frames_from_wav(record_file, frame_duration_ms=frame_duration_ms):
+                if state["stop_monitoring"]:
+                    break
+
+                # Check silence timeout (if no speech yet)
+                if not state["speech_detected"]:
+                    elapsed = time.time() - start_time
+                    if elapsed >= silence_timeout:
+                        logger.info(
+                            f"🔇 [{short_uuid}] Silence timeout ({silence_timeout}s) → retry_silence"
+                        )
+                        state["silence_timeout"] = True
+                        break
+
+                # Check if frame is speech
+                try:
+                    is_speech = self.vad.is_speech(frame, sample_rate)
+                except:
+                    continue
+
+                if is_speech:
+                    last_speech_time = time.time()
+
+                    if speech_start_time is None:
+                        # Start of speech
+                        speech_start_time = time.time()
+                        speech_frames = 1
+                    else:
+                        speech_frames += 1
+                        speech_duration = time.time() - speech_start_time
+
+                    # Check for start speech detection (0.3s)
+                    if speech_duration >= config.WAITING_START_SPEECH_DURATION:
+                        if not state["speech_detected"]:
+                            logger.info(f"🗣️ [{short_uuid}] Start speech detected ({speech_duration:.1f}s)")
+                            state["speech_detected"] = True
+
+                    # Launch background transcription at 0.5s
+                    if speech_duration >= config.WAITING_BG_TRANSCRIBE_TRIGGER and bg_thread is None:
+                        logger.info(
+                            f"⏱️ [{short_uuid}] Speech {speech_duration:.1f}s "
+                            f"→ 🚀 Launching background transcription"
+                        )
+
+                        # Create snapshot
+                        snapshot_file = f"{record_file}.snapshot"
+                        try:
+                            import shutil
+                            shutil.copy2(record_file, snapshot_file)
+
+                            # Launch background thread
+                            bg_thread = threading.Thread(
+                                target=self._background_transcribe_snapshot,
+                                args=(snapshot_file, state),
+                                daemon=True
+                            )
+                            bg_thread.start()
+                        except Exception as e:
+                            logger.error(f"❌ [{short_uuid}] Snapshot error: {e}")
+
+                else:
+                    # Silence
+                    if last_speech_time is not None:
+                        silence_duration = time.time() - last_speech_time
+
+                        # Check for end-of-speech (0.6s silence after speech)
+                        if silence_duration >= config.SILENCE_THRESHOLD:
+                            logger.info(
+                                f"✅ [{short_uuid}] End-of-speech detected "
+                                f"(silence: {silence_duration:.1f}s)"
+                            )
+                            state["end_of_speech"] = True
+                            break
+
+                # Small delay
+                time.sleep(0.01)
+
+            logger.info(f"👂 [{short_uuid}] VAD monitoring ended")
+
+        except Exception as e:
+            logger.error(f"❌ [{short_uuid}] VAD monitoring error: {e}")
+
     # ========================================================================
     # ESL HELPERS (Audio recording, commands, hangup)
     # ========================================================================
