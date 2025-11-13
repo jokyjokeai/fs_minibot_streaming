@@ -42,11 +42,13 @@ except ImportError:
 # AI Services
 from system.services.faster_whisper_stt import FasterWhisperSTT
 from system.services.amd_service import AMDService
-from system.services.ollama_nlp import OllamaNLP
 
 # Scenarios & Objections
 from system.scenarios import ScenarioManager
 from system.objection_matcher import ObjectionMatcher
+
+# Colored Logger (Futuristic Design 🚀)
+from system.logger_colored import get_colored_logger
 
 # Database
 from system.database import SessionLocal
@@ -69,7 +71,7 @@ class RobotFreeSWITCH:
     - PRELOADED AI services (no cold starts)
     """
 
-    def __init__(self):
+    def __init__(self, default_theme: Optional[str] = None):
         """
         Initialize robot and PRELOAD all AI services
 
@@ -108,6 +110,9 @@ class RobotFreeSWITCH:
         # === AUDIO TRACKING ===
         self.barge_in_active = {}  # {call_uuid: bool}
 
+        # === COLORED LOGGER (Futuristic Design 🚀) ===
+        self.clog = get_colored_logger()
+
         # ===================================================================
         # PRELOADING AI SERVICES (CRITICAL FOR LATENCY)
         # ===================================================================
@@ -138,25 +143,7 @@ class RobotFreeSWITCH:
             self.stt_service = None
             raise
 
-        # 2. Ollama NLP (OPTIONAL - sentiment analysis only)
-        if config.OLLAMA_ENABLED:
-            try:
-                logger.info("Loading Ollama NLP (sentiment analysis)...")
-                self.nlp_service = OllamaNLP(
-                    base_url=config.OLLAMA_BASE_URL,
-                    model=config.OLLAMA_MODEL,
-                    timeout=config.OLLAMA_TIMEOUT,
-                    enabled=True
-                )
-                logger.info("Ollama NLP loaded")
-            except Exception as e:
-                logger.warning(f"Ollama NLP not available: {e}")
-                self.nlp_service = None
-        else:
-            logger.info("Ollama NLP disabled (sentiment analysis optional)")
-            self.nlp_service = None
-
-        # 3. AMD Service (keywords matching)
+        # 2. AMD Service (keywords matching)
         try:
             logger.info("Loading AMD Service...")
             self.amd_service = AMDService(
@@ -197,15 +184,22 @@ class RobotFreeSWITCH:
             self.scenario_manager = None
             raise
 
-        # 6. ObjectionMatcher (PRELOAD with default theme)
+        # 6. ObjectionMatcher (PRELOAD with scenario-specific theme)
         try:
-            logger.info("Loading ObjectionMatcher (default theme)...")
-            # Preload general objections (will be theme-specific per campaign)
-            self.objection_matcher_default = ObjectionMatcher.load_objections_for_theme("general")
-            if self.objection_matcher_default:
-                logger.info("ObjectionMatcher loaded (general theme)")
+            if default_theme:
+                logger.info(f"Loading ObjectionMatcher (theme: {default_theme})...")
+                # Load objections for the scenario's theme
+                self.objection_matcher_default = ObjectionMatcher.load_objections_for_theme(default_theme)
+                if self.objection_matcher_default:
+                    logger.info(
+                        f"ObjectionMatcher loaded ({default_theme}, "
+                        f"{len(self.objection_matcher_default.objections)} objections)"
+                    )
+                else:
+                    logger.warning(f"ObjectionMatcher not loaded (no objections found for {default_theme})")
             else:
-                logger.warning("ObjectionMatcher not loaded (no objections found)")
+                logger.info("No default theme specified, ObjectionMatcher warmup skipped")
+                self.objection_matcher_default = None
         except Exception as e:
             logger.warning(f"ObjectionMatcher not available: {e}")
             self.objection_matcher_default = None
@@ -270,22 +264,27 @@ class RobotFreeSWITCH:
 
         # 3. OBJECTION MATCHER WARMUP
         if self.objection_matcher_default:
-            logger.info("WARMUP 3/3: ObjectionMatcher test match...")
+            logger.info(f"WARMUP 3/3: ObjectionMatcher test match (theme: {default_theme})...")
             try:
                 warmup_start = time.time()
+                # Test with a common objection phrase (silent mode to avoid ❌ log)
                 test_match = self.objection_matcher_default.find_best_match(
                     "C'est trop cher pour moi",
-                    min_score=0.5
+                    min_score=0.5,
+                    silent=True  # Silent mode for warmup (no ✅/❌ logs)
                 )
                 warmup_time = (time.time() - warmup_start) * 1000
 
+                match_status = "✅ MATCHED" if test_match else "⚠️ NO MATCH"
                 logger.info(
                     f"ObjectionMatcher WARMUP 3/3: Completed in {warmup_time:.2f}ms - "
-                    f"Matcher is READY!"
+                    f"Matcher is READY! ({match_status})"
                 )
 
             except Exception as e:
                 logger.warning(f"ObjectionMatcher warmup failed (non-critical): {e}")
+        else:
+            logger.info("WARMUP 3/3: ObjectionMatcher skipped (no theme specified)")
 
         logger.info("=" * 80)
         logger.info("ROBOT INITIALIZED - ALL SERVICES PRELOADED")
@@ -930,7 +929,8 @@ class RobotFreeSWITCH:
         phase_start = time.time()
         short_uuid = call_uuid[:8]
 
-        logger.info(f"[{short_uuid}] === PHASE 1: AMD START ===")
+        # PHASE 1 START - Colored log (YELLOW panel with double border)
+        self.clog.phase1_start(uuid=short_uuid)
 
         # ===================================================================
         # STEP 1: Record audio (1.5s default)
@@ -1023,10 +1023,9 @@ class RobotFreeSWITCH:
         except Exception as e:
             logger.warning(f"[{short_uuid}] Failed to cleanup audio file: {e}")
 
-        logger.info(
-            f"[{short_uuid}] === PHASE 1: AMD END === "
-            f"Result: {result}, Total latency: {total_latency_ms:.0f}ms"
-        )
+        # PHASE 1 END - Colored log (YELLOW panel with latency)
+        self.clog.phase1_end(total_latency_ms, uuid=short_uuid)
+        logger.info(f"[{short_uuid}] Result: {result}")
 
         return {
             "result": result,
@@ -1081,11 +1080,8 @@ class RobotFreeSWITCH:
         phase_start = time.time()
         short_uuid = call_uuid[:8]
 
-        logger.info(f"[{short_uuid}] === PHASE 2: PLAYING START ===")
-        logger.info(
-            f"[{short_uuid}] Audio: {Path(audio_path).name}, "
-            f"Barge-in: {'ENABLED' if enable_barge_in else 'DISABLED'}"
-        )
+        # PHASE 2 START - Colored log (GREEN panel with heavy border)
+        self.clog.phase2_start(Path(audio_path).name, uuid=short_uuid)
 
         # Check audio file exists
         if not Path(audio_path).exists():
@@ -1109,17 +1105,14 @@ class RobotFreeSWITCH:
 
         total_latency_ms = (time.time() - phase_start) * 1000
 
+        # PHASE 2 END - Colored log (GREEN panel)
         if result.get("interrupted"):
-            logger.info(
-                f"[{short_uuid}] === PHASE 2: PLAYING END === "
+            self.clog.warning(
                 f"INTERRUPTED at {result.get('barge_in_at', 0):.1f}s "
-                f"(speech: {result.get('speech_duration', 0):.1f}s)"
+                f"(speech: {result.get('speech_duration', 0):.1f}s)",
+                uuid=short_uuid
             )
-        else:
-            logger.info(
-                f"[{short_uuid}] === PHASE 2: PLAYING END === "
-                f"COMPLETED (duration: {total_latency_ms/1000:.1f}s)"
-            )
+        self.clog.phase2_end(total_latency_ms, uuid=short_uuid)
 
         result["latencies"]["total_ms"] = total_latency_ms
         return result
@@ -1555,12 +1548,8 @@ class RobotFreeSWITCH:
         if max_duration is None:
             max_duration = config.WAITING_TIMEOUT
 
-        logger.info(f"[{short_uuid}] === PHASE 3: WAITING START ===")
-        logger.info(
-            f"[{short_uuid}] Listening for client response "
-            f"(silence threshold: {config.SILENCE_THRESHOLD}s, "
-            f"max duration: {max_duration}s)"
-        )
+        # PHASE 3 START - Colored log (MAGENTA panel with rounded border)
+        self.clog.phase3_start(uuid=short_uuid)
 
         # ===================================================================
         # STEP 1: Start recording with silence detection
@@ -1658,11 +1647,8 @@ class RobotFreeSWITCH:
         except Exception as e:
             logger.warning(f"[{short_uuid}] Failed to cleanup audio file: {e}")
 
-        logger.info(
-            f"[{short_uuid}] === PHASE 3: WAITING END === "
-            f"Transcription: '{transcription[:30]}...', "
-            f"Total latency: {total_latency_ms:.0f}ms"
-        )
+        # PHASE 3 END - Colored log (MAGENTA panel)
+        self.clog.phase3_end(total_latency_ms, uuid=short_uuid)
 
         return {
             "transcription": transcription,
@@ -2049,7 +2035,8 @@ class RobotFreeSWITCH:
             f"MaxTurn: {max_turns}"
         )
 
-        theme = self.scenario_manager.get_theme(scenario)
+        # Charger thématique depuis scenario (metadata.theme_file)
+        theme = self.scenario_manager.get_theme_file(scenario)
         current_objection = objection_text
         turns_used = 0
 
@@ -2228,7 +2215,7 @@ class RobotFreeSWITCH:
         NIVEAU 2: Keywords matching (keywords simples)
         NIVEAU 3: Resolution prioritaire (deny > question > objection > affirm)
 
-        This replaces Ollama NLP for intent detection (200-500ms saved!)
+        Keywords matching for fast intent detection (<10ms, no LLM needed!)
 
         5 intents de base:
         - affirm: Acceptation positive
@@ -2565,7 +2552,8 @@ class RobotFreeSWITCH:
         short_uuid = call_uuid[:8]
         phase_start = time.time()
 
-        logger.info(f"🎧 [{short_uuid}] === PHASE 1: AMD START ===")
+        # PHASE 1 START - Colored log (YELLOW panel with double border)
+        self.clog.phase1_start(uuid=short_uuid)
 
         # Recording file
         record_file = f"/tmp/amd_{call_uuid}.wav"
@@ -2631,9 +2619,8 @@ class RobotFreeSWITCH:
                 logger.warning(f"⚠️ [{short_uuid}] File may not be ready (waited {max_wait}s)")
 
             record_latency = (time.time() - record_start) * 1000
-            logger.info(
-                f"⏱️ [{short_uuid}] Recording latency: {record_latency:.0f}ms"
-            )
+            # Latency - Colored log (RED/YELLOW/GREEN indicator)
+            self.clog.latency(record_latency, "Recording", uuid=short_uuid)
 
             # Step 2: Extract LEFT channel (client audio) from STEREO
             mono_file = f"/tmp/amd_{call_uuid}_mono.wav"
@@ -2691,11 +2678,9 @@ class RobotFreeSWITCH:
 
                 total_latency = (time.time() - phase_start) * 1000
 
-                logger.info(f"✅ [{short_uuid}] AMD: NO_ANSWER detected (silence)")
-                logger.info(
-                    f"⏱️ [{short_uuid}] === PHASE 1: AMD END === "
-                    f"Total: {total_latency:.0f}ms"
-                )
+                # PHASE 1 END - Colored log (YELLOW panel with latency)
+                self.clog.success("AMD: NO_ANSWER detected (silence)", uuid=short_uuid)
+                self.clog.phase1_end(total_latency, uuid=short_uuid)
 
                 return {
                     "result": "NO_ANSWER",
@@ -2708,8 +2693,8 @@ class RobotFreeSWITCH:
             logger.info(f"📝 [{short_uuid}] Transcribing audio...")
             transcribe_start = time.time()
 
-            # OPTIMIZED: Use beam_size=3 + no_speech_threshold=0.6 + vad_filter=True
-            # - beam_size=3: Better quality, explores alternatives (reduces hallucinations)
+            # OPTIMIZED: Use beam_size=5 + no_speech_threshold=0.6 + vad_filter=True
+            # - beam_size=5: More hypotheses tested = fewer hallucinations on short words (vs beam_size=3)
             # - no_speech_threshold=0.6: Balanced threshold (0.8 too strict, forced hallucinations)
             # - vad_filter=True: Let Whisper's VAD handle silence removal
             # - condition_on_previous_text=False: No context (avoid hallucinations)
@@ -2717,7 +2702,8 @@ class RobotFreeSWITCH:
                 mono_file,  # Use mono file (client audio only)
                 vad_filter=True,  # Enable Whisper's internal VAD
                 no_speech_threshold=0.6,  # Balanced silence threshold (default Whisper)
-                condition_on_previous_text=False  # No context (first transcription)
+                condition_on_previous_text=False,  # No context (first transcription)
+                beam_size=5  # More hypotheses = fewer hallucinations (AMD-specific)
             )
             transcription = transcription_result.get("text", "").strip()
 
@@ -2728,10 +2714,9 @@ class RobotFreeSWITCH:
                 pass
 
             transcribe_latency = (time.time() - transcribe_start) * 1000
-            logger.info(
-                f"⏱️ [{short_uuid}] Transcription: '{transcription}' "
-                f"(latency: {transcribe_latency:.0f}ms)"
-            )
+
+            # Transcription - Colored log (CYAN panel)
+            self.clog.transcription(transcription, uuid=short_uuid, latency_ms=transcribe_latency)
 
             # Check for SILENCE: if transcription is empty or very short
             # This indicates no one spoke during AMD period → no answer / silence
@@ -2746,13 +2731,9 @@ class RobotFreeSWITCH:
 
                 total_latency = (time.time() - phase_start) * 1000
 
-                logger.info(
-                    f"✅ [{short_uuid}] AMD: NO_ANSWER detected (silence)"
-                )
-                logger.info(
-                    f"⏱️ [{short_uuid}] === PHASE 1: AMD END === "
-                    f"Total: {total_latency:.0f}ms"
-                )
+                # PHASE 1 END - Colored log (YELLOW panel with latency)
+                self.clog.success("AMD: NO_ANSWER detected (silence)", uuid=short_uuid)
+                self.clog.phase1_end(total_latency, uuid=short_uuid)
 
                 return {
                     "result": "NO_ANSWER",  # Silence = no answer
@@ -2775,14 +2756,12 @@ class RobotFreeSWITCH:
             # Total latency
             total_latency = (time.time() - phase_start) * 1000
 
-            logger.info(
-                f"✅ [{short_uuid}] AMD: {result_type} detected "
-                f"(confidence: {confidence:.2f})"
+            # PHASE 1 END - Colored log (YELLOW panel with latency)
+            self.clog.success(
+                f"AMD: {result_type} detected (confidence: {confidence:.2f})",
+                uuid=short_uuid
             )
-            logger.info(
-                f"⏱️ [{short_uuid}] === PHASE 1: AMD END === "
-                f"Total: {total_latency:.0f}ms"
-            )
+            self.clog.phase1_end(total_latency, uuid=short_uuid)
 
             return {
                 "result": result_type,
@@ -2841,11 +2820,8 @@ class RobotFreeSWITCH:
         short_uuid = call_uuid[:8]
         phase_start = time.time()
 
-        logger.info(f"🎙️ [{short_uuid}] === PHASE 2: PLAYING START ===")
-        logger.info(
-            f"🎙️ [{short_uuid}] Audio: {Path(audio_path).name}, "
-            f"Barge-in: {'ENABLED' if enable_barge_in else 'DISABLED'}"
-        )
+        # PHASE 2 START - Colored log (GREEN panel with heavy border)
+        self.clog.phase2_start(Path(audio_path).name, uuid=short_uuid)
 
         # Recording file
         record_file = f"/tmp/playing_{call_uuid}.wav"
@@ -2907,14 +2883,34 @@ class RobotFreeSWITCH:
                 if monitoring_state["barged_in"]:
                     logger.info(f"⚡ [{short_uuid}] BARGE-IN detected!")
 
-                    # Smooth delay (natural interruption)
-                    logger.info(f"⏱️ [{short_uuid}] Smooth delay: {config.BARGE_IN_SMOOTH_DELAY}s...")
-                    time.sleep(config.BARGE_IN_SMOOTH_DELAY)
+                    # Smooth delay with fade-out effect (0.3s)
+                    logger.info(f"🔉 [{short_uuid}] Fade-out + smooth delay: {config.BARGE_IN_SMOOTH_DELAY}s...")
+
+                    # Progressive fade-out during smooth delay
+                    # Reduce volume from 0 dB to -40 dB over 0.3s (10 steps)
+                    fade_steps = 10
+                    step_duration = config.BARGE_IN_SMOOTH_DELAY / fade_steps
+
+                    for step in range(fade_steps):
+                        # Calculate volume: 0 dB → -40 dB (linear fade)
+                        volume_db = -4 * step  # 0, -4, -8, -12, ..., -36
+                        volume_level = volume_db / 4.0  # FreeSWITCH uses -4 to +4 range
+
+                        # Apply volume adjustment
+                        audio_cmd = f"uuid_audio {call_uuid} start write level {volume_level}"
+                        self._execute_esl_command(audio_cmd)
+
+                        time.sleep(step_duration)
 
                     # Stop audio playback
                     break_cmd = f"uuid_break {call_uuid}"
                     self._execute_esl_command(break_cmd)
-                    logger.info(f"🔇 [{short_uuid}] Audio stopped")
+
+                    # Reset audio level to normal
+                    reset_cmd = f"uuid_audio {call_uuid} start write level 0"
+                    self._execute_esl_command(reset_cmd)
+
+                    logger.info(f"🔇 [{short_uuid}] Audio stopped (fade-out complete)")
 
             else:
                 # No barge-in: wait for audio to finish
@@ -2953,7 +2949,8 @@ class RobotFreeSWITCH:
                     result = self.stt_service.transcribe_file(record_file)
                     transcription = result.get("text", "").strip()
 
-                logger.info(f"📝 [{short_uuid}] Transcription: '{transcription}'")
+                # Transcription - Colored log (CYAN panel)
+                self.clog.transcription(transcription, uuid=short_uuid)
 
             # Cleanup
             try:
@@ -2964,10 +2961,8 @@ class RobotFreeSWITCH:
             # Total latency
             total_latency = (time.time() - phase_start) * 1000
 
-            logger.info(
-                f"⏱️ [{short_uuid}] === PHASE 2: PLAYING END === "
-                f"Total: {total_latency:.0f}ms"
-            )
+            # PHASE 2 END - Colored log (GREEN panel)
+            self.clog.phase2_end(total_latency, uuid=short_uuid)
 
             return {
                 "barged_in": monitoring_state["barged_in"],
@@ -3037,21 +3032,59 @@ class RobotFreeSWITCH:
                 logger.warning(f"⚠️ [{short_uuid}] Recording file not found for VAD")
                 return
 
-            # Small delay for WAV header
-            time.sleep(0.1)
+            # Wait for valid WAV file (polling robust)
+            import wave
+            wav_valid = False
+            for attempt in range(30):  # Max 3s wait
+                try:
+                    with wave.open(record_file, 'rb') as test_wav:
+                        # Test if WAV header is complete
+                        test_wav.getnframes()
+                        wav_valid = True
+                        break
+                except Exception as e:
+                    if attempt < 29:
+                        time.sleep(0.1)
+                    else:
+                        logger.warning(
+                            f"⚠️ [{short_uuid}] WAV file not valid after 3s: {e}"
+                        )
+                        return
+
+            if not wav_valid:
+                logger.warning(f"⚠️ [{short_uuid}] WAV file validation failed")
+                return
+
+            # Detect actual sample rate from WAV file
+            actual_sample_rate = sample_rate
+            try:
+                with wave.open(record_file, 'rb') as wav:
+                    actual_sample_rate = wav.getframerate()
+                    if actual_sample_rate != sample_rate:
+                        logger.info(
+                            f"🎙️ [{short_uuid}] Sample rate detected: {actual_sample_rate}Hz "
+                            f"(expected {sample_rate}Hz)"
+                        )
+            except:
+                pass
 
             logger.info(f"🎙️ [{short_uuid}] VAD monitoring started")
 
-            # Stream frames from WAV
-            for frame in self._get_audio_frames_from_wav(record_file, frame_duration_ms=frame_duration_ms):
+            # Stream frames from WAV (with actual sample rate)
+            for frame in self._get_audio_frames_from_wav(
+                record_file,
+                frame_duration_ms=frame_duration_ms,
+                sample_rate=actual_sample_rate
+            ):
                 if state["stop_monitoring"]:
                     break
 
-                # Check if frame is speech
+                # Check if frame is speech (use actual sample rate)
                 try:
-                    is_speech = self.vad.is_speech(frame, sample_rate)
-                except:
-                    # Invalid frame, skip
+                    is_speech = self.vad.is_speech(frame, actual_sample_rate)
+                except Exception as vad_error:
+                    # Invalid frame or unsupported sample rate, skip
+                    logger.debug(f"VAD error: {vad_error}")
                     continue
 
                 if is_speech:
@@ -3093,12 +3126,42 @@ class RobotFreeSWITCH:
 
                     # Check for barge-in threshold (1.5s)
                     if speech_duration >= config.BARGE_IN_THRESHOLD:
-                        logger.info(
-                            f"⚡ [{short_uuid}] BARGE-IN TRIGGERED! "
-                            f"(speech: {speech_duration:.1f}s > {config.BARGE_IN_THRESHOLD}s)"
-                        )
-                        state["barged_in"] = True
-                        break
+                        # Intelligent short/long detection
+                        should_barge_in = True
+
+                        # If background transcription available, check for short responses
+                        if state["bg_ready"] and state["transcription"]:
+                            transcription = state["transcription"].lower().strip()
+
+                            # Short affirmative responses (should NOT trigger barge-in)
+                            short_responses = [
+                                "oui", "non", "ok", "d'accord", "daccord",
+                                "pourquoi pas", "allons-y", "allez-y", "peut-être",
+                                "peut etre", "ouais", "nan", "nope", "yep"
+                            ]
+
+                            # Check if transcription is ONLY a short response
+                            if any(resp == transcription or transcription.startswith(resp + " ")
+                                   for resp in short_responses):
+                                if len(transcription.split()) <= 3:  # Max 3 words
+                                    logger.info(
+                                        f"🗣️ [{short_uuid}] Short response detected: '{transcription}' "
+                                        f"→ NOT barging in (let robot continue)"
+                                    )
+                                    should_barge_in = False
+
+                        if should_barge_in:
+                            logger.info(
+                                f"⚡ [{short_uuid}] BARGE-IN TRIGGERED! "
+                                f"(speech: {speech_duration:.1f}s > {config.BARGE_IN_THRESHOLD}s)"
+                            )
+                            state["barged_in"] = True
+                            break
+                        else:
+                            # Reset speech tracking to allow robot to continue
+                            speech_frames = 0
+                            speech_start_time = None
+                            speech_duration = 0.0
 
                 else:
                     # Silence: reset if short speech
@@ -3178,11 +3241,8 @@ class RobotFreeSWITCH:
         if timeout is None:
             timeout = config.WAITING_SILENCE_TIMEOUT
 
-        logger.info(f"👂 [{short_uuid}] === PHASE 3: WAITING START ===")
-        logger.info(
-            f"👂 [{short_uuid}] Silence timeout: {timeout}s, "
-            f"End-of-speech: {config.SILENCE_THRESHOLD}s"
-        )
+        # PHASE 3 START - Colored log (MAGENTA panel with rounded border)
+        self.clog.phase3_start(uuid=short_uuid)
 
         # Recording file
         record_file = f"/tmp/waiting_{call_uuid}.wav"
@@ -3253,7 +3313,8 @@ class RobotFreeSWITCH:
                     result = self.stt_service.transcribe_file(record_file)
                     transcription = result.get("text", "").strip()
 
-                logger.info(f"📝 [{short_uuid}] Transcription: '{transcription}'")
+                # Transcription - Colored log (CYAN panel)
+                self.clog.transcription(transcription, uuid=short_uuid)
             else:
                 logger.info(f"🔇 [{short_uuid}] No speech detected (silence)")
 
@@ -3266,10 +3327,8 @@ class RobotFreeSWITCH:
             # Total latency
             total_latency = (time.time() - phase_start) * 1000
 
-            logger.info(
-                f"⏱️ [{short_uuid}] === PHASE 3: WAITING END === "
-                f"Total: {total_latency:.0f}ms"
-            )
+            # PHASE 3 END - Colored log (MAGENTA panel)
+            self.clog.phase3_end(total_latency, uuid=short_uuid)
 
             return {
                 "transcription": transcription,
@@ -3787,7 +3846,6 @@ if __name__ == "__main__":
         print(f"AMD service: {'OK' if robot.amd_service else 'FAIL'}")
         print(f"VAD service: {'OK' if robot.vad else 'FAIL'}")
         print(f"ScenarioManager: {'OK' if robot.scenario_manager else 'FAIL'}")
-        print(f"Ollama NLP: {'OK' if robot.nlp_service else 'DISABLED'}")
         print(f"ObjectionMatcher: {'OK' if robot.objection_matcher_default else 'NOT LOADED'}")
 
         print("\nSUCCESS - All services preloaded!")

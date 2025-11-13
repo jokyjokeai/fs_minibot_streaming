@@ -107,7 +107,7 @@ DEVICE = _detect_gpu_device()
 # PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
 
 # Dur�e max d'�coute pour AMD (en secondes)
-AMD_MAX_DURATION = 2.5  # Augmenté pour capturer messages répondeurs complets
+AMD_MAX_DURATION = 2.3  # Test intermédiaire pour répondeurs (peut augmenter à 2.5s)
 
 # Keywords pour d�tecter HUMAIN
 AMD_KEYWORDS_HUMAN = [
@@ -142,7 +142,33 @@ AMD_KEYWORDS_MACHINE = [
     # Indisponibilité
     "ne peut pas repondre", "ne peux pas repondre", "pas disponible",
     "ne suis pas disponible", "joignable", "injoignable",
-    "momentanement absent"
+    "momentanement absent",
+
+    # === PHONE NUMBERS (CRITICAL FIX) ===
+    # Préfixes numériques français (mobiles + fixes)
+    "06", "07",  # Mobiles
+    "01", "02", "03", "04", "05", "08", "09",  # Fixes + autres
+
+    # Formes parlées des préfixes
+    "zero six", "zero six", "zero sept", "zero sept",
+    "zero un", "zero un", "zero deux", "zero deux",
+    "zero trois", "zero trois", "zero quatre", "zero quatre",
+    "zero cinq", "zero cinq", "zero huit", "zero huit",
+    "zero neuf", "zero neuf",
+
+    # Contexte téléphone (phrases indicatrices)
+    "repondeur du", "numero", "numero de",
+    "joindre au", "rappeler au", "contacter au", "appeler au",
+
+    # === BEEP VARIATIONS ===
+    "beep", "biiip", "biip", "bep",
+    "top sonore", "apres le signal", "apres la tonalite",
+    "tonalite", "apres le top",
+
+    # === ADDITIONAL MACHINE PHRASES ===
+    "je ne suis pas la", "actuellement", "pour le moment",
+    "en ce moment", "veuillez laisser", "merci de laisser",
+    "laissez votre", "un message apres", "votre message"
 ]
 
 # Timeout silence AMD (si aucun son d�tect�)
@@ -215,8 +241,8 @@ MAX_CONSECUTIVE_NO_MATCH = 3
 
 # Mod�le Faster-Whisper
 # Options : "tiny", "base", "small", "medium", "large-v2", "large-v3"
-# Recommandation : "base" (bon balance vitesse/pr�cision)
-FASTER_WHISPER_MODEL = os.getenv("FASTER_WHISPER_MODEL", "base")
+# Recommandation : "small" (meilleur sur audio dégradé)
+FASTER_WHISPER_MODEL = os.getenv("FASTER_WHISPER_MODEL", "small")
 
 # Device (auto-d�tect�)
 FASTER_WHISPER_DEVICE = os.getenv("FASTER_WHISPER_DEVICE", DEVICE)
@@ -486,20 +512,7 @@ AUDIO_RETENTION_DAYS = 7
 
 
 # PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
-# 14. OLLAMA (Sentiment Analysis uniquement - OPTIONNEL)
-# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
-
-# NOTE : Ollama PAS utilis� pour intent detection (trop lent)
-# Gard� UNIQUEMENT pour sentiment analysis (optionnel, non-bloquant)
-
-OLLAMA_ENABLED = os.getenv("OLLAMA_ENABLED", "false").lower() == "true"
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral:7b")
-OLLAMA_TIMEOUT = 5.0  # secondes (sentiment analysis non-bloquant)
-
-
-# PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
-# 15. QUALIFICATIONS LEADS
+# 14. QUALIFICATIONS LEADS
 # PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
 
 # Statuts possibles pour qualification leads
@@ -604,12 +617,6 @@ class Config:
     LOG_PERFORMANCE_DIR = LOG_PERFORMANCE_DIR
     LOG_RETENTION_DAYS = LOG_RETENTION_DAYS
     AUDIO_RETENTION_DAYS = AUDIO_RETENTION_DAYS
-
-    # Ollama (optionnel)
-    OLLAMA_ENABLED = OLLAMA_ENABLED
-    OLLAMA_BASE_URL = OLLAMA_BASE_URL
-    OLLAMA_MODEL = OLLAMA_MODEL
-    OLLAMA_TIMEOUT = OLLAMA_TIMEOUT
 
     # Leads
     LEAD_STATUS_NEW = LEAD_STATUS_NEW
