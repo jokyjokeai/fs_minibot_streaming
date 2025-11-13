@@ -3027,9 +3027,13 @@ class RobotFreeSWITCH:
         identical_count = 0
         identical_threshold = 3  # 3 identical = client finished speaking
 
+        # Track speech start time for accurate duration (from start of CURRENT speech)
+        speech_start_time = None  # Timestamp when client starts speaking (reset on silence)
+
         logger.info(
             f"🎙️ [{short_uuid}] Transcription-based monitoring started "
-            f"(snapshot_interval: {snapshot_interval}s, barge-in threshold: {config.BARGE_IN_THRESHOLD}s)"
+            f"(snapshot_interval: {snapshot_interval}s, barge-in threshold: {config.BARGE_IN_THRESHOLD}s, "
+            f"max 1 barge-in per phase)"
         )
 
         try:
@@ -3117,48 +3121,72 @@ class RobotFreeSWITCH:
                             logger.error(f"❌ [{short_uuid}] Snapshot error: {e}")
 
                 # Check transcription state for barge-in detection
-                if state["bg_ready"] and state["transcription"]:
-                    transcription = state["transcription"].strip()
-                    audio_duration = state.get("audio_duration", 0.0)  # Use real duration from STT
+                if state["bg_ready"]:
+                    transcription = state["transcription"].strip() if state["transcription"] else ""
 
-                    logger.info(
-                        f"📝 [{short_uuid}] Transcription at {elapsed_time:.1f}s: "
-                        f"'{transcription}' (real duration: {audio_duration:.1f}s)"
-                    )
-
-                    # Simple logic: > 1.5s = barge-in trigger
-                    if audio_duration >= config.BARGE_IN_THRESHOLD and not state["barged_in"]:
+                    # Detect speech START (first non-empty transcription)
+                    if transcription and speech_start_time is None:
+                        speech_start_time = current_time
                         logger.info(
-                            f"⚡ [{short_uuid}] BARGE-IN TRIGGERED at {elapsed_time:.1f}s! "
-                            f"(speech duration: {audio_duration:.1f}s > {config.BARGE_IN_THRESHOLD}s)"
+                            f"🗣️ [{short_uuid}] Speech START detected at {elapsed_time:.1f}s: '{transcription}'"
                         )
-                        logger.info(f"🎧 [{short_uuid}] Continuing to listen for complete transcription...")
-                        state["barged_in"] = True
-                        state["barge_in_time"] = elapsed_time
-                        # NO break! Continue monitoring to get complete transcription
 
-                    # End-of-speech detection: check for consecutive identical transcriptions
-                    if state["barged_in"]:
-                        if transcription == last_transcription:
-                            identical_count += 1
-                            logger.debug(
-                                f"🔄 [{short_uuid}] Identical transcription #{identical_count}/3: '{transcription}'"
+                    # Reset speech timer on silence (empty transcription)
+                    elif not transcription and speech_start_time is not None:
+                        logger.debug(
+                            f"🔇 [{short_uuid}] Silence detected at {elapsed_time:.1f}s, resetting speech timer"
+                        )
+                        speech_start_time = None
+                        identical_count = 0
+                        last_transcription = None
+
+                    # Calculate REAL speech duration (from start of CURRENT speech, not from recording start)
+                    if speech_start_time is not None:
+                        speech_duration = current_time - speech_start_time
+                    else:
+                        speech_duration = 0.0
+
+                    # Log transcription with REAL speech duration
+                    if transcription:
+                        logger.info(
+                            f"📝 [{short_uuid}] Transcription at {elapsed_time:.1f}s: "
+                            f"'{transcription}' (speech duration: {speech_duration:.1f}s)"
+                        )
+
+                        # Simple logic: > 1.5s = barge-in trigger (ONE TIME ONLY per phase)
+                        if speech_duration >= config.BARGE_IN_THRESHOLD and not state["barged_in"]:
+                            logger.info(
+                                f"⚡ [{short_uuid}] BARGE-IN TRIGGERED at {elapsed_time:.1f}s! "
+                                f"(speech duration: {speech_duration:.1f}s > {config.BARGE_IN_THRESHOLD}s) "
+                                f"[ONE-TIME ONLY]"
                             )
+                            logger.info(f"🎧 [{short_uuid}] Continuing to listen for complete transcription...")
+                            state["barged_in"] = True
+                            state["barge_in_time"] = elapsed_time
+                            # NO break! Continue monitoring to get complete transcription
 
-                            if identical_count >= identical_threshold:
-                                logger.info(
-                                    f"🏁 [{short_uuid}] Client finished speaking at {elapsed_time:.1f}s "
-                                    f"(final transcription: '{transcription}')"
-                                )
-                                break  # Exit only when client stops speaking
-                        else:
-                            # New transcription -> client still speaking
-                            if identical_count > 0:
+                        # End-of-speech detection: check for consecutive identical transcriptions
+                        if state["barged_in"]:
+                            if transcription == last_transcription:
+                                identical_count += 1
                                 logger.debug(
-                                    f"🔄 [{short_uuid}] New transcription (was {identical_count} identical): '{transcription}'"
+                                    f"🔄 [{short_uuid}] Identical transcription #{identical_count}/{identical_threshold}: '{transcription}'"
                                 )
-                            identical_count = 0
-                            last_transcription = transcription
+
+                                if identical_count >= identical_threshold:
+                                    logger.info(
+                                        f"🏁 [{short_uuid}] Client finished speaking at {elapsed_time:.1f}s "
+                                        f"(final transcription: '{transcription}', speech duration: {speech_duration:.1f}s)"
+                                    )
+                                    break  # Exit only when client stops speaking
+                            else:
+                                # New transcription -> client still speaking
+                                if identical_count > 0:
+                                    logger.debug(
+                                        f"🔄 [{short_uuid}] New transcription (was {identical_count} identical): '{transcription}'"
+                                    )
+                                identical_count = 0
+                                last_transcription = transcription
 
                     # Reset state for next snapshot
                     state["bg_ready"] = False
