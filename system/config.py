@@ -107,7 +107,7 @@ DEVICE = _detect_gpu_device()
 # PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
 
 # Dur�e max d'�coute pour AMD (en secondes)
-AMD_MAX_DURATION = 2.0  # Optimisé: 2.0s suffisant avec beam_size=3 + meilleurs keywords
+AMD_MAX_DURATION = 2.5  # Augmenté pour capturer messages répondeurs complets
 
 # Keywords pour d�tecter HUMAIN
 AMD_KEYWORDS_HUMAN = [

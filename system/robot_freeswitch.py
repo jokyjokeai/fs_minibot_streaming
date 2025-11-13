@@ -2708,15 +2708,15 @@ class RobotFreeSWITCH:
             logger.info(f"📝 [{short_uuid}] Transcribing audio...")
             transcribe_start = time.time()
 
-            # OPTIMIZED: Use beam_size=3 + no_speech_threshold=0.8 + vad_filter=True
+            # OPTIMIZED: Use beam_size=3 + no_speech_threshold=0.6 + vad_filter=True
             # - beam_size=3: Better quality, explores alternatives (reduces hallucinations)
-            # - no_speech_threshold=0.8: Stricter silence detection (vs default 0.6)
+            # - no_speech_threshold=0.6: Balanced threshold (0.8 too strict, forced hallucinations)
             # - vad_filter=True: Let Whisper's VAD handle silence removal
             # - condition_on_previous_text=False: No context (avoid hallucinations)
             transcription_result = self.stt_service.transcribe_file(
                 mono_file,  # Use mono file (client audio only)
                 vad_filter=True,  # Enable Whisper's internal VAD
-                no_speech_threshold=0.8,  # Stricter silence threshold for AMD
+                no_speech_threshold=0.6,  # Balanced silence threshold (default Whisper)
                 condition_on_previous_text=False  # No context (first transcription)
             )
             transcription = transcription_result.get("text", "").strip()
