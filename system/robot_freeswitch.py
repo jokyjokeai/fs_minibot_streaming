@@ -2659,9 +2659,9 @@ class RobotFreeSWITCH:
             ]
             volume_result = subprocess.run(
                 volume_cmd,
-                capture_output=True,
-                text=True,
-                stderr=subprocess.STDOUT
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True
             )
 
             # Parse mean_volume from ffmpeg output
