@@ -2591,11 +2591,16 @@ class RobotFreeSWITCH:
                 f"⏱️ [{short_uuid}] Recording latency: {record_latency:.0f}ms"
             )
 
-            # Step 2: Transcribe
+            # Step 2: Transcribe (DISABLE VAD filter for AMD!)
             logger.info(f"📝 [{short_uuid}] Transcribing audio...")
             transcribe_start = time.time()
 
-            transcription_result = self.stt_service.transcribe_file(record_file)
+            # CRITICAL: Disable VAD filter for AMD
+            # VAD filter can suppress client's initial words
+            transcription_result = self.stt_service.transcribe_file(
+                record_file,
+                vad_filter=False  # Keep ALL audio for AMD
+            )
             transcription = transcription_result.get("text", "").strip()
 
             transcribe_latency = (time.time() - transcribe_start) * 1000

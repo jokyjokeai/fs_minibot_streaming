@@ -82,12 +82,14 @@ class FasterWhisperSTT:
             logger.error(f"Failed to load Faster-Whisper model: {e}")
             raise
 
-    def transcribe_file(self, audio_path: str) -> Dict[str, Any]:
+    def transcribe_file(self, audio_path: str, vad_filter: bool = True) -> Dict[str, Any]:
         """
         Transcribe audio file
 
         Args:
             audio_path: Path to .wav file
+            vad_filter: Enable VAD filter to remove silences (default: True)
+                       Set to False for AMD to keep all audio
 
         Returns:
             {
@@ -126,7 +128,7 @@ class FasterWhisperSTT:
                 str(audio_file),
                 language=self.language,
                 beam_size=self.beam_size,
-                vad_filter=True  # Remove silences
+                vad_filter=vad_filter  # Configurable VAD filter
             )
 
             # Concatenate segments
