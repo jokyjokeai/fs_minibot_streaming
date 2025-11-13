@@ -2823,8 +2823,8 @@ class RobotFreeSWITCH:
         # PHASE 2 START - Colored log (GREEN panel with heavy border)
         self.clog.phase2_start(Path(audio_path).name, uuid=short_uuid)
 
-        # Recording file
-        record_file = f"/tmp/playing_{call_uuid}.wav"
+        # Recording file (RAW format for real-time access)
+        record_file = f"/tmp/playing_{call_uuid}.raw"
 
         # Shared state for VAD monitoring thread
         monitoring_state = {
@@ -2997,10 +2997,16 @@ class RobotFreeSWITCH:
         state: Dict[str, Any]
     ):
         """
-        VAD monitoring thread for Phase 2 PLAYING
+        Transcription-based monitoring thread for Phase 2 PLAYING
 
-        Monitors for barge-in (1.5s continuous speech)
-        Launches background transcription at 0.5s
+        Monitors for barge-in using continuous background transcription
+        instead of VAD frame-by-frame (which cannot read WAV while FreeSWITCH writes)
+
+        Strategy:
+        - Launch background transcription snapshots every 0.5s
+        - Estimate speech duration from transcription word count
+        - Trigger barge-in if estimated duration > 1.5s
+        - Intelligent detection: ignore short responses ("oui", "ok", etc.)
 
         Args:
             call_uuid: Call UUID
@@ -3008,18 +3014,23 @@ class RobotFreeSWITCH:
             state: Shared state dict (modified in-place)
         """
         short_uuid = call_uuid[:8]
+        monitoring_start_time = time.time()
 
-        # VAD state
-        speech_frames = 0
-        speech_start_time = None
-        speech_duration = 0.0
+        # Transcription monitoring state
         bg_thread = None
         snapshot_file = None
+        last_snapshot_time = None
+        snapshot_interval = 0.5  # Take snapshot every 0.5s
 
-        # Frame params
-        frame_duration_ms = config.WEBRTC_VAD_FRAME_DURATION_MS
-        sample_rate = config.WEBRTC_VAD_SAMPLE_RATE
-        frame_size = int(sample_rate * frame_duration_ms / 1000)
+        # End-of-speech detection (consecutive identical transcriptions)
+        last_transcription = None
+        identical_count = 0
+        identical_threshold = 3  # 3 identical = client finished speaking
+
+        logger.info(
+            f"🎙️ [{short_uuid}] Transcription-based monitoring started "
+            f"(snapshot_interval: {snapshot_interval}s, barge-in threshold: {config.BARGE_IN_THRESHOLD}s)"
+        )
 
         try:
             # Wait for WAV file to be created
@@ -3029,155 +3040,140 @@ class RobotFreeSWITCH:
                 retries += 1
 
             if not Path(record_file).exists():
-                logger.warning(f"⚠️ [{short_uuid}] Recording file not found for VAD")
+                logger.warning(f"⚠️ [{short_uuid}] Recording file not found for monitoring")
                 return
 
-            # Wait for valid WAV file (polling robust)
-            import wave
-            wav_valid = False
-            for attempt in range(30):  # Max 3s wait
-                try:
-                    with wave.open(record_file, 'rb') as test_wav:
-                        # Test if WAV header is complete
-                        test_wav.getnframes()
-                        wav_valid = True
-                        break
-                except Exception as e:
-                    if attempt < 29:
-                        time.sleep(0.1)
-                    else:
-                        logger.warning(
-                            f"⚠️ [{short_uuid}] WAV file not valid after 3s: {e}"
-                        )
-                        return
+            wait_time = time.time() - monitoring_start_time
+            logger.info(f"✅ [{short_uuid}] Recording file detected (wait: {wait_time*1000:.0f}ms)")
 
-            if not wav_valid:
-                logger.warning(f"⚠️ [{short_uuid}] WAV file validation failed")
-                return
+            # Main monitoring loop: poll transcription state every 100ms
+            loop_iteration = 0
+            while not state["stop_monitoring"]:
+                current_time = time.time()
+                elapsed_time = current_time - monitoring_start_time
+                loop_iteration += 1
 
-            # Detect actual sample rate from WAV file
-            actual_sample_rate = sample_rate
-            try:
-                with wave.open(record_file, 'rb') as wav:
-                    actual_sample_rate = wav.getframerate()
-                    if actual_sample_rate != sample_rate:
-                        logger.info(
-                            f"🎙️ [{short_uuid}] Sample rate detected: {actual_sample_rate}Hz "
-                            f"(expected {sample_rate}Hz)"
-                        )
-            except:
-                pass
+                # Launch background transcription snapshot every 0.5s
+                if last_snapshot_time is None or (current_time - last_snapshot_time) >= snapshot_interval:
+                    if Path(record_file).exists():
+                        # Create snapshot with .wav extension for ffmpeg output format detection
+                        snapshot_file = f"/tmp/snapshot_{call_uuid}_{int(current_time * 1000)}.wav"
 
-            logger.info(f"🎙️ [{short_uuid}] VAD monitoring started")
-
-            # Stream frames from WAV (with actual sample rate)
-            for frame in self._get_audio_frames_from_wav(
-                record_file,
-                frame_duration_ms=frame_duration_ms,
-                sample_rate=actual_sample_rate
-            ):
-                if state["stop_monitoring"]:
-                    break
-
-                # Check if frame is speech (use actual sample rate)
-                try:
-                    is_speech = self.vad.is_speech(frame, actual_sample_rate)
-                except Exception as vad_error:
-                    # Invalid frame or unsupported sample rate, skip
-                    logger.debug(f"VAD error: {vad_error}")
-                    continue
-
-                if is_speech:
-                    if speech_start_time is None:
-                        # Start of speech
-                        speech_frames = 1
-                        speech_start_time = time.time()
-                    else:
-                        speech_frames += 1
-                        speech_duration = time.time() - speech_start_time
-
-                    # Check for start speech detection (0.3s)
-                    if speech_duration >= config.PLAYING_START_SPEECH_DURATION:
-                        if speech_start_time is not None and bg_thread is None:
-                            logger.info(f"🗣️ [{short_uuid}] Start speech detected ({speech_duration:.1f}s)")
-
-                    # Launch background transcription at 0.5s
-                    if speech_duration >= config.PLAYING_BG_TRANSCRIBE_TRIGGER and bg_thread is None:
-                        logger.info(
-                            f"⏱️ [{short_uuid}] Speech {speech_duration:.1f}s "
-                            f"→ 🚀 Launching background transcription"
-                        )
-
-                        # Create snapshot
-                        snapshot_file = f"{record_file}.snapshot"
                         try:
-                            import shutil
-                            shutil.copy2(record_file, snapshot_file)
+                            # Extract LEFT channel (client audio) from STEREO RAW recording
+                            # RAW format allows real-time reading while FreeSWITCH writes
+                            import subprocess
 
-                            # Launch background thread
+                            logger.debug(
+                                f"📸 [{short_uuid}] Extracting LEFT channel (client) from RAW snapshot "
+                                f"at {elapsed_time:.1f}s"
+                            )
+
+                            extract_cmd = [
+                                "ffmpeg",
+                                "-f", "s16le",        # RAW format: signed 16-bit little-endian
+                                "-ar", "8000",        # Sample rate: 8kHz (FreeSWITCH default)
+                                "-ac", "2",           # Channels: 2 (STEREO)
+                                "-i", record_file,    # Input RAW file
+                                "-t", str(elapsed_time),  # CRITICAL: Read only elapsed time (file still being written)
+                                "-af", "pan=mono|c0=FL",  # FL = Front Left = CLIENT
+                                "-y",                 # Overwrite
+                                snapshot_file         # Output WAV file
+                            ]
+
+                            result = subprocess.run(
+                                extract_cmd,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                timeout=5
+                            )
+
+                            if result.returncode != 0:
+                                error_msg = result.stderr.decode('utf-8', errors='ignore').strip()
+                                logger.error(
+                                    f"❌ [{short_uuid}] ffmpeg extraction failed "
+                                    f"(returncode: {result.returncode}): {error_msg[-200:]}"  # Last 200 chars
+                                )
+                                continue  # Skip this snapshot
+
+                            last_snapshot_time = current_time
+
+                            logger.info(
+                                f"📸 [{short_uuid}] Snapshot created at {elapsed_time:.1f}s "
+                                f"(iteration: {loop_iteration}, client audio only)"
+                            )
+
+                            # Launch background transcription thread
                             bg_thread = threading.Thread(
                                 target=self._background_transcribe_snapshot,
                                 args=(snapshot_file, state),
                                 daemon=True
                             )
                             bg_thread.start()
+
+                        except subprocess.TimeoutExpired:
+                            logger.error(f"❌ [{short_uuid}] ffmpeg extraction timeout (>5s)")
                         except Exception as e:
                             logger.error(f"❌ [{short_uuid}] Snapshot error: {e}")
 
-                    # Check for barge-in threshold (1.5s)
-                    if speech_duration >= config.BARGE_IN_THRESHOLD:
-                        # Intelligent short/long detection
-                        should_barge_in = True
+                # Check transcription state for barge-in detection
+                if state["bg_ready"] and state["transcription"]:
+                    transcription = state["transcription"].strip()
+                    audio_duration = state.get("audio_duration", 0.0)  # Use real duration from STT
 
-                        # If background transcription available, check for short responses
-                        if state["bg_ready"] and state["transcription"]:
-                            transcription = state["transcription"].lower().strip()
+                    logger.info(
+                        f"📝 [{short_uuid}] Transcription at {elapsed_time:.1f}s: "
+                        f"'{transcription}' (real duration: {audio_duration:.1f}s)"
+                    )
 
-                            # Short affirmative responses (should NOT trigger barge-in)
-                            short_responses = [
-                                "oui", "non", "ok", "d'accord", "daccord",
-                                "pourquoi pas", "allons-y", "allez-y", "peut-être",
-                                "peut etre", "ouais", "nan", "nope", "yep"
-                            ]
+                    # Simple logic: > 1.5s = barge-in trigger
+                    if audio_duration >= config.BARGE_IN_THRESHOLD and not state["barged_in"]:
+                        logger.info(
+                            f"⚡ [{short_uuid}] BARGE-IN TRIGGERED at {elapsed_time:.1f}s! "
+                            f"(speech duration: {audio_duration:.1f}s > {config.BARGE_IN_THRESHOLD}s)"
+                        )
+                        logger.info(f"🎧 [{short_uuid}] Continuing to listen for complete transcription...")
+                        state["barged_in"] = True
+                        state["barge_in_time"] = elapsed_time
+                        # NO break! Continue monitoring to get complete transcription
 
-                            # Check if transcription is ONLY a short response
-                            if any(resp == transcription or transcription.startswith(resp + " ")
-                                   for resp in short_responses):
-                                if len(transcription.split()) <= 3:  # Max 3 words
-                                    logger.info(
-                                        f"🗣️ [{short_uuid}] Short response detected: '{transcription}' "
-                                        f"→ NOT barging in (let robot continue)"
-                                    )
-                                    should_barge_in = False
-
-                        if should_barge_in:
-                            logger.info(
-                                f"⚡ [{short_uuid}] BARGE-IN TRIGGERED! "
-                                f"(speech: {speech_duration:.1f}s > {config.BARGE_IN_THRESHOLD}s)"
+                    # End-of-speech detection: check for consecutive identical transcriptions
+                    if state["barged_in"]:
+                        if transcription == last_transcription:
+                            identical_count += 1
+                            logger.debug(
+                                f"🔄 [{short_uuid}] Identical transcription #{identical_count}/3: '{transcription}'"
                             )
-                            state["barged_in"] = True
-                            break
+
+                            if identical_count >= identical_threshold:
+                                logger.info(
+                                    f"🏁 [{short_uuid}] Client finished speaking at {elapsed_time:.1f}s "
+                                    f"(final transcription: '{transcription}')"
+                                )
+                                break  # Exit only when client stops speaking
                         else:
-                            # Reset speech tracking to allow robot to continue
-                            speech_frames = 0
-                            speech_start_time = None
-                            speech_duration = 0.0
+                            # New transcription -> client still speaking
+                            if identical_count > 0:
+                                logger.debug(
+                                    f"🔄 [{short_uuid}] New transcription (was {identical_count} identical): '{transcription}'"
+                                )
+                            identical_count = 0
+                            last_transcription = transcription
 
-                else:
-                    # Silence: reset if short speech
-                    if speech_start_time is not None and speech_duration < config.PLAYING_START_SPEECH_DURATION:
-                        # Too short, probably noise
-                        speech_frames = 0
-                        speech_start_time = None
-                        speech_duration = 0.0
+                    # Reset state for next snapshot
+                    state["bg_ready"] = False
 
-                # Small delay
-                time.sleep(0.01)
+                # Small delay between checks (100ms)
+                time.sleep(0.1)
 
-            logger.info(f"🎙️ [{short_uuid}] VAD monitoring ended")
+            total_time = time.time() - monitoring_start_time
+            logger.info(
+                f"🏁 [{short_uuid}] Monitoring ended (duration: {total_time:.1f}s, "
+                f"iterations: {loop_iteration}, barged_in: {state['barged_in']})"
+            )
 
         except Exception as e:
-            logger.error(f"❌ [{short_uuid}] VAD monitoring error: {e}")
+            logger.error(f"❌ [{short_uuid}] Monitoring error: {e}", exc_info=True)
 
     def _background_transcribe_snapshot(
         self,
@@ -3193,21 +3189,41 @@ class RobotFreeSWITCH:
             snapshot_file: Snapshot WAV file
             state: Shared state dict (modified in-place)
         """
+        transcribe_start = time.time()
+        snapshot_name = Path(snapshot_file).name
+
+        logger.info(f"🚀 Background transcription started: {snapshot_name}")
+
         try:
+            # Transcribe snapshot
             result = self.stt_service.transcribe_file(snapshot_file)
             transcription = result.get("text", "").strip()
+            audio_duration = result.get("duration", 0.0)  # Real duration from STT
+            transcribe_duration = time.time() - transcribe_start
 
+            # Store result in shared state
             state["transcription"] = transcription
+            state["audio_duration"] = audio_duration  # Store real duration
             state["bg_ready"] = True
+
+            logger.info(
+                f"✅ Background transcription completed in {transcribe_duration*1000:.0f}ms: "
+                f"'{transcription}' (snapshot: {snapshot_name})"
+            )
 
             # Cleanup snapshot
             try:
                 Path(snapshot_file).unlink()
-            except:
-                pass
+                logger.debug(f"🗑️ Snapshot cleaned: {snapshot_name}")
+            except Exception as cleanup_error:
+                logger.debug(f"⚠️ Snapshot cleanup failed: {cleanup_error}")
 
         except Exception as e:
-            logger.error(f"Background transcription error: {e}")
+            transcribe_duration = time.time() - transcribe_start
+            logger.error(
+                f"❌ Background transcription failed after {transcribe_duration*1000:.0f}ms: {e} "
+                f"(snapshot: {snapshot_name})"
+            )
             state["bg_ready"] = False
 
     def _execute_phase_waiting(

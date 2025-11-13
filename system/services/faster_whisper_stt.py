@@ -87,7 +87,8 @@ class FasterWhisperSTT:
         audio_path: str,
         vad_filter: bool = True,
         no_speech_threshold: Optional[float] = None,
-        condition_on_previous_text: bool = True
+        condition_on_previous_text: bool = True,
+        beam_size: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Transcribe audio file
@@ -101,6 +102,9 @@ class FasterWhisperSTT:
                                None = use Faster-Whisper default (0.6)
             condition_on_previous_text: Use previous text as context (default: True)
                                        Set to False for AMD to avoid hallucinations
+            beam_size: Beam size for decoding (default: None = use model config)
+                      Higher = more accurate but slower (1=fast, 3=balanced, 5=accurate)
+                      Recommended: 5 for AMD to reduce hallucinations
 
         Returns:
             {
@@ -137,7 +141,7 @@ class FasterWhisperSTT:
             # Build transcribe parameters
             transcribe_params = {
                 "language": self.language,
-                "beam_size": self.beam_size,
+                "beam_size": beam_size if beam_size is not None else self.beam_size,
                 "vad_filter": vad_filter,
                 "condition_on_previous_text": condition_on_previous_text
             }
