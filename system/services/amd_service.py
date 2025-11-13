@@ -9,6 +9,8 @@ Target latency: 10-30ms
 
 import logging
 from typing import Dict, List, Optional, Any
+from difflib import SequenceMatcher
+from unidecode import unidecode
 from system.config import config
 
 logger = logging.getLogger(__name__)
@@ -27,9 +29,9 @@ class AMDService:
         self.keywords_machine = keywords_machine or config.AMD_KEYWORDS_MACHINE
         self.min_confidence = min_confidence
 
-        # Normalize keywords (lowercase)
-        self.keywords_human = [k.lower() for k in self.keywords_human]
-        self.keywords_machine = [k.lower() for k in self.keywords_machine]
+        # Normalize keywords (lowercase + remove accents with unidecode)
+        self.keywords_human = [unidecode(k.lower()) for k in self.keywords_human]
+        self.keywords_machine = [unidecode(k.lower()) for k in self.keywords_machine]
 
         logger.info(
             f"AMD Service init: "
@@ -58,12 +60,18 @@ class AMDService:
                 "method": "keywords_matching"
             }
 
-        # Normalize
-        text_lower = transcription.lower().strip()
+        # Normalize (lowercase + remove accents)
+        text_normalized = unidecode(transcription.lower().strip())
 
-        # Match keywords
-        human_matches = self._match_keywords(text_lower, self.keywords_human)
-        machine_matches = self._match_keywords(text_lower, self.keywords_machine)
+        # Match keywords (exact match first)
+        human_matches = self._match_keywords(text_normalized, self.keywords_human)
+        machine_matches = self._match_keywords(text_normalized, self.keywords_machine)
+
+        # If no matches, try fuzzy matching (fallback)
+        if not human_matches and not machine_matches:
+            logger.debug(f"AMD: No exact match, trying fuzzy matching...")
+            human_matches = self._match_keywords_fuzzy(text_normalized, self.keywords_human, threshold=0.85)
+            machine_matches = self._match_keywords_fuzzy(text_normalized, self.keywords_machine, threshold=0.85)
 
         # Calculate scores
         human_score = len(human_matches)
@@ -112,11 +120,64 @@ class AMDService:
         }
 
     def _match_keywords(self, text: str, keywords: List[str]) -> List[str]:
-        """Find all keywords present in text"""
+        """
+        Find all keywords present in text (exact substring match)
+
+        Args:
+            text: Normalized text (already lowercase + unidecode)
+            keywords: Normalized keywords (already lowercase + unidecode)
+
+        Returns:
+            List of matched keywords
+        """
         matches = []
         for keyword in keywords:
             if keyword in text:
                 matches.append(keyword)
+        return matches
+
+    def _match_keywords_fuzzy(
+        self,
+        text: str,
+        keywords: List[str],
+        threshold: float = 0.85
+    ) -> List[str]:
+        """
+        Match keywords with fuzzy matching (fallback if exact match fails)
+
+        Uses difflib SequenceMatcher to find similar words.
+        Useful for typos, slight variations, phonetic errors.
+
+        Args:
+            text: Normalized text (already lowercase + unidecode)
+            keywords: Normalized keywords (already lowercase + unidecode)
+            threshold: Similarity threshold (0.0-1.0), default 0.85
+
+        Returns:
+            List of matched keywords
+
+        Examples:
+            - "alo" (typo) → matches "allo" (ratio ~0.88)
+            - "mesagerie" (typo) → matches "messagerie" (ratio ~0.90)
+        """
+        matches = []
+        words = text.split()
+
+        for keyword in keywords:
+            # For multi-word keywords, check if phrase exists
+            if ' ' in keyword:
+                if keyword in text:
+                    matches.append(keyword)
+                continue
+
+            # For single-word keywords, check fuzzy similarity
+            for word in words:
+                ratio = SequenceMatcher(None, word, keyword).ratio()
+                if ratio >= threshold:
+                    matches.append(keyword)
+                    logger.debug(f"AMD: Fuzzy match '{word}' → '{keyword}' (ratio: {ratio:.2f})")
+                    break
+
         return matches
 
     def _calculate_confidence(self, matches_count: int, total_keywords: int) -> float:

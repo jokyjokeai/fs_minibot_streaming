@@ -111,8 +111,14 @@ AMD_MAX_DURATION = 2.5  # Augmenté pour capturer messages répondeurs complets
 
 # Keywords pour d�tecter HUMAIN
 AMD_KEYWORDS_HUMAN = [
+    # Salutations basiques
     "all�", "allo", "oui", "ouais", "bonjour", "bonsoir",
-    "j'�coute", "je vous �coute", "qui", "quoi", "c'est qui"
+
+    # Variations apostrophes (Unicode ' vs ASCII ')
+    "j'�coute", "j ecoute", "je vous �coute", "je vous ecoute",
+
+    # Questions identificatoires
+    "qui", "quoi", "c'est qui", "c est qui"
 ]
 
 # Keywords pour d�tecter R�PONDEUR/MACHINE
@@ -121,13 +127,22 @@ AMD_KEYWORDS_MACHINE = [
     "messagerie", "repondeur", "message", "bip", "signal sonore",
     "laissez", "apres le bip", "absent", "indisponible",
     "rappeler", "vous etes bien", "bonjour vous etes",
+
     # Opérateurs télécom français
     "sfr", "orange", "free", "bouygues",
+
+    # Variations phonétiques opérateurs (transcription Whisper)
+    "c'est fer", "c est fer", "ses fers",  # SFR mal transcrit
+    "au range", "hors range",  # Orange
+    "fri", "fry",  # Free
+
     # Messages vocaux
-    "vocal", "vocale", "boite vocale",
+    "vocal", "vocale", "boite vocale", "boîte vocale",
+
     # Indisponibilité
-    "ne peut pas repondre", "pas disponible", "ne suis pas disponible",
-    "joignable", "injoignable", "momentanement absent"
+    "ne peut pas repondre", "ne peux pas repondre", "pas disponible",
+    "ne suis pas disponible", "joignable", "injoignable",
+    "momentanement absent"
 ]
 
 # Timeout silence AMD (si aucun son d�tect�)
