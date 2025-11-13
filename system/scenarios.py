@@ -230,7 +230,7 @@ class ScenarioManager:
                     logger.error(f"Step '{step_name}' missing field: {field}")
                     return False
 
-            # message_text toujours requis (freestyle removed in v3)
+            # message_text toujours requis
             if "message_text" not in step_config:
                 logger.error(f"Step '{step_name}' missing required field: message_text")
                 return False

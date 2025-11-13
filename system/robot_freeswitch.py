@@ -416,18 +416,24 @@ class RobotFreeSWITCH:
             # Format: originate {variables}sofia/gateway/gateway_name/number &park()
 
             # Variables to pass to the call
+            # CRITICAL: Set RECORD_STEREO BEFORE answer to enable stereo recording
             variables = [
                 f"scenario_name={scenario_name}",
                 f"lead_id={lead_id}",
                 "origination_caller_id_name=MiniBotPanel",
                 "origination_caller_id_number=0000000000",
-                "ignore_early_media=true"
+                "ignore_early_media=true",
+                "RECORD_STEREO=true",           # Enable STEREO recording (BEFORE answer)
+                "media_bug_answer_req=true"     # Wait for ANSWER before starting media
             ]
 
             # Join variables
             vars_str = ",".join(variables)
 
-            # Originate command (appel sortant via gateway1)
+            # Originate command with inline dialplan
+            # CRITICAL FIX: Use park() (like backup that worked!)
+            # park() = muted channel, no echo to client
+            # Combined with uuid_broadcast silence_stream for RTP priming
             cmd = f"originate {{{vars_str}}}sofia/gateway/gateway1/{phone_number} &park()"
 
             logger.info(f"Executing: {cmd[:100]}...")
@@ -710,6 +716,13 @@ class RobotFreeSWITCH:
             if amd_result["result"] == "MACHINE":
                 logger.info(
                     f"[{short_uuid}] AMD: MACHINE detected -> Hangup call"
+                )
+                self._hangup_call(call_uuid, CallStatus.NO_ANSWER)
+                return
+
+            elif amd_result["result"] == "NO_ANSWER":
+                logger.info(
+                    f"[{short_uuid}] AMD: NO_ANSWER/SILENCE detected -> Hangup call"
                 )
                 self._hangup_call(call_uuid, CallStatus.NO_ANSWER)
                 return
@@ -2558,13 +2571,27 @@ class RobotFreeSWITCH:
         record_file = f"/tmp/amd_{call_uuid}.wav"
 
         try:
-            # Step 1: Record MONO 1.5s
+            # CRITICAL: Play short silence to "prime" the RTP stream
+            # FreeSWITCH only establishes media after first audio is played
+            # This technique comes from backup code that worked!
+            logger.debug(f"[{short_uuid}] Priming RTP stream with silence...")
+            silence_cmd = f"uuid_broadcast {call_uuid} silence_stream://100 both"
+            self._execute_esl_command(silence_cmd)
+
+            # OPTIMIZED: Single combined wait for audio path + RTP establishment
+            # Original: 0.3s + 0.2s = 500ms → Optimized: 0.35s = 350ms (-150ms gain!)
+            time.sleep(0.35)  # 350ms for audio path setup + RTP priming
+            logger.info(f"🎧 [{short_uuid}] RTP stream primed, ready to record")
+
+            # Step 1: Record STEREO 1.5s (left=client, right=robot)
+            # IMPORTANT: Even for AMD we need STEREO to capture client audio
+            # MONO might record wrong channel (robot instead of client)
             logger.info(
-                f"🎧 [{short_uuid}] Recording {config.AMD_MAX_DURATION}s audio..."
+                f"🎧 [{short_uuid}] Recording {config.AMD_MAX_DURATION}s audio (STEREO)..."
             )
             record_start = time.time()
 
-            if not self._start_recording(call_uuid, record_file, stereo=False):
+            if not self._start_recording(call_uuid, record_file, stereo=True):
                 logger.error(f"❌ [{short_uuid}] AMD: Recording start failed!")
                 return {
                     "result": "UNKNOWN",
@@ -2586,28 +2613,153 @@ class RobotFreeSWITCH:
                     "latency_ms": 0.0
                 }
 
+            # CRITICAL: Wait for FreeSWITCH to finalize WAV file
+            # Poll until file is stable (not growing anymore)
+            max_wait = 1.0  # Max 1 second
+            poll_start = time.time()
+            last_size = 0
+
+            while (time.time() - poll_start) < max_wait:
+                if Path(record_file).exists():
+                    current_size = Path(record_file).stat().st_size
+                    if current_size > 1000 and current_size == last_size:
+                        # File exists and size is stable (not growing)
+                        break
+                    last_size = current_size
+                time.sleep(0.05)  # Poll every 50ms
+            else:
+                logger.warning(f"⚠️ [{short_uuid}] File may not be ready (waited {max_wait}s)")
+
             record_latency = (time.time() - record_start) * 1000
             logger.info(
                 f"⏱️ [{short_uuid}] Recording latency: {record_latency:.0f}ms"
             )
 
-            # Step 2: Transcribe (DISABLE VAD filter for AMD!)
+            # Step 2: Extract LEFT channel (client audio) from STEREO
+            mono_file = f"/tmp/amd_{call_uuid}_mono.wav"
+            logger.info(f"🎧 [{short_uuid}] Extracting client audio (left channel)...")
+
+            # Use ffmpeg to extract left channel
+            import subprocess
+            extract_cmd = [
+                "ffmpeg", "-i", record_file,
+                "-af", "pan=mono|c0=FL",  # Extract left channel
+                "-y",  # Overwrite
+                mono_file
+            ]
+            subprocess.run(extract_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            # Step 2.5: Check audio volume (detect pure silence BEFORE transcription)
+            # This prevents Whisper from hallucinating on silence/noise
+            logger.debug(f"🔊 [{short_uuid}] Checking audio volume...")
+            volume_cmd = [
+                "ffmpeg", "-i", mono_file,
+                "-af", "volumedetect",
+                "-f", "null", "-"
+            ]
+            volume_result = subprocess.run(
+                volume_cmd,
+                capture_output=True,
+                text=True,
+                stderr=subprocess.STDOUT
+            )
+
+            # Parse mean_volume from ffmpeg output
+            mean_volume = -90.0  # Default = silence
+            for line in volume_result.stdout.split('\n'):
+                if 'mean_volume:' in line:
+                    try:
+                        mean_volume = float(line.split('mean_volume:')[1].split('dB')[0].strip())
+                    except:
+                        pass
+
+            logger.info(f"🔊 [{short_uuid}] Audio volume: {mean_volume:.1f}dB")
+
+            # If volume too low (< -50dB) → pure silence, no need to transcribe
+            if mean_volume < -50.0:
+                logger.warning(
+                    f"⚠️ [{short_uuid}] AMD: SILENCE detected by volume check "
+                    f"({mean_volume:.1f}dB < -50dB threshold)"
+                )
+
+                # Cleanup
+                try:
+                    Path(mono_file).unlink()
+                    Path(record_file).unlink()
+                except:
+                    pass
+
+                total_latency = (time.time() - phase_start) * 1000
+
+                logger.info(f"✅ [{short_uuid}] AMD: NO_ANSWER detected (silence)")
+                logger.info(
+                    f"⏱️ [{short_uuid}] === PHASE 1: AMD END === "
+                    f"Total: {total_latency:.0f}ms"
+                )
+
+                return {
+                    "result": "NO_ANSWER",
+                    "transcription": "",
+                    "confidence": 1.0,
+                    "latency_ms": total_latency
+                }
+
+            # Step 3: Transcribe with OPTIMIZED parameters for AMD
             logger.info(f"📝 [{short_uuid}] Transcribing audio...")
             transcribe_start = time.time()
 
-            # CRITICAL: Disable VAD filter for AMD
-            # VAD filter can suppress client's initial words
+            # OPTIMIZED: Use beam_size=3 + no_speech_threshold=0.8 + vad_filter=True
+            # - beam_size=3: Better quality, explores alternatives (reduces hallucinations)
+            # - no_speech_threshold=0.8: Stricter silence detection (vs default 0.6)
+            # - vad_filter=True: Let Whisper's VAD handle silence removal
+            # - condition_on_previous_text=False: No context (avoid hallucinations)
             transcription_result = self.stt_service.transcribe_file(
-                record_file,
-                vad_filter=False  # Keep ALL audio for AMD
+                mono_file,  # Use mono file (client audio only)
+                vad_filter=True,  # Enable Whisper's internal VAD
+                no_speech_threshold=0.8,  # Stricter silence threshold for AMD
+                condition_on_previous_text=False  # No context (first transcription)
             )
             transcription = transcription_result.get("text", "").strip()
+
+            # Cleanup mono file
+            try:
+                Path(mono_file).unlink()
+            except:
+                pass
 
             transcribe_latency = (time.time() - transcribe_start) * 1000
             logger.info(
                 f"⏱️ [{short_uuid}] Transcription: '{transcription}' "
                 f"(latency: {transcribe_latency:.0f}ms)"
             )
+
+            # Check for SILENCE: if transcription is empty or very short
+            # This indicates no one spoke during AMD period → no answer / silence
+            if not transcription or len(transcription) <= 2:
+                logger.warning(f"⚠️ [{short_uuid}] AMD: SILENCE detected (no speech during {config.AMD_MAX_DURATION}s)")
+
+                # Cleanup
+                try:
+                    Path(record_file).unlink()
+                except:
+                    pass
+
+                total_latency = (time.time() - phase_start) * 1000
+
+                logger.info(
+                    f"✅ [{short_uuid}] AMD: NO_ANSWER detected (silence)"
+                )
+                logger.info(
+                    f"⏱️ [{short_uuid}] === PHASE 1: AMD END === "
+                    f"Total: {total_latency:.0f}ms"
+                )
+
+                return {
+                    "result": "NO_ANSWER",  # Silence = no answer
+                    "transcription": "",
+                    "confidence": 1.0,  # Certain it's silence
+                    "latency_ms": total_latency
+                }
 
             # Step 3: Keywords matching HUMAN/MACHINE
             amd_result = self.amd_service.detect(transcription)
@@ -2773,6 +2925,20 @@ class RobotFreeSWITCH:
 
             # Step 4: Stop recording
             self._stop_recording(call_uuid, record_file)
+
+            # CRITICAL: Wait for FreeSWITCH to finalize WAV file
+            # Poll until file is stable (not growing anymore)
+            max_wait = 1.0  # Max 1 second
+            poll_start = time.time()
+            last_size = 0
+
+            while (time.time() - poll_start) < max_wait:
+                if Path(record_file).exists():
+                    current_size = Path(record_file).stat().st_size
+                    if current_size > 1000 and current_size == last_size:
+                        break
+                    last_size = current_size
+                time.sleep(0.05)  # Poll every 50ms
 
             # Step 5: Get transcription
             transcription = ""
@@ -3059,6 +3225,20 @@ class RobotFreeSWITCH:
 
             # Step 3: Stop recording
             self._stop_recording(call_uuid, record_file)
+
+            # CRITICAL: Wait for FreeSWITCH to finalize WAV file
+            # Poll until file is stable (not growing anymore)
+            max_wait = 1.0  # Max 1 second
+            poll_start = time.time()
+            last_size = 0
+
+            while (time.time() - poll_start) < max_wait:
+                if Path(record_file).exists():
+                    current_size = Path(record_file).stat().st_size
+                    if current_size > 1000 and current_size == last_size:
+                        break
+                    last_size = current_size
+                time.sleep(0.05)  # Poll every 50ms
 
             # Step 4: Get transcription
             transcription = ""

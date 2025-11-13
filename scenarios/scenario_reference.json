@@ -1,0 +1,262 @@
+{
+  "metadata": {
+    "name": "Scénario Prise de Rendez-vous - Référence FINAL",
+    "description": "Scénario de référence Phase 7 avec intent_mapping CORRIGÉ pour ObjectionMatcher + CALLBACK + SILENCE",
+    "version": "3.0",
+    "created_at": "2025-11-04",
+    "thematique": "rdv_generic",
+    "voice": "julie",
+    "barge_in_default": true
+  },
+  "variables": {
+    "first_name": "{{first_name}}",
+    "company_name": "Entreprise Example",
+    "agent_name": "Julie"
+  },
+  "steps": {
+    "hello": {
+      "message_text": "Bonjour {{first_name}}, je suis Julie de l'entreprise Example. Je vous appelle pour vous proposer un rendez-vous avec nos conseillers. Est-ce que vous avez quelques minutes ?",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "affirm": "Q1",
+        "interested": "Q1",
+        "deny": "retry_hello",
+        "not_interested": "retry_hello",
+        "callback": "retry_hello",
+        "unsure": "Q1",
+        "question": "Q1",
+        "objection": "Q1",
+        "silence": "retry_silence",
+        "*": "retry_hello"
+      }
+    },
+    "retry_hello": {
+      "message_text": "Je comprends {{first_name}}. C'est vraiment rapide, juste 2 minutes pour vous présenter notre offre exclusive. Puis-je continuer ?",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "affirm": "Q1",
+        "interested": "Q1",
+        "deny": "bye_failed",
+        "not_interested": "bye_failed",
+        "callback": "bye_failed",
+        "unsure": "Q1",
+        "question": "Q1",
+        "objection": "Q1",
+        "silence": "bye_failed",
+        "*": "bye_failed"
+      }
+    },
+    "retry_silence": {
+      "message_text": "Allô ? Vous êtes toujours là {{first_name}} ?",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "intent_mapping": {
+        "affirm": "Q1",
+        "interested": "Q1",
+        "deny": "bye_failed",
+        "not_interested": "bye_failed",
+        "callback": "retry_hello",
+        "unsure": "Q1",
+        "question": "Q1",
+        "objection": "Q1",
+        "silence": "bye_no_answer",
+        "*": "Q1"
+      }
+    },
+    "Q1": {
+      "message_text": "Parfait ! Première question : êtes-vous propriétaire de votre logement ?",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "question": "Q2",
+        "objection": "Q2",
+        "unsure": "Q2",
+        "callback": "Q2",
+        "silence": "Q2",
+        "*": "Q2"
+      }
+    },
+    "Q2": {
+      "message_text": "Très bien. Deuxième question : avez-vous déjà réalisé des travaux de rénovation énergétique ?",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "question": "Q3",
+        "objection": "Q3",
+        "unsure": "Q3",
+        "callback": "Q3",
+        "silence": "Q3",
+        "*": "Q3"
+      }
+    },
+    "Q3": {
+      "message_text": "D'accord. Dernière question : quel est votre revenu fiscal de référence approximatif ?",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "question": "Is_Leads",
+        "objection": "Is_Leads",
+        "unsure": "Is_Leads",
+        "callback": "Is_Leads",
+        "silence": "Is_Leads",
+        "*": "Is_Leads"
+      }
+    },
+    "Is_Leads": {
+      "message_text": "Parfait {{first_name}}. D'après vos réponses, vous êtes éligible à notre programme. Souhaitez-vous qu'un conseiller vous contacte pour en discuter ?",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "affirm": "Confirm_Time",
+        "interested": "Confirm_Time",
+        "deny": "retry_is_leads",
+        "not_interested": "retry_is_leads",
+        "callback": "Confirm_Time",
+        "unsure": "Confirm_Time",
+        "question": "Confirm_Time",
+        "objection": "Confirm_Time",
+        "silence": "retry_is_leads",
+        "*": "retry_is_leads"
+      }
+    },
+    "retry_is_leads": {
+      "message_text": "Je comprends votre hésitation {{first_name}}. C'est sans engagement, juste un échange avec un expert pour voir comment nous pouvons vous aider. Qu'en dites-vous ?",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "affirm": "Confirm_Time",
+        "interested": "Confirm_Time",
+        "deny": "bye_failed",
+        "not_interested": "bye_failed",
+        "callback": "Confirm_Time",
+        "unsure": "Confirm_Time",
+        "question": "Confirm_Time",
+        "objection": "Confirm_Time",
+        "silence": "bye_failed",
+        "*": "bye_failed"
+      }
+    },
+    "Confirm_Time": {
+      "message_text": "Excellent {{first_name}} ! Notre conseiller vous rappellera dans les 48 heures. Préférez-vous être contacté en matinée ou en après-midi ?",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "*": "Bye"
+      }
+    },
+    "Bye": {
+      "message_text": "Parfait {{first_name}}, c'est noté. Vous recevrez un SMS de confirmation. Je vous souhaite une excellente journée. Au revoir !",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 5,
+      "result": "completed",
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+    "bye_no_answer": {
+      "message_text": "",
+      "audio_type": "none",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 0,
+      "result": "no_answer",
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+    "bye_failed": {
+      "message_text": "Je comprends {{first_name}}. Si vous changez d'avis, n'hésitez pas à nous recontacter. Bonne journée. Au revoir.",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 5,
+      "result": "failed",
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+    "not_understood": {
+      "message_text": "Je n'ai pas bien compris {{first_name}}. Pouvez-vous répéter s'il vous plaît ?",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "intent_mapping": {
+        "*": "retry_hello"
+      }
+    },
+    "end": {
+      "message_text": "",
+      "audio_type": "none",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 0,
+      "result": "ended",
+      "intent_mapping": {}
+    }
+  },
+  "flow_summary": {
+    "description": "Résumé du flux de conversation Phase 7 - FINAL CORRIGÉ",
+    "main_path": [
+      "hello → Q1 → Q2 → Q3 → Is_Leads → Confirm_Time → Bye → end"
+    ],
+    "retry_paths": [
+      "hello → retry_hello → Q1 (si accepte) ou bye_failed (si refuse)",
+      "hello → retry_silence → Q1 (si répond) ou bye_no_answer (si 2ème silence)",
+      "Is_Leads → retry_is_leads → Confirm_Time (si accepte) ou bye_failed (si refuse)"
+    ],
+    "intent_behaviors": {
+      "AFFIRM": "Continue vers next_step",
+      "DENY": "hello: retry_hello | retry_hello: bye_failed (2ème refus) | Is_Leads: retry_is_leads | retry_is_leads: bye_failed",
+      "CALLBACK": "hello: retry_hello | retry_hello: bye_failed (2ème callback) | retry_silence: retry_hello | Q1-Q3/Is_Leads/retry_is_leads: continue vers next_step",
+      "UNSURE": "Continue vers next_step (même logique que AFFIRM)",
+      "QUESTION": "Pendant max_turns: ObjectionMatcher | Après max_turns: continue vers next_step",
+      "OBJECTION": "Pendant max_turns: ObjectionMatcher | Après max_turns: continue vers next_step",
+      "SILENCE": "hello: retry_silence | retry_hello: bye_failed | retry_silence: bye_no_answer (2ème silence) | Q1-Q3: continue | Is_Leads: retry_is_leads | retry_is_leads: bye_failed",
+      "NO_MATCH": "Si ObjectionMatcher < 0.6 → not_understood.wav | 3 consécutifs → hangup"
+    },
+    "objection_matching_logic": {
+      "triggers": "intent in [question, objection, concern, unsure]",
+      "database": "57 objections (general + thématiques)",
+      "algorithm": "Hybrid = 70% TF-IDF + 30% keywords",
+      "threshold": "min_score = 0.6",
+      "max_turns": "2 par step",
+      "closed_questions": "Chaque réponse termine par question fermée",
+      "fallback": "no match → not_understood.wav | 3 consécutifs → hangup",
+      "after_max_turns": "Utilise intent_mapping[last_intent]"
+    },
+    "results": {
+      "completed": "RDV confirmé",
+      "failed": "Refus client",
+      "no_answer": "2 silences consécutifs (raccroche direct)",
+      "ended": "Appel terminé"
+    },
+    "corrections_finales": {
+      "retry_hello_callback": "bye_failed (2ème callback = échec)",
+      "retry_hello_silence": "bye_failed (géré par compteur robot_freeswitch)",
+      "all_steps_question_objection": "next_step (permet ObjectionMatcher pendant max_turns puis continue)"
+    }
+  }
+}

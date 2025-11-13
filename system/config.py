@@ -107,7 +107,7 @@ DEVICE = _detect_gpu_device()
 # PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
 
 # Dur�e max d'�coute pour AMD (en secondes)
-AMD_MAX_DURATION = 1.5
+AMD_MAX_DURATION = 2.0  # Optimisé: 2.0s suffisant avec beam_size=3 + meilleurs keywords
 
 # Keywords pour d�tecter HUMAIN
 AMD_KEYWORDS_HUMAN = [
@@ -117,9 +117,17 @@ AMD_KEYWORDS_HUMAN = [
 
 # Keywords pour d�tecter R�PONDEUR/MACHINE
 AMD_KEYWORDS_MACHINE = [
+    # Messages répondeur classiques
     "messagerie", "repondeur", "message", "bip", "signal sonore",
     "laissez", "apres le bip", "absent", "indisponible",
-    "rappeler", "vous etes bien", "bonjour vous etes"
+    "rappeler", "vous etes bien", "bonjour vous etes",
+    # Opérateurs télécom français
+    "sfr", "orange", "free", "bouygues",
+    # Messages vocaux
+    "vocal", "vocale", "boite vocale",
+    # Indisponibilité
+    "ne peut pas repondre", "pas disponible", "ne suis pas disponible",
+    "joignable", "injoignable", "momentanement absent"
 ]
 
 # Timeout silence AMD (si aucun son d�tect�)
@@ -207,8 +215,8 @@ FASTER_WHISPER_LANGUAGE = "fr"
 
 # Beam size (pr�cision transcription, 1-10)
 # Plus �lev� = plus pr�cis mais plus lent
-# Recommandation : 1 pour vitesse max, 5 pour balance
-FASTER_WHISPER_BEAM_SIZE = 1
+# Recommandation : 3 pour bon compromis pr�cision/vitesse (r�duit hallucinations)
+FASTER_WHISPER_BEAM_SIZE = 3
 
 # VAD filter (supprime silences avant/apr�s)
 FASTER_WHISPER_VAD_FILTER = True

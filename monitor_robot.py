@@ -7,7 +7,6 @@ Monitoring en temps réel du robot FreeSWITCH avec :
 - Appels actifs avec détails
 - Transcriptions live (STT)
 - Génération TTS en cours
-- Freestyle AI stats
 - Events streaming
 
 Usage:
@@ -163,26 +162,6 @@ def get_recent_transcriptions(limit: int = 5) -> List[Dict[str, Any]]:
         db.close()
 
 
-def get_freestyle_stats() -> Dict[str, Any]:
-    """Récupère les stats Freestyle AI"""
-    try:
-        import requests
-        response = requests.get(f"{config.API_BASE_URL}/api/stats/freestyle", timeout=2)
-        if response.status_code == 200:
-            return response.json()
-    except:
-        pass
-
-    return {
-        "total_requests": 0,
-        "cache_hits": 0,
-        "cache_misses": 0,
-        "cache_hit_rate_pct": 0.0,
-        "avg_generation_time_ms": 0.0,
-        "is_available": False
-    }
-
-
 def get_campaigns_summary() -> Dict[str, Any]:
     """Récupère résumé des campagnes actives"""
     db = SessionLocal()
@@ -323,27 +302,6 @@ def print_active_calls(calls: List[Dict[str, Any]]):
     print("║")
 
 
-def print_freestyle_stats(freestyle: Dict[str, Any]):
-    """Affiche stats Freestyle AI"""
-    available = freestyle.get("is_available", False)
-
-    if not available:
-        print(f"║ {Colors.BOLD}Freestyle AI:{Colors.ENDC}    {Colors.RED}❌ Non disponible{Colors.ENDC}")
-        print("║")
-        return
-
-    total_req = freestyle.get("total_requests", 0)
-    cache_hits = freestyle.get("cache_hits", 0)
-    hit_rate = freestyle.get("cache_hit_rate_pct", 0.0)
-    avg_time = freestyle.get("avg_generation_time_ms", 0.0)
-
-    print(f"║ {Colors.BOLD}Freestyle AI:{Colors.ENDC}    {Colors.GREEN}✅ Actif{Colors.ENDC}")
-    print(f"║   • Requêtes:        {total_req}")
-    print(f"║   • Cache hits:      {cache_hits} ({hit_rate:.1f}%)")
-    print(f"║   • Latence moy:     {avg_time:.0f}ms")
-    print("║")
-
-
 def print_recent_transcriptions(transcriptions: List[Dict[str, Any]]):
     """Affiche dernières transcriptions"""
     print(f"║ {Colors.BOLD}Dernières Transcriptions (STT):{Colors.ENDC}")
@@ -412,10 +370,6 @@ def print_dashboard(refresh_interval: int):
     # Appels actifs
     active_calls = get_active_calls_details()
     print_active_calls(active_calls)
-
-    # Freestyle stats
-    freestyle_stats = get_freestyle_stats()
-    print_freestyle_stats(freestyle_stats)
 
     # Transcriptions récentes
     transcriptions = get_recent_transcriptions(limit=3)

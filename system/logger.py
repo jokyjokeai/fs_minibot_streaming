@@ -43,7 +43,6 @@ LOG_DIRS = {
     "api": LOGS_DIR / "api",
     "errors": LOGS_DIR / "errors",
     "debug": LOGS_DIR / "debug",
-    # "freestyle" removed in v3 (no longer using Freestyle AI)
     "objections": LOGS_DIR / "objections",  # NOUVEAU v3
     "ollama": LOGS_DIR / "ollama",  # NOUVEAU v3
     "amd": LOGS_DIR / "amd",  # Détection répondeur
@@ -304,9 +303,6 @@ def log_error(module: str, error: Exception, context: Dict[str, Any] = None):
 # Helpers spécialisés pour v3
 # ═══════════════════════════════════════════════════════════════════════════
 
-# log_freestyle_turn() removed in v3 (Freestyle AI no longer used)
-
-
 def log_objection_match(call_uuid: str, user_input: str, matched_objection: str,
                        score: float, response_used: str, method: str = "hybrid"):
     """Log un matching d'objection réussi."""
@@ -325,7 +321,7 @@ def log_objection_match(call_uuid: str, user_input: str, matched_objection: str,
 
 
 def log_objection_no_match(call_uuid: str, user_input: str, best_score: float,
-                          fallback_method: str = "freestyle"):
+                          fallback_method: str = "none"):
     """Log une absence de matching d'objection."""
     logger = get_logger("objections", call_uuid=call_uuid)
     logger.info(

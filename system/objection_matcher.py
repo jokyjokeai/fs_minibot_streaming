@@ -8,7 +8,7 @@ dans les réponses du prospect et les associer aux objections pré-enregistrées
 Utilise plusieurs techniques :
 - Fuzzy matching (difflib) pour similarité textuelle
 - Mots-clés extraits pour matching rapide
-- Score de confiance pour décider entre pré-enregistré vs Freestyle
+- Score de confiance pour sélection de la meilleure réponse
 
 Phase 6+ : Support ObjectionEntry avec audio_path
 - Charge automatiquement objections GENERAL + thématique

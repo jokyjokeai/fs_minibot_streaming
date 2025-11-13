@@ -82,7 +82,13 @@ class FasterWhisperSTT:
             logger.error(f"Failed to load Faster-Whisper model: {e}")
             raise
 
-    def transcribe_file(self, audio_path: str, vad_filter: bool = True) -> Dict[str, Any]:
+    def transcribe_file(
+        self,
+        audio_path: str,
+        vad_filter: bool = True,
+        no_speech_threshold: Optional[float] = None,
+        condition_on_previous_text: bool = True
+    ) -> Dict[str, Any]:
         """
         Transcribe audio file
 
@@ -90,6 +96,11 @@ class FasterWhisperSTT:
             audio_path: Path to .wav file
             vad_filter: Enable VAD filter to remove silences (default: True)
                        Set to False for AMD to keep all audio
+            no_speech_threshold: Probability threshold to detect silence (0.0-1.0)
+                               Higher = more likely to return empty (e.g., 0.8 for AMD)
+                               None = use Faster-Whisper default (0.6)
+            condition_on_previous_text: Use previous text as context (default: True)
+                                       Set to False for AMD to avoid hallucinations
 
         Returns:
             {
@@ -123,12 +134,22 @@ class FasterWhisperSTT:
         try:
             start_time = time.time()
 
+            # Build transcribe parameters
+            transcribe_params = {
+                "language": self.language,
+                "beam_size": self.beam_size,
+                "vad_filter": vad_filter,
+                "condition_on_previous_text": condition_on_previous_text
+            }
+
+            # Add no_speech_threshold if provided
+            if no_speech_threshold is not None:
+                transcribe_params["no_speech_threshold"] = no_speech_threshold
+
             # Transcribe with Faster-Whisper
             segments, info = self.model.transcribe(
                 str(audio_file),
-                language=self.language,
-                beam_size=self.beam_size,
-                vad_filter=vad_filter  # Configurable VAD filter
+                **transcribe_params
             )
 
             # Concatenate segments

@@ -69,16 +69,22 @@ class AMDService:
         human_score = len(human_matches)
         machine_score = len(machine_matches)
 
-        # Determine result
-        if human_score > machine_score:
-            result = "HUMAN"
-            confidence = self._calculate_confidence(human_score, len(self.keywords_human))
-            keywords_matched = human_matches
-        elif machine_score > human_score:
+        # Determine result - PRIORITIZE MACHINE DETECTION
+        # Strategy: If any MACHINE keyword found → always return MACHINE
+        # Reason: Answering machines often say "bonjour" (HUMAN keyword)
+        #         but presence of "repondeur", "messagerie", etc. is definitive
+        if machine_score > 0:
+            # MACHINE has absolute priority (safer to hangup on machine than stay)
             result = "MACHINE"
             confidence = self._calculate_confidence(machine_score, len(self.keywords_machine))
             keywords_matched = machine_matches
+        elif human_score > 0:
+            # Only if NO machine keywords, check human keywords
+            result = "HUMAN"
+            confidence = self._calculate_confidence(human_score, len(self.keywords_human))
+            keywords_matched = human_matches
         else:
+            # No keywords matched at all
             result = "UNKNOWN"
             confidence = 0.0
             keywords_matched = []
