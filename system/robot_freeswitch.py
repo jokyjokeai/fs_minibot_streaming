@@ -405,7 +405,7 @@ class RobotFreeSWITCH:
 
         try:
             # Load scenario
-            scenario = self.scenario_manager.get_scenario(scenario_name)
+            scenario = self.scenario_manager.load_scenario(scenario_name)
             if not scenario:
                 logger.error(f"Scenario '{scenario_name}' not found")
                 return None
@@ -427,8 +427,8 @@ class RobotFreeSWITCH:
             # Join variables
             vars_str = ",".join(variables)
 
-            # Originate command (appel sortant)
-            cmd = f"originate {{{vars_str}}}sofia/internal/{phone_number}@localhost &park()"
+            # Originate command (appel sortant via gateway1)
+            cmd = f"originate {{{vars_str}}}sofia/gateway/gateway1/{phone_number} &park()"
 
             logger.info(f"Executing: {cmd[:100]}...")
 
@@ -524,6 +524,27 @@ class RobotFreeSWITCH:
             f"[{call_uuid[:8]}] Call answered: "
             f"{caller_number} -> {callee_number}"
         )
+
+        # Get scenario from channel variables (set during originate)
+        scenario_name = event.getHeader("variable_scenario_name")
+        lead_id = event.getHeader("variable_lead_id")
+
+        # Load scenario if this is an outbound call
+        if scenario_name:
+            logger.info(f"[{call_uuid[:8]}] Loading scenario from channel variables: {scenario_name}")
+            scenario = self.scenario_manager.load_scenario(scenario_name)
+
+            if scenario:
+                # Store session data under this UUID
+                self.call_sessions[call_uuid] = {
+                    "phone_number": callee_number,
+                    "lead_id": int(lead_id) if lead_id else 0,
+                    "scenario_name": scenario_name,
+                    "scenario": scenario,
+                    "start_time": time.time(),
+                    "state": "ANSWERED"
+                }
+                logger.info(f"[{call_uuid[:8]}] Session created with scenario: {scenario_name}")
 
         # Store call info
         self.active_calls[call_uuid] = {
@@ -704,57 +725,158 @@ class RobotFreeSWITCH:
                 )
 
             # ================================================================
-            # PHASE 2: PLAYING AUDIO (with barge-in detection)
+            # CONVERSATION LOOP (Phases 2 + 3 + Intent + Navigation)
             # ================================================================
-            # TODO PART 5: Load scenario and get first audio to play
-            # For now, we'll use a placeholder flow
-            # Example: playing_result = self._execute_phase_playing(call_uuid, audio_path)
+            logger.info(f"[{short_uuid}] === CONVERSATION LOOP START ===")
 
-            # STUB for PART 5 integration
+            # Load scenario from call session
+            session = self.call_sessions.get(call_uuid)
+            if not session:
+                logger.error(f"[{short_uuid}] No session data found!")
+                self._hangup_call(call_uuid, CallStatus.COMPLETED)
+                return
+
+            scenario = session.get("scenario")
+            if not scenario:
+                logger.error(f"[{short_uuid}] No scenario loaded!")
+                self._hangup_call(call_uuid, CallStatus.COMPLETED)
+                return
+
+            scenario_name = session.get("scenario_name", "unknown")
             logger.info(
-                f"[{short_uuid}] PHASE 2 STUB: Would play first audio with barge-in "
-                f"(implementation ready, waiting for scenario integration)"
+                f"[{short_uuid}] Loaded scenario: {scenario_name} "
+                f"({len(scenario.get('steps', {}))} steps)"
             )
 
-            # ================================================================
-            # PHASE 3: WAITING RESPONSE (listen to client)
-            # ================================================================
-            # TODO PART 5: After playing audio, listen for client response
-            # Example: waiting_result = self._execute_phase_waiting(call_uuid)
+            # Initialize session tracking
+            session["qualification_score"] = 0.0
+            session["consecutive_silences"] = 0
+            session["steps_executed"] = []
 
-            # STUB for PART 5 integration
-            logger.info(
-                f"[{short_uuid}] PHASE 3 STUB: Would listen for client response "
-                f"(implementation ready, waiting for scenario integration)"
-            )
+            # Get first step (rail or default to "hello")
+            rail = scenario.get("rail", [])
+            if rail and len(rail) > 0:
+                current_step = rail[0]  # Start with first step in rail
+                logger.info(f"[{short_uuid}] Using rail: {rail}")
+            else:
+                # No rail defined, try common starting steps
+                steps = scenario.get("steps", {})
+                if "hello" in steps:
+                    current_step = "hello"
+                    logger.info(f"[{short_uuid}] No rail defined, starting with 'hello'")
+                elif "intro" in steps:
+                    current_step = "intro"
+                    logger.info(f"[{short_uuid}] No rail defined, starting with 'intro'")
+                elif len(steps) > 0:
+                    # Use first step in steps dict
+                    current_step = list(steps.keys())[0]
+                    logger.info(f"[{short_uuid}] No rail defined, starting with first step: {current_step}")
+                else:
+                    logger.error(f"[{short_uuid}] Scenario has no steps!")
+                    self._hangup_call(call_uuid, CallStatus.COMPLETED)
+                    return
+            max_steps = 50  # Safety limit to prevent infinite loops
+            step_count = 0
 
-            # ================================================================
-            # INTEGRATION SCENARIO FLOW (PART 5)
-            # ================================================================
-            # TODO PART 5: Load scenario, execute conversation loop
-            # This will be implemented with:
-            # - Load scenario from call metadata
-            # - Loop through rail/steps
-            # - Intent analysis + objection handling
-            # - MaxTurn autonomous objection handling
-            # - Lead qualification
-            #
-            # Example flow:
-            # scenario = self._load_scenario_for_call(call_uuid)
-            # session = self._init_session(call_uuid, scenario)
-            # while not finished:
-            #     playing_result = self._execute_phase_playing(...)
-            #     waiting_result = self._execute_phase_waiting(...)
-            #     intent = self._analyze_intent(waiting_result["transcription"])
-            #     next_step = self._get_next_step(intent, session)
-            #
-            # For now, stub message
-            logger.info(
-                f"[{short_uuid}] SCENARIO FLOW STUB: Would execute conversation loop "
-                f"(implementation ready, waiting for call metadata integration)"
-            )
+            # Conversation loop
+            while current_step and step_count < max_steps:
+                step_count += 1
 
-            # Temporary hangup for testing
+                logger.info(
+                    f"[{short_uuid}] === STEP {step_count}: {current_step} ==="
+                )
+
+                # Check if this is a terminal step (Bye_* steps end conversation)
+                if current_step.startswith("Bye_"):
+                    logger.info(
+                        f"[{short_uuid}] Terminal step reached: {current_step}"
+                    )
+
+                    # Play final audio
+                    audio_path = self._get_audio_path_for_step(scenario, current_step)
+                    if audio_path:
+                        self._execute_phase_playing(
+                            call_uuid,
+                            audio_path,
+                            enable_barge_in=False  # No barge-in on goodbye
+                        )
+
+                    # Determine final status based on step name
+                    if "Success" in current_step or "Qualified" in current_step:
+                        final_status = self._calculate_final_status(session, scenario)
+                        logger.info(
+                            f"[{short_uuid}] Qualified call -> "
+                            f"Final status: {final_status.value} "
+                            f"(qualification score: {session.get('qualification_score', 0):.1f})"
+                        )
+                    else:
+                        final_status = CallStatus.NOT_INTERESTED
+                        logger.info(
+                            f"[{short_uuid}] Not qualified -> "
+                            f"Final status: NOT_INTERESTED"
+                        )
+
+                    # End conversation
+                    self._hangup_call(call_uuid, final_status)
+                    return
+
+                # Execute conversation step (PHASE 2 + PHASE 3 + Intent)
+                step_result = self._execute_conversation_step(
+                    call_uuid,
+                    scenario,
+                    current_step,
+                    session,
+                    retry_count=0
+                )
+
+                if not step_result.get("success"):
+                    logger.error(
+                        f"[{short_uuid}] Step execution failed: "
+                        f"{step_result.get('error', 'unknown')}"
+                    )
+                    self._hangup_call(call_uuid, CallStatus.COMPLETED)
+                    return
+
+                # Track step
+                session["steps_executed"].append({
+                    "step": current_step,
+                    "intent": step_result.get("intent"),
+                    "transcription": step_result.get("transcription", "")[:100]
+                })
+
+                # Check if retry requested
+                if step_result.get("retry"):
+                    logger.info(f"[{short_uuid}] Retrying step: {current_step}")
+                    continue  # Retry same step
+
+                # Navigate to next step
+                next_step = step_result.get("next_step")
+
+                if not next_step:
+                    logger.warning(
+                        f"[{short_uuid}] No next step defined -> Ending call"
+                    )
+                    self._hangup_call(call_uuid, CallStatus.NOT_INTERESTED)
+                    return
+
+                logger.info(
+                    f"[{short_uuid}] Navigation: {current_step} -> {next_step} "
+                    f"(intent: {step_result.get('intent')})"
+                )
+
+                current_step = next_step
+
+            # Safety: Max steps reached
+            if step_count >= max_steps:
+                logger.error(
+                    f"[{short_uuid}] Max steps ({max_steps}) reached! "
+                    f"Possible infinite loop in scenario"
+                )
+                self._hangup_call(call_uuid, CallStatus.COMPLETED)
+                return
+
+            # Normal end (shouldn't reach here)
+            logger.info(f"[{short_uuid}] === CONVERSATION LOOP END ===")
             self._hangup_call(call_uuid, CallStatus.COMPLETED)
 
         except Exception as e:
@@ -2403,6 +2525,134 @@ class RobotFreeSWITCH:
         return str(audio_path)
 
     # ========================================================================
+    # PHASE IMPLEMENTATIONS (AMD, PLAYING, WAITING)
+    # ========================================================================
+
+    def _execute_phase_amd(self, call_uuid: str) -> Dict[str, Any]:
+        """
+        Phase 1: AMD (Answering Machine Detection)
+
+        Simple & Fast:
+        - Record MONO 1.5s
+        - Transcribe AFTER
+        - Keywords matching HUMAN/MACHINE
+        - NO complex VAD, NO streaming
+
+        Args:
+            call_uuid: Call UUID
+
+        Returns:
+            {
+                "result": "HUMAN" | "MACHINE" | "SILENCE" | "UNKNOWN",
+                "transcription": str,
+                "confidence": float,
+                "latency_ms": float
+            }
+        """
+        short_uuid = call_uuid[:8]
+        phase_start = time.time()
+
+        logger.info(f"🎧 [{short_uuid}] === PHASE 1: AMD START ===")
+
+        # Recording file
+        record_file = f"/tmp/amd_{call_uuid}.wav"
+
+        try:
+            # Step 1: Record MONO 1.5s
+            logger.info(
+                f"🎧 [{short_uuid}] Recording {config.AMD_MAX_DURATION}s audio..."
+            )
+            record_start = time.time()
+
+            if not self._start_recording(call_uuid, record_file, stereo=False):
+                logger.error(f"❌ [{short_uuid}] AMD: Recording start failed!")
+                return {
+                    "result": "UNKNOWN",
+                    "transcription": "",
+                    "confidence": 0.0,
+                    "latency_ms": 0.0
+                }
+
+            # Wait for recording duration
+            time.sleep(config.AMD_MAX_DURATION)
+
+            # Stop recording
+            if not self._stop_recording(call_uuid, record_file):
+                logger.error(f"❌ [{short_uuid}] AMD: Recording stop failed!")
+                return {
+                    "result": "UNKNOWN",
+                    "transcription": "",
+                    "confidence": 0.0,
+                    "latency_ms": 0.0
+                }
+
+            record_latency = (time.time() - record_start) * 1000
+            logger.info(
+                f"⏱️ [{short_uuid}] Recording latency: {record_latency:.0f}ms"
+            )
+
+            # Step 2: Transcribe
+            logger.info(f"📝 [{short_uuid}] Transcribing audio...")
+            transcribe_start = time.time()
+
+            transcription_result = self.stt_service.transcribe_file(record_file)
+            transcription = transcription_result.get("text", "").strip()
+
+            transcribe_latency = (time.time() - transcribe_start) * 1000
+            logger.info(
+                f"⏱️ [{short_uuid}] Transcription: '{transcription}' "
+                f"(latency: {transcribe_latency:.0f}ms)"
+            )
+
+            # Step 3: Keywords matching HUMAN/MACHINE
+            amd_result = self.amd_service.detect(transcription)
+            result_type = amd_result["result"]  # HUMAN/MACHINE/UNKNOWN
+            confidence = amd_result["confidence"]
+
+            # Cleanup
+            try:
+                Path(record_file).unlink()
+            except:
+                pass
+
+            # Total latency
+            total_latency = (time.time() - phase_start) * 1000
+
+            logger.info(
+                f"✅ [{short_uuid}] AMD: {result_type} detected "
+                f"(confidence: {confidence:.2f})"
+            )
+            logger.info(
+                f"⏱️ [{short_uuid}] === PHASE 1: AMD END === "
+                f"Total: {total_latency:.0f}ms"
+            )
+
+            return {
+                "result": result_type,
+                "transcription": transcription,
+                "confidence": confidence,
+                "latency_ms": total_latency
+            }
+
+        except Exception as e:
+            logger.error(f"❌ [{short_uuid}] AMD error: {e}")
+            import traceback
+            traceback.print_exc()
+
+            # Cleanup
+            try:
+                Path(record_file).unlink()
+            except:
+                pass
+
+            return {
+                "result": "UNKNOWN",
+                "transcription": "",
+                "confidence": 0.0,
+                "latency_ms": 0.0
+            }
+
+    # ========================================================================
     # ESL HELPERS (Audio recording, commands, hangup)
     # ========================================================================
 
@@ -2542,6 +2792,193 @@ class RobotFreeSWITCH:
 
         except Exception as e:
             logger.error(f"[{short_uuid}] Hangup error: {e}")
+
+    # ========================================================================
+    # RECORDING HELPERS (Granular control for Background Transcription)
+    # ========================================================================
+
+    def _start_recording(
+        self,
+        call_uuid: str,
+        file_path: str,
+        stereo: bool = False
+    ) -> bool:
+        """
+        Start recording audio from call (non-blocking)
+
+        Args:
+            call_uuid: Call UUID
+            file_path: Output WAV file path
+            stereo: Enable stereo recording (left=client, right=robot)
+
+        Returns:
+            True if recording started successfully
+        """
+        short_uuid = call_uuid[:8]
+
+        try:
+            # Set STEREO if requested (MUST be before uuid_record)
+            if stereo:
+                stereo_cmd = f"uuid_setvar {call_uuid} RECORD_STEREO true"
+                stereo_result = self._execute_esl_command(stereo_cmd)
+                logger.debug(f"[{short_uuid}] STEREO enabled: {stereo_result}")
+
+            # Start recording (non-blocking)
+            cmd = f"uuid_record {call_uuid} start {file_path}"
+            result = self._execute_esl_command(cmd)
+
+            if not result or "+OK" not in result:
+                logger.error(
+                    f"[{short_uuid}] Recording start failed: {result}"
+                )
+                return False
+
+            logger.debug(
+                f"[{short_uuid}] Recording started: {file_path} "
+                f"(stereo: {stereo})"
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"[{short_uuid}] Start recording error: {e}")
+            return False
+
+    def _stop_recording(self, call_uuid: str, file_path: str) -> bool:
+        """
+        Stop recording audio (non-blocking)
+
+        Args:
+            call_uuid: Call UUID
+            file_path: WAV file path (same as start)
+
+        Returns:
+            True if recording stopped successfully
+        """
+        short_uuid = call_uuid[:8]
+
+        try:
+            cmd = f"uuid_record {call_uuid} stop {file_path}"
+            result = self._execute_esl_command(cmd)
+
+            logger.debug(f"[{short_uuid}] Recording stopped: {result}")
+
+            # Wait small delay for WAV finalization
+            time.sleep(0.05)
+
+            # Check file exists
+            if not Path(file_path).exists():
+                logger.warning(
+                    f"[{short_uuid}] Audio file not found: {file_path}"
+                )
+                return False
+
+            # Check file size
+            file_size = Path(file_path).stat().st_size
+            if file_size == 0:
+                logger.warning(
+                    f"[{short_uuid}] Audio file empty: {file_path}"
+                )
+                return False
+
+            logger.debug(
+                f"[{short_uuid}] Recording stopped: {file_path} "
+                f"({file_size} bytes)"
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"[{short_uuid}] Stop recording error: {e}")
+            return False
+
+    def _extract_left_channel_stereo(self, stereo_frame: bytes) -> bytes:
+        """
+        Extract left channel (client audio) from stereo frame
+
+        Stereo frame format (interleaved):
+        [L0_low, L0_high, R0_low, R0_high, L1_low, L1_high, ...]
+
+        Args:
+            stereo_frame: Stereo audio frame (interleaved 16-bit samples)
+
+        Returns:
+            Mono frame (left channel only)
+        """
+        # Extract left channel: bytes[0::4] + bytes[1::4]
+        # This gets every other 16-bit sample (skipping right channel)
+        left_low = stereo_frame[0::4]   # Low bytes of left samples
+        left_high = stereo_frame[1::4]  # High bytes of left samples
+
+        # Reconstruct mono frame
+        mono_frame = bytearray()
+        for low, high in zip(left_low, left_high):
+            mono_frame.append(low)
+            mono_frame.append(high)
+
+        return bytes(mono_frame)
+
+    def _get_audio_frames_from_wav(
+        self,
+        file_path: str,
+        start_offset: int = 0,
+        frame_duration_ms: int = 30,
+        sample_rate: int = 8000
+    ):
+        """
+        Generator: Stream audio frames from WAV file
+
+        Yields frames for VAD processing. Handles both mono and stereo.
+
+        Args:
+            file_path: WAV file path
+            start_offset: Byte offset to start reading from
+            frame_duration_ms: Frame duration in milliseconds
+            sample_rate: Sample rate in Hz
+
+        Yields:
+            Audio frames (bytes) suitable for VAD processing
+        """
+        import wave
+
+        # Calculate frame size
+        frame_size = int(sample_rate * frame_duration_ms / 1000)
+        bytes_per_sample = 2  # 16-bit
+
+        try:
+            with wave.open(file_path, 'rb') as wav:
+                channels = wav.getnchannels()
+                bytes_per_frame = frame_size * bytes_per_sample
+
+                if channels == 2:
+                    # Stereo: need double bytes, then extract left
+                    bytes_per_frame *= 2
+
+                # Seek to start offset if specified
+                if start_offset > 0:
+                    wav.setpos(start_offset)
+
+                while True:
+                    # Read frame
+                    frame_data = wav.readframes(frame_size)
+
+                    if len(frame_data) < bytes_per_frame:
+                        # End of file or incomplete frame
+                        break
+
+                    # Extract left channel if stereo
+                    if channels == 2:
+                        frame_data = self._extract_left_channel_stereo(
+                            frame_data
+                        )
+
+                    yield frame_data
+
+        except FileNotFoundError:
+            logger.warning(f"WAV file not found: {file_path}")
+            return
+
+        except Exception as e:
+            logger.error(f"Error reading WAV frames: {e}")
+            return
 
 
 # ============================================================================

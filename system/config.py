@@ -145,6 +145,14 @@ BARGE_IN_THRESHOLD = 1.5
 # Robot coupe pas direct, attend 0.3s pour effet naturel
 BARGE_IN_SMOOTH_DELAY = 0.3
 
+# Dur�e minimale de parole pour d�tecter "start speech" (en secondes)
+# Evite faux positifs (bruits, respirations courtes)
+PLAYING_START_SPEECH_DURATION = 0.3
+
+# D�clencheur background transcription (en secondes)
+# Apr�s 0.5s de parole client � lance thread transcription snapshot
+PLAYING_BG_TRANSCRIBE_TRIGGER = 0.5
+
 # VAD aggressiveness (0-3, 3 = plus agressif)
 VAD_AGGRESSIVENESS = 3
 
@@ -159,6 +167,17 @@ SILENCE_THRESHOLD = 0.6
 
 # Timeout max d'attente pour r�ponse client (en secondes)
 WAITING_TIMEOUT = 10.0
+
+# Timeout silence client (pour retry_silence apr�s robot parle)
+# Si client ne dit rien pendant 3s � retry_silence
+WAITING_SILENCE_TIMEOUT = 3.0
+
+# Dur�e minimale de parole pour d�tecter "start speech" (en secondes)
+WAITING_START_SPEECH_DURATION = 0.3
+
+# D�clencheur background transcription (en secondes)
+# Apr�s 0.5s de parole client � lance thread transcription snapshot
+WAITING_BG_TRANSCRIBE_TRIGGER = 0.5
 
 # Nombre max de silences cons�cutifs avant hangup NO_ANSWER
 MAX_CONSECUTIVE_SILENCES = 2
@@ -504,11 +523,16 @@ class Config:
     BARGE_IN_ENABLED = BARGE_IN_ENABLED
     BARGE_IN_THRESHOLD = BARGE_IN_THRESHOLD
     BARGE_IN_SMOOTH_DELAY = BARGE_IN_SMOOTH_DELAY
+    PLAYING_START_SPEECH_DURATION = PLAYING_START_SPEECH_DURATION
+    PLAYING_BG_TRANSCRIBE_TRIGGER = PLAYING_BG_TRANSCRIBE_TRIGGER
     VAD_AGGRESSIVENESS = VAD_AGGRESSIVENESS
 
     # Phase 3 - Waiting
     SILENCE_THRESHOLD = SILENCE_THRESHOLD
     WAITING_TIMEOUT = WAITING_TIMEOUT
+    WAITING_SILENCE_TIMEOUT = WAITING_SILENCE_TIMEOUT
+    WAITING_START_SPEECH_DURATION = WAITING_START_SPEECH_DURATION
+    WAITING_BG_TRANSCRIBE_TRIGGER = WAITING_BG_TRANSCRIBE_TRIGGER
     MAX_CONSECUTIVE_SILENCES = MAX_CONSECUTIVE_SILENCES
     MAX_CONSECUTIVE_NO_MATCH = MAX_CONSECUTIVE_NO_MATCH
 
