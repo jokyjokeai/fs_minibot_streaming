@@ -36,12 +36,24 @@ def main():
 
     try:
         from system.robot_freeswitch import RobotFreeSWITCH
+        from system.scenarios import ScenarioManager
 
-        # Initialize robot (PRELOADING)
-        print("\n🔄 Initialisation robot (PRELOADING services AI)...")
+        # Load scenario BEFORE robot init to get theme_file for warmup
+        print("\n🔄 Chargement scenario pour detecter theme objections...")
+        scenario_manager = ScenarioManager()
+        try:
+            scenario = scenario_manager.load_scenario(scenario_name)
+            theme_file = scenario_manager.get_theme_file(scenario)
+            print(f"✅ Scenario charge: theme_file = '{theme_file}'")
+        except Exception as e:
+            print(f"⚠️  Scenario non charge ({e}), utilisation theme general")
+            theme_file = "objections_general"
+
+        # Initialize robot (PRELOADING with scenario theme)
+        print(f"\n🔄 Initialisation robot (PRELOADING services AI + {theme_file})...")
         start_time = time.time()
 
-        robot = RobotFreeSWITCH()
+        robot = RobotFreeSWITCH(default_theme=theme_file)
 
         init_time = (time.time() - start_time) * 1000
         print(f"✅ Robot initialise en {init_time:.0f}ms")

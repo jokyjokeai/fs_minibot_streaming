@@ -19,6 +19,7 @@ Target: <1s total latency per interaction cycle
 import logging
 import time
 import threading
+import asyncio
 from typing import Dict, Optional, Any, List
 from pathlib import Path
 from collections import defaultdict
@@ -42,6 +43,7 @@ except ImportError:
 # AI Services
 from system.services.faster_whisper_stt import FasterWhisperSTT
 from system.services.amd_service import AMDService
+from system.services.streaming_asr import StreamingASR
 
 # Scenarios & Objections
 from system.scenarios import ScenarioManager
@@ -97,6 +99,7 @@ class RobotFreeSWITCH:
         # === ESL CONNECTIONS (DUAL) ===
         self.esl_conn_events = None  # Receive events (blocking)
         self.esl_conn_api = None     # Send API commands (non-blocking)
+        self.esl_api_lock = threading.Lock()  # Thread-safe access to esl_conn_api
 
         # === EVENT LOOP ===
         self.running = False
@@ -157,7 +160,7 @@ class RobotFreeSWITCH:
             self.amd_service = None
             raise
 
-        # 4. WebRTC VAD (barge-in detection)
+        # 4. WebRTC VAD (barge-in detection - fallback si mod_vosk indisponible)
         if VAD_AVAILABLE:
             try:
                 self.vad = webrtcvad.Vad(config.WEBRTC_VAD_AGGRESSIVENESS)
@@ -173,6 +176,79 @@ class RobotFreeSWITCH:
             logger.error("WebRTC VAD not available - barge-in disabled!")
             self.vad = None
             raise RuntimeError("VAD required for barge-in")
+
+        # 4.5. Streaming ASR (Vosk Python + mod_audio_fork WebSocket)
+        # Serveur WebSocket pour barge-in streaming temps réel
+        try:
+            if config.STREAMING_ASR_ENABLED:
+                logger.info("Loading Streaming ASR service...")
+                self.streaming_asr = StreamingASR()
+
+                if self.streaming_asr.is_available:
+                    # Démarrer serveur WebSocket dans thread asyncio
+                    self.asr_server_thread = threading.Thread(
+                        target=self._run_streaming_asr_server,
+                        daemon=True,
+                        name="StreamingASR-Server"
+                    )
+                    self.asr_server_thread.start()
+
+                    # HEALTH CHECK: Attendre que serveur démarre vraiment
+                    logger.info(
+                        f"⏳ Waiting for WebSocket server to start on "
+                        f"{config.STREAMING_ASR_HOST}:{config.STREAMING_ASR_PORT}..."
+                    )
+
+                    max_wait = 5.0  # 5 secondes max
+                    wait_start = time.time()
+                    server_started = False
+
+                    while (time.time() - wait_start) < max_wait:
+                        try:
+                            # Tester connexion TCP sur port WebSocket
+                            import socket
+                            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            sock.settimeout(0.1)
+                            result = sock.connect_ex((
+                                config.STREAMING_ASR_HOST,
+                                config.STREAMING_ASR_PORT
+                            ))
+                            sock.close()
+
+                            if result == 0:
+                                # Port accessible !
+                                server_started = True
+                                elapsed = time.time() - wait_start
+                                logger.info(
+                                    f"✅ Streaming ASR WebSocket server READY "
+                                    f"(started in {elapsed:.2f}s)"
+                                )
+                                break
+                        except Exception:
+                            pass
+
+                        time.sleep(0.1)  # Poll every 100ms
+
+                    if not server_started:
+                        logger.error(
+                            f"❌ Streaming ASR server failed to start within {max_wait}s! "
+                            f"Falling back to WebRTC VAD."
+                        )
+                        self.streaming_asr = None
+                else:
+                    logger.warning(
+                        "⚠️  Streaming ASR dependencies missing "
+                        "(check: websockets, webrtcvad, vosk, model path)"
+                    )
+                    self.streaming_asr = None
+            else:
+                logger.info("ℹ️  Streaming ASR disabled, using WebRTC VAD fallback")
+                self.streaming_asr = None
+
+        except Exception as e:
+            logger.warning(f"⚠️  Streaming ASR initialization failed: {e}", exc_info=True)
+            self.streaming_asr = None
+            logger.info("Using WebRTC VAD fallback for barge-in")
 
         # 5. ScenarioManager
         try:
@@ -210,7 +286,7 @@ class RobotFreeSWITCH:
 
         # 1. GPU WARMUP (Faster-Whisper)
         if self.stt_service and config.FASTER_WHISPER_DEVICE == "cuda":
-            logger.info("WARMUP 1/3: GPU Faster-Whisper test transcription...")
+            logger.info("WARMUP 1/4: GPU Faster-Whisper test transcription...")
             try:
                 # Create dummy 1s silence audio for warmup
                 import wave
@@ -234,7 +310,7 @@ class RobotFreeSWITCH:
                 result = self.stt_service.transcribe_file(warmup_path)
                 warmup_time = (time.time() - warmup_start) * 1000
 
-                logger.info(f"GPU WARMUP 1/3: Completed in {warmup_time:.0f}ms - GPU is HOT!")
+                logger.info(f"GPU WARMUP 1/4: Completed in {warmup_time:.0f}ms - GPU is HOT!")
 
                 # Cleanup
                 Path(warmup_path).unlink()
@@ -244,7 +320,7 @@ class RobotFreeSWITCH:
 
         # 2. VAD WARMUP
         if self.vad:
-            logger.info("WARMUP 2/3: VAD test detection...")
+            logger.info("WARMUP 2/4: VAD test detection...")
             try:
                 # Test VAD on dummy audio frame
                 import struct
@@ -257,14 +333,14 @@ class RobotFreeSWITCH:
                 is_speech = self.vad.is_speech(test_frame, 8000)
                 warmup_time = (time.time() - warmup_start) * 1000
 
-                logger.info(f"VAD WARMUP 2/3: Completed in {warmup_time:.2f}ms - VAD is READY!")
+                logger.info(f"VAD WARMUP 2/4: Completed in {warmup_time:.2f}ms - VAD is READY!")
 
             except Exception as e:
                 logger.warning(f"VAD warmup failed (non-critical): {e}")
 
         # 3. OBJECTION MATCHER WARMUP
         if self.objection_matcher_default:
-            logger.info(f"WARMUP 3/3: ObjectionMatcher test match (theme: {default_theme})...")
+            logger.info(f"WARMUP 3/4: ObjectionMatcher test match (theme: {default_theme})...")
             try:
                 warmup_start = time.time()
                 # Test with a common objection phrase (silent mode to avoid ❌ log)
@@ -277,14 +353,65 @@ class RobotFreeSWITCH:
 
                 match_status = "✅ MATCHED" if test_match else "⚠️ NO MATCH"
                 logger.info(
-                    f"ObjectionMatcher WARMUP 3/3: Completed in {warmup_time:.2f}ms - "
+                    f"ObjectionMatcher WARMUP 3/4: Completed in {warmup_time:.2f}ms - "
                     f"Matcher is READY! ({match_status})"
                 )
 
             except Exception as e:
                 logger.warning(f"ObjectionMatcher warmup failed (non-critical): {e}")
         else:
-            logger.info("WARMUP 3/3: ObjectionMatcher skipped (no theme specified)")
+            logger.info("WARMUP 3/4: ObjectionMatcher skipped (no theme specified)")
+
+        # 4. VOSK WARMUP (Streaming ASR)
+        if self.streaming_asr and self.streaming_asr.is_available:
+            logger.info("WARMUP 4/4: Vosk ASR test transcription...")
+            try:
+                # Créer dummy audio 1s @ 16kHz (Vosk sample rate)
+                import wave
+                import struct
+                import tempfile
+                from vosk import KaldiRecognizer
+
+                warmup_audio = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                warmup_path = warmup_audio.name
+
+                # Generate 1s silence @ 16kHz mono (Vosk sample rate)
+                with wave.open(warmup_path, 'w') as wf:
+                    wf.setnchannels(1)  # Mono
+                    wf.setsampwidth(2)  # 16-bit
+                    wf.setframerate(16000)  # 16kHz pour Vosk
+                    silence = struct.pack('<' + ('h' * 16000), *([0] * 16000))
+                    wf.writeframes(silence)
+
+                # Warmup transcription avec recognizer Vosk
+                warmup_start = time.time()
+
+                # Créer recognizer temporaire
+                recognizer = KaldiRecognizer(
+                    self.streaming_asr.model,
+                    16000
+                )
+
+                # Lire et transcrire
+                with wave.open(warmup_path, 'r') as wf:
+                    data = wf.readframes(16000)  # 1s
+                    recognizer.AcceptWaveform(data)
+                    result = recognizer.FinalResult()
+
+                warmup_time = (time.time() - warmup_start) * 1000
+
+                logger.info(
+                    f"Vosk ASR WARMUP 4/4: Completed in {warmup_time:.0f}ms - "
+                    f"Vosk is READY!"
+                )
+
+                # Cleanup
+                Path(warmup_path).unlink()
+
+            except Exception as e:
+                logger.warning(f"Vosk warmup failed (non-critical): {e}")
+        else:
+            logger.info("WARMUP 4/4: Vosk ASR skipped (Streaming ASR not available)")
 
         logger.info("=" * 80)
         logger.info("ROBOT INITIALIZED - ALL SERVICES PRELOADED")
@@ -292,6 +419,49 @@ class RobotFreeSWITCH:
 
     def __repr__(self):
         return f"<RobotFreeSWITCH active_calls={len(self.active_calls)} running={self.running}>"
+
+    def _run_streaming_asr_server(self):
+        """
+        Démarre le serveur WebSocket ASR dans un thread asyncio.
+        Tourne en daemon thread pour recevoir audio depuis FreeSWITCH.
+        """
+        try:
+            # Créer nouvelle event loop pour ce thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            logger.info(
+                f"🚀 Starting Streaming ASR WebSocket server on "
+                f"{config.STREAMING_ASR_HOST}:{config.STREAMING_ASR_PORT}..."
+            )
+
+            # Démarrer serveur (bloquant - tourne jusqu'à arrêt)
+            loop.run_until_complete(
+                self.streaming_asr.start_server(
+                    host=config.STREAMING_ASR_HOST,
+                    port=config.STREAMING_ASR_PORT
+                )
+            )
+
+        except OSError as e:
+            if "Address already in use" in str(e):
+                logger.error(
+                    f"❌ Port {config.STREAMING_ASR_PORT} already in use! "
+                    f"Another process is using this port."
+                )
+            else:
+                logger.error(
+                    f"❌ Network error starting Streaming ASR server: {e}",
+                    exc_info=True
+                )
+        except Exception as e:
+            logger.error(
+                f"❌ Streaming ASR server crashed: {e}",
+                exc_info=True
+            )
+        finally:
+            logger.warning("🛑 Streaming ASR server stopped")
+            loop.close()
 
     # ========================================================================
     # ESL CONNECTION MANAGEMENT
@@ -807,7 +977,7 @@ class RobotFreeSWITCH:
                     # Play final audio
                     audio_path = self._get_audio_path_for_step(scenario, current_step)
                     if audio_path:
-                        self._execute_phase_playing(
+                        self._execute_phase_2_auto(
                             call_uuid,
                             audio_path,
                             enable_barge_in=False  # No barge-in on goodbye
@@ -902,8 +1072,10 @@ class RobotFreeSWITCH:
     # ========================================================================
     # PHASE 1: AMD (Answering Machine Detection)
     # ========================================================================
+    # NOTE: AMD implementation moved to line ~2900 (active version)
+    # This section is kept for reference/documentation only
 
-    def _execute_phase_amd(self, call_uuid: str) -> Dict[str, Any]:
+    def _execute_phase_amd_OLD_UNUSED(self, call_uuid: str) -> Dict[str, Any]:
         """
         PHASE 1: AMD (Answering Machine Detection)
 
@@ -1662,6 +1834,191 @@ class RobotFreeSWITCH:
             }
         }
 
+    def _execute_phase_waiting_streaming(
+        self,
+        call_uuid: str,
+        max_duration: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """
+        PHASE 3: WAITING RESPONSE avec Streaming ASR (Vosk)
+
+        Utilise uuid_audio_fork + WebSocket Vosk pour détection silence temps réel.
+        Arrête dès que 0.8s de silence détecté (au lieu d'attendre timeout complet).
+
+        Args:
+            call_uuid: Call UUID
+            max_duration: Max waiting duration (default: WAITING_TIMEOUT)
+
+        Returns:
+            {
+                "transcription": "...",
+                "detected_silence": True | False,
+                "timeout": True | False,
+                "duration": 2.3,  # seconds
+                "latencies": {"total_ms": 2300.0}
+            }
+        """
+        phase_start = time.time()
+        short_uuid = call_uuid[:8]
+
+        if max_duration is None:
+            max_duration = config.WAITING_TIMEOUT
+
+        self.clog.phase3_start(uuid=short_uuid)
+
+        # État détection
+        detection_state = {
+            "transcription": "",
+            "speech_ended": False,
+            "silence_detected": False,
+            "last_update": time.time()
+        }
+
+        def streaming_callback(event_data):
+            """Callback pour events Streaming ASR"""
+            event = event_data.get("event")
+
+            if event == "transcription":
+                # Mise à jour transcription
+                if event_data.get("type") == "final":
+                    detection_state["transcription"] = event_data.get("text", "")
+                    detection_state["last_update"] = time.time()
+
+            elif event == "speech_end":
+                # Fin de parole détectée (silence > 0.8s)
+                detection_state["speech_ended"] = True
+                detection_state["silence_detected"] = True
+                silence_duration = event_data.get("silence_duration", 0)
+                logger.info(
+                    f"🤐 [{short_uuid}] Speech END detected by Vosk "
+                    f"(silence: {silence_duration:.1f}s)"
+                )
+
+        try:
+            # Register callback
+            self.streaming_asr.register_callback(call_uuid, streaming_callback)
+
+            # Démarrer audio fork → WebSocket
+            ws_url = (
+                f"ws://{config.STREAMING_ASR_HOST}:{config.STREAMING_ASR_PORT}"
+                f"/stream/{call_uuid}"
+            )
+            fork_cmd = f"uuid_audio_fork {call_uuid} start {ws_url} mono 16000"
+            fork_result = self._execute_esl_command(fork_cmd)
+
+            if not fork_result or "+OK" not in fork_result:
+                logger.error(f"❌ [{short_uuid}] Audio fork failed: {fork_result}")
+                # Fallback méthode file-based
+                self.streaming_asr.unregister_callback(call_uuid)
+                return self._execute_phase_waiting(call_uuid, max_duration)
+
+            logger.info(f"✅ [{short_uuid}] Audio fork started for PHASE 3")
+
+            # Attendre fin parole OU timeout
+            timeout = max_duration
+            monitoring_start = time.time()
+
+            while (time.time() - monitoring_start) < timeout:
+                if detection_state["speech_ended"]:
+                    logger.info(f"✅ [{short_uuid}] Speech ended, stopping audio fork")
+                    break
+
+                time.sleep(0.1)  # Poll every 100ms
+
+            # Stop audio fork
+            stop_cmd = f"uuid_audio_fork {call_uuid} stop"
+            self._execute_esl_command(stop_cmd)
+
+            # Unregister callback
+            self.streaming_asr.unregister_callback(call_uuid)
+
+            # Calculer durée
+            duration = time.time() - monitoring_start
+            timeout_reached = duration >= timeout
+
+            total_latency_ms = (time.time() - phase_start) * 1000
+
+            self.clog.phase3_end(total_latency_ms, uuid=short_uuid)
+
+            logger.info(
+                f"[{short_uuid}] Phase 3 STREAMING: "
+                f"duration={duration:.1f}s, "
+                f"transcription='{detection_state['transcription'][:50]}', "
+                f"silence={detection_state['silence_detected']}, "
+                f"timeout={timeout_reached}"
+            )
+
+            return {
+                "transcription": detection_state["transcription"],
+                "detected_silence": detection_state["silence_detected"],
+                "timeout": timeout_reached,
+                "duration": duration,
+                "latencies": {
+                    "total_ms": total_latency_ms
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"❌ [{short_uuid}] Streaming ASR error: {e}", exc_info=True)
+
+            # Cleanup
+            try:
+                self._execute_esl_command(f"uuid_audio_fork {call_uuid} stop")
+                self.streaming_asr.unregister_callback(call_uuid)
+            except:
+                pass
+
+            # Fallback file-based
+            logger.warning(f"⚠️ [{short_uuid}] Falling back to file-based method")
+            return self._execute_phase_waiting(call_uuid, max_duration)
+
+    def _execute_phase_waiting_router(
+        self,
+        call_uuid: str,
+        max_duration: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """
+        Router pour PHASE 3: Sélectionne méthode streaming ou file-based
+
+        - Si Streaming ASR disponible → utilise Vosk streaming (détection silence réelle)
+        - Sinon → fallback file-based (attend timeout complet)
+
+        Args:
+            call_uuid: Call UUID
+            max_duration: Max waiting duration
+
+        Returns:
+            Résultat de la méthode sélectionnée
+        """
+        short_uuid = call_uuid[:8]
+
+        # Utiliser Streaming ASR si disponible (optimal)
+        if (
+            self.streaming_asr
+            and self.streaming_asr.is_available
+            and config.STREAMING_ASR_ENABLED
+        ):
+            logger.debug(
+                f"📡 [{short_uuid}] Using Streaming ASR for PHASE 3 "
+                f"(Vosk WebSocket + audio fork)"
+            )
+            return self._execute_phase_waiting_streaming(
+                call_uuid, max_duration
+            )
+        else:
+            # Fallback file-based (ancien système)
+            logger.debug(
+                f"📡 [{short_uuid}] Using file-based for PHASE 3 "
+                f"(fallback method - no real silence detection)"
+            )
+            if max_duration is None:
+                max_duration = config.WAITING_TIMEOUT
+            logger.warning(
+                f"⚠️ [{short_uuid}] Phase 3 will wait full timeout ({max_duration}s) "
+                f"as Streaming ASR is not available"
+            )
+            return self._execute_phase_waiting(call_uuid, max_duration)
+
     def _record_with_silence_detection(
         self,
         call_uuid: str,
@@ -1851,7 +2208,7 @@ class RobotFreeSWITCH:
         # Check if barge-in enabled for this step
         enable_barge_in = step_config.get("barge_in", config.BARGE_IN_ENABLED)
 
-        playing_result = self._execute_phase_playing(
+        playing_result = self._execute_phase_2_auto(
             call_uuid,
             audio_path,
             enable_barge_in=enable_barge_in
@@ -1860,7 +2217,7 @@ class RobotFreeSWITCH:
         # ===================================================================
         # STEP 2: Wait for response (PHASE 3)
         # ===================================================================
-        waiting_result = self._execute_phase_waiting(call_uuid)
+        waiting_result = self._execute_phase_waiting_router(call_uuid)
 
         transcription = waiting_result.get("transcription", "").strip()
 
@@ -1983,6 +2340,16 @@ class RobotFreeSWITCH:
             f"Next: {next_step}, Latency: {total_latency_ms:.0f}ms"
         )
 
+        # Handle both return formats (streaming ASR vs fallback)
+        playing_latency = (
+            playing_result.get("latencies", {}).get("total_ms")
+            or playing_result.get("latency_ms", 0.0)
+        )
+        waiting_latency = (
+            waiting_result.get("latencies", {}).get("total_ms")
+            or waiting_result.get("latency_ms", 0.0)
+        )
+
         return {
             "success": True,
             "next_step": next_step,
@@ -1991,8 +2358,8 @@ class RobotFreeSWITCH:
             "retry": False,
             "qualification_delta": qualification_delta,
             "latencies": {
-                "playing_ms": playing_result["latencies"]["total_ms"],
-                "waiting_ms": waiting_result["latencies"]["total_ms"],
+                "playing_ms": playing_latency,
+                "waiting_ms": waiting_latency,
                 "intent_ms": intent_result["latency_ms"],
                 "total_ms": total_latency_ms
             }
@@ -2076,14 +2443,14 @@ class RobotFreeSWITCH:
                 break
 
             # Play objection response (with barge-in)
-            playing_result = self._execute_phase_playing(
+            playing_result = self._execute_phase_2_auto(
                 call_uuid,
                 str(audio_path),
                 enable_barge_in=True
             )
 
             # Wait for client reaction
-            waiting_result = self._execute_phase_waiting(call_uuid)
+            waiting_result = self._execute_phase_waiting_router(call_uuid)
 
             reaction = waiting_result.get("transcription", "").strip()
 
@@ -2528,13 +2895,13 @@ class RobotFreeSWITCH:
     # PHASE IMPLEMENTATIONS (AMD, PLAYING, WAITING)
     # ========================================================================
 
-    def _execute_phase_amd(self, call_uuid: str) -> Dict[str, Any]:
+    def _execute_phase_amd_whisper(self, call_uuid: str) -> Dict[str, Any]:
         """
-        Phase 1: AMD (Answering Machine Detection)
+        Phase 1: AMD (Answering Machine Detection) - FALLBACK WITH FASTER-WHISPER
 
         Simple & Fast:
-        - Record MONO 1.5s
-        - Transcribe AFTER
+        - Record STEREO 2.3s
+        - Transcribe AFTER with Faster-Whisper
         - Keywords matching HUMAN/MACHINE
         - NO complex VAD, NO streaming
 
@@ -2788,6 +3155,160 @@ class RobotFreeSWITCH:
                 "latency_ms": 0.0
             }
 
+    def _execute_phase_amd(self, call_uuid: str) -> Dict[str, Any]:
+        """
+        Phase 1: AMD (Answering Machine Detection) - VOSK STREAMING
+
+        Ultra-Fast with Vosk:
+        - Stream audio to Vosk in real-time (uuid_audio_fork)
+        - Transcription ready when recording ends (~20ms latency)
+        - Keywords matching HUMAN/MACHINE
+        - Fallback to Whisper if Vosk unavailable
+
+        Args:
+            call_uuid: Call UUID
+
+        Returns:
+            {
+                "result": "HUMAN" | "MACHINE" | "SILENCE" | "UNKNOWN",
+                "transcription": str,
+                "confidence": float,
+                "latency_ms": float
+            }
+        """
+        short_uuid = call_uuid[:8]
+        phase_start = time.time()
+
+        # PHASE 1 START - Colored log (YELLOW panel with double border)
+        self.clog.phase1_start(uuid=short_uuid)
+
+        # Check if Vosk streaming is available
+        if not (self.streaming_asr and self.streaming_asr.is_available and config.STREAMING_ASR_ENABLED):
+            logger.warning(f"[{short_uuid}] Vosk streaming not available, falling back to Faster-Whisper")
+            return self._execute_phase_amd_whisper(call_uuid)
+
+        try:
+            # State pour récupérer la transcription Vosk
+            amd_state = {
+                "transcription": "",
+                "final_received": False,
+                "speech_detected": False
+            }
+
+            def amd_callback(event_data):
+                """Callback pour récupérer transcription finale de Vosk"""
+                event = event_data.get("event")
+
+                if event == "transcription":
+                    if event_data.get("type") == "final":
+                        amd_state["transcription"] = event_data.get("text", "").strip()
+                        amd_state["final_received"] = True
+                        logger.debug(f"[{short_uuid}] Vosk final transcription received: '{amd_state['transcription']}'")
+
+                elif event == "speech_start":
+                    amd_state["speech_detected"] = True
+
+            # Register callback
+            self.streaming_asr.register_callback(call_uuid, amd_callback)
+
+            # Prime RTP stream
+            logger.debug(f"[{short_uuid}] Priming RTP stream with silence...")
+            silence_cmd = f"uuid_broadcast {call_uuid} silence_stream://100 both"
+            self._execute_esl_command(silence_cmd)
+            time.sleep(0.35)  # 350ms for RTP priming
+            logger.info(f"🎧 [{short_uuid}] RTP stream primed, ready to record")
+
+            # Start uuid_audio_fork (streaming to Vosk)
+            ws_url = f"ws://{config.STREAMING_ASR_HOST}:{config.STREAMING_ASR_PORT}/stream/{call_uuid}"
+            fork_cmd = f"uuid_audio_fork {call_uuid} start {ws_url} mono 16000"
+            fork_result = self._execute_esl_command(fork_cmd)
+
+            if not fork_result or "+OK" not in fork_result:
+                logger.error(f"❌ [{short_uuid}] Audio fork failed: {fork_result}, falling back to Whisper")
+                self.streaming_asr.unregister_callback(call_uuid)
+                return self._execute_phase_amd_whisper(call_uuid)
+
+            logger.info(f"✅ [{short_uuid}] Audio fork started for AMD")
+
+            # Wait for AMD duration
+            logger.info(f"🎧 [{short_uuid}] Recording {config.AMD_MAX_DURATION}s audio (Vosk streaming)...")
+            record_start = time.time()
+            time.sleep(config.AMD_MAX_DURATION)
+            record_latency = (time.time() - record_start) * 1000
+
+            # Wait for final transcription (max 500ms)
+            transcribe_start = time.time()
+            max_wait = 0.5  # 500ms max
+            wait_start = time.time()
+
+            while (time.time() - wait_start) < max_wait:
+                if amd_state["final_received"]:
+                    break
+                time.sleep(0.05)  # Poll every 50ms
+
+            transcribe_latency = (time.time() - transcribe_start) * 1000
+
+            # Stop audio fork
+            stop_cmd = f"uuid_audio_fork {call_uuid} stop"
+            self._execute_esl_command(stop_cmd)
+            self.streaming_asr.unregister_callback(call_uuid)
+
+            transcription = amd_state["transcription"]
+
+            # Transcription - Colored log
+            self.clog.transcription(transcription, uuid=short_uuid, latency_ms=transcribe_latency)
+
+            # Check for SILENCE
+            if not transcription or len(transcription) <= 2:
+                logger.warning(f"⚠️ [{short_uuid}] AMD: SILENCE detected (no speech during {config.AMD_MAX_DURATION}s)")
+                total_latency = (time.time() - phase_start) * 1000
+                self.clog.success("AMD: NO_ANSWER detected (silence)", uuid=short_uuid)
+                self.clog.phase1_end(total_latency, uuid=short_uuid)
+
+                return {
+                    "result": "NO_ANSWER",
+                    "transcription": "",
+                    "confidence": 1.0,
+                    "latency_ms": total_latency
+                }
+
+            # AMD Detection with keywords matching
+            amd_result = self.amd_service.detect(transcription)
+            result_type = amd_result["result"]  # HUMAN/MACHINE/UNKNOWN
+            confidence = amd_result["confidence"]
+
+            # Total latency
+            total_latency = (time.time() - phase_start) * 1000
+
+            # PHASE 1 END - Colored log
+            self.clog.success(
+                f"AMD: {result_type} detected (confidence: {confidence:.2f})",
+                uuid=short_uuid
+            )
+            self.clog.phase1_end(total_latency, uuid=short_uuid)
+
+            return {
+                "result": result_type,
+                "transcription": transcription,
+                "confidence": confidence,
+                "latency_ms": total_latency
+            }
+
+        except Exception as e:
+            logger.error(f"❌ [{short_uuid}] AMD Vosk error: {e}, falling back to Whisper")
+            import traceback
+            traceback.print_exc()
+
+            # Cleanup
+            try:
+                self._execute_esl_command(f"uuid_audio_fork {call_uuid} stop")
+                self.streaming_asr.unregister_callback(call_uuid)
+            except:
+                pass
+
+            # Fallback to Whisper
+            return self._execute_phase_amd_whisper(call_uuid)
+
     def _execute_phase_playing(
         self,
         call_uuid: str,
@@ -2836,7 +3357,8 @@ class RobotFreeSWITCH:
         }
 
         try:
-            # Step 1: Start recording STEREO
+            # Step 1: Start recording STEREO (both legs) - same as AMD
+            # We'll extract client audio (left channel) before transcription
             if not self._start_recording(call_uuid, record_file, stereo=True):
                 logger.error(f"❌ [{short_uuid}] PLAYING: Recording start failed!")
                 return {
@@ -2936,6 +3458,19 @@ class RobotFreeSWITCH:
                     last_size = current_size
                 time.sleep(0.05)  # Poll every 50ms
 
+            # Step 4.5: Extract client audio (left channel) from STEREO recording
+            mono_file = record_file.replace(".raw", "_mono.wav")
+            logger.info(f"🎧 [{short_uuid}] Extracting client audio (left channel)...")
+
+            import subprocess
+            extract_cmd = [
+                "ffmpeg", "-i", record_file,
+                "-af", "pan=mono|c0=FL",  # Extract left channel (client)
+                "-y",  # Overwrite
+                mono_file
+            ]
+            subprocess.run(extract_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
             # Step 5: Get transcription
             transcription = ""
             if monitoring_state["barged_in"]:
@@ -2944,9 +3479,9 @@ class RobotFreeSWITCH:
                     transcription = monitoring_state["transcription"]
                     logger.info(f"🚀 [{short_uuid}] Background transcription ready!")
                 else:
-                    # Fallback: sync transcription
+                    # Fallback: sync transcription (use mono extracted file)
                     logger.info(f"🔄 [{short_uuid}] Fallback sync transcription...")
-                    result = self.stt_service.transcribe_file(record_file)
+                    result = self.stt_service.transcribe_file(mono_file)
                     transcription = result.get("text", "").strip()
 
                 # Transcription - Colored log (CYAN panel)
@@ -2955,6 +3490,8 @@ class RobotFreeSWITCH:
             # Cleanup
             try:
                 Path(record_file).unlink()
+                if mono_file and Path(mono_file).exists():
+                    Path(mono_file).unlink()
             except:
                 pass
 
@@ -2980,6 +3517,10 @@ class RobotFreeSWITCH:
             try:
                 self._stop_recording(call_uuid, record_file)
                 Path(record_file).unlink()
+                # Clean mono file if it was created
+                mono_file_path = record_file.replace(".raw", "_mono.wav")
+                if Path(mono_file_path).exists():
+                    Path(mono_file_path).unlink()
             except:
                 pass
 
@@ -2989,6 +3530,241 @@ class RobotFreeSWITCH:
                 "audio_duration": 0.0,
                 "latency_ms": 0.0
             }
+
+    def _execute_phase_2_auto(
+        self,
+        call_uuid: str,
+        audio_path: str,
+        enable_barge_in: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Phase 2: PLAYING (Auto-sélection Streaming ASR vs WebRTC VAD)
+
+        Wrapper intelligent qui choisit automatiquement la meilleure méthode:
+        - Si Streaming ASR disponible → _execute_phase_playing_streaming (Vosk WebSocket)
+        - Sinon → _execute_phase_playing (WebRTC VAD fallback)
+
+        Architecture Hybride:
+        - Vosk: Latence <200ms, streaming natif, CPU-only
+        - WebRTC VAD: Latence ~600ms, robuste, fallback
+
+        Args:
+            call_uuid: UUID appel
+            audio_path: Fichier audio à jouer
+            enable_barge_in: Activer barge-in
+
+        Returns:
+            Dict résultat phase 2 (voir _execute_phase_playing)
+        """
+        short_uuid = call_uuid[:8]
+
+        # Vérifier si Streaming ASR disponible et activé
+        if (
+            self.streaming_asr
+            and self.streaming_asr.is_available
+            and config.STREAMING_ASR_ENABLED
+        ):
+            logger.debug(
+                f"📡 [{short_uuid}] Using Streaming ASR for PHASE 2 "
+                f"(Vosk WebSocket + audio fork)"
+            )
+            return self._execute_phase_playing_streaming(
+                call_uuid, audio_path, enable_barge_in
+            )
+        else:
+            logger.debug(
+                f"📡 [{short_uuid}] Using WebRTC VAD for PHASE 2 "
+                f"(fallback method)"
+            )
+            return self._execute_phase_playing(
+                call_uuid, audio_path, enable_barge_in
+            )
+
+    def _execute_phase_playing_streaming(
+        self,
+        call_uuid: str,
+        audio_path: str,
+        enable_barge_in: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Phase 2: PLAYING avec Streaming ASR (Vosk Python + mod_audio_fork WebSocket)
+
+        Architecture:
+        1. Register callback pour barge-in events
+        2. Démarrer uuid_audio_fork → WebSocket server
+        3. Démarrer playback audio (uuid_broadcast)
+        4. Attendre callback speech_start → barge-in
+        5. Stop audio fork + playback si barge-in
+
+        Args:
+            call_uuid: UUID appel
+            audio_path: Chemin fichier audio à jouer
+            enable_barge_in: Activer barge-in (True par défaut)
+
+        Returns:
+            {
+                "barged_in": bool,
+                "transcription": str,
+                "audio_duration": float,
+                "latency_ms": float
+            }
+        """
+        short_uuid = call_uuid[:8]
+        phase_start = time.time()
+
+        # PHASE 2 START - Colored log
+        self.clog.phase2_start(Path(audio_path).name, uuid=short_uuid)
+
+        # État détection
+        detection_state = {
+            "barged_in": False,
+            "transcription": "",
+            "audio_finished": False,
+            "speech_detected": False
+        }
+
+        try:
+            # Étape 1: Register callback
+            def streaming_callback(event_data):
+                """Callback pour événements streaming ASR"""
+                event_type = event_data.get("event")
+
+                if event_type == "speech_start":
+                    logger.info(f"🗣️ [{short_uuid}] Speech START detected via streaming ASR")
+                    detection_state["speech_detected"] = True
+                    detection_state["barged_in"] = True
+
+                elif event_type == "speech_end":
+                    logger.info(f"🤐 [{short_uuid}] Speech END detected")
+
+                elif event_type == "transcription":
+                    text = event_data.get("text", "")
+                    trans_type = event_data.get("type", "unknown")
+                    latency = event_data.get("latency_ms", 0)
+
+                    if trans_type == "final":
+                        logger.info(
+                            f"📝 [{short_uuid}] Final transcription: '{text}' "
+                            f"(latency: {latency:.1f}ms)"
+                        )
+                        detection_state["transcription"] = text
+                    else:
+                        logger.debug(
+                            f"📝 [{short_uuid}] Partial: '{text}'"
+                        )
+
+            self.streaming_asr.register_callback(call_uuid, streaming_callback)
+            logger.info(f"✅ [{short_uuid}] Streaming ASR callback registered")
+
+            # Étape 2: Démarrer audio fork → WebSocket
+            ws_url = f"ws://{config.STREAMING_ASR_HOST}:{config.STREAMING_ASR_PORT}/stream/{call_uuid}"
+
+            logger.info(f"🔊 [{short_uuid}] Starting audio fork to {ws_url}")
+
+            fork_cmd = f"uuid_audio_fork {call_uuid} start {ws_url} mono 16000"
+            fork_result = self._execute_esl_command(fork_cmd)
+
+            if not fork_result or "+OK" not in fork_result:
+                logger.error(f"❌ [{short_uuid}] Audio fork failed: {fork_result}")
+                # Fallback to WebRTC VAD
+                return self._execute_phase_playing(call_uuid, audio_path, enable_barge_in)
+
+            logger.info(f"✅ [{short_uuid}] Audio fork started")
+
+            # Petit délai pour que le stream WebSocket se connecte
+            time.sleep(0.1)
+
+            # Étape 3: Démarrer playback
+            logger.info(f"🎵 [{short_uuid}] Starting playback: {Path(audio_path).name}")
+
+            # Utiliser uuid_broadcast pour playback (permet arrêt via uuid_break)
+            playback_cmd = f"uuid_broadcast {call_uuid} {audio_path} aleg"
+            playback_result = self._execute_esl_command(playback_cmd)
+
+            if not playback_result or "+OK" not in playback_result:
+                logger.error(f"❌ [{short_uuid}] Playback failed: {playback_result}")
+                # Arrêter audio fork
+                self._execute_esl_command(f"uuid_audio_fork {call_uuid} stop")
+                return self._execute_phase_playing(call_uuid, audio_path, enable_barge_in)
+
+            # Étape 4: Attendre barge-in OU fin playback
+            # Timeout = durée audio estimée + marge
+            timeout = 30.0  # 30s max par défaut
+            monitoring_start = time.time()
+
+            logger.debug(f"⏱️ [{short_uuid}] Monitoring for barge-in (timeout: {timeout}s)")
+
+            while (time.time() - monitoring_start) < timeout:
+                # Check si barge-in détecté via callback
+                if detection_state["barged_in"]:
+                    logger.info(f"⚡ [{short_uuid}] BARGE-IN detected!")
+
+                    # Smooth delay
+                    logger.info(f"🔉 [{short_uuid}] Smooth delay: {config.BARGE_IN_SMOOTH_DELAY}s")
+                    time.sleep(config.BARGE_IN_SMOOTH_DELAY)
+
+                    # Arrêter playback
+                    logger.info(f"🛑 [{short_uuid}] Stopping playback (barge-in)")
+                    self._execute_esl_command(f"uuid_break {call_uuid}")
+
+                    break
+
+                # Check si audio terminé (via event PLAYBACK_STOP)
+                event = self.esl_conn_events.recvEventTimed(100)
+
+                if event:
+                    event_name = event.getHeader("Event-Name")
+                    event_uuid = event.getHeader("Unique-ID")
+
+                    if event_uuid == call_uuid and event_name == "PLAYBACK_STOP":
+                        logger.info(f"🎵 [{short_uuid}] Playback finished (no barge-in)")
+                        detection_state["audio_finished"] = True
+                        break
+
+                # Petit sleep pour ne pas surcharger CPU
+                time.sleep(0.05)
+
+            # Étape 5: Arrêter audio fork
+            logger.info(f"🛑 [{short_uuid}] Stopping audio fork")
+            self._execute_esl_command(f"uuid_audio_fork {call_uuid} stop")
+
+            # Unregister callback
+            self.streaming_asr.unregister_callback(call_uuid)
+
+            # Calculer latence totale
+            phase_duration = (time.time() - phase_start) * 1000
+
+            logger.info(
+                f"✅ [{short_uuid}] PHASE 2 completed: "
+                f"barge_in={detection_state['barged_in']}, "
+                f"transcription='{detection_state['transcription']}', "
+                f"duration={phase_duration:.0f}ms"
+            )
+
+            # PHASE 2 END - Colored log
+            self.clog.phase2_end(detection_state["barged_in"], uuid=short_uuid)
+
+            return {
+                "barged_in": detection_state["barged_in"],
+                "transcription": detection_state["transcription"],
+                "audio_duration": phase_duration / 1000.0,
+                "latency_ms": phase_duration
+            }
+
+        except Exception as e:
+            logger.error(f"❌ [{short_uuid}] Streaming ASR error: {e}", exc_info=True)
+
+            # Cleanup
+            try:
+                self._execute_esl_command(f"uuid_audio_fork {call_uuid} stop")
+                self._execute_esl_command(f"uuid_break {call_uuid}")
+                self.streaming_asr.unregister_callback(call_uuid)
+            except:
+                pass
+
+            # Fallback to WebRTC VAD
+            logger.warning(f"⚠️ [{short_uuid}] Falling back to WebRTC VAD method")
+            return self._execute_phase_playing(call_uuid, audio_path, enable_barge_in)
 
     def _monitor_vad_playing(
         self,
@@ -3064,12 +3840,12 @@ class RobotFreeSWITCH:
                         snapshot_file = f"/tmp/snapshot_{call_uuid}_{int(current_time * 1000)}.wav"
 
                         try:
-                            # Extract LEFT channel (client audio) from STEREO RAW recording
+                            # Extract client MONO audio from RAW recording (client-only stream)
                             # RAW format allows real-time reading while FreeSWITCH writes
                             import subprocess
 
                             logger.debug(
-                                f"📸 [{short_uuid}] Extracting LEFT channel (client) from RAW snapshot "
+                                f"📸 [{short_uuid}] Extracting client MONO from RAW snapshot "
                                 f"at {elapsed_time:.1f}s"
                             )
 
@@ -3077,10 +3853,9 @@ class RobotFreeSWITCH:
                                 "ffmpeg",
                                 "-f", "s16le",        # RAW format: signed 16-bit little-endian
                                 "-ar", "8000",        # Sample rate: 8kHz (FreeSWITCH default)
-                                "-ac", "2",           # Channels: 2 (STEREO)
+                                "-ac", "1",           # Channels: 1 (MONO client-only)
                                 "-i", record_file,    # Input RAW file
                                 "-t", str(elapsed_time),  # CRITICAL: Read only elapsed time (file still being written)
-                                "-af", "pan=mono|c0=FL",  # FL = Front Left = CLIENT
                                 "-y",                 # Overwrite
                                 snapshot_file         # Output WAV file
                             ]
@@ -3603,7 +4378,7 @@ class RobotFreeSWITCH:
 
     def _execute_esl_command(self, cmd: str) -> Optional[str]:
         """
-        Execute ESL API command
+        Execute ESL API command (THREAD-SAFE)
 
         Args:
             cmd: ESL command (e.g. "uuid_record <uuid> start ...")
@@ -3611,20 +4386,90 @@ class RobotFreeSWITCH:
         Returns:
             Command result body or None if error
         """
+        with self.esl_api_lock:  # CRITICAL: Thread-safe access to ESL API connection
+            try:
+                if not self.esl_conn_api:
+                    logger.error("ESL API connection not available")
+                    return None
+
+                if not self.esl_conn_api.connected():
+                    logger.error(f"ESL API connection lost, attempting to send: {cmd}")
+                    return None
+
+                logger.debug(f"📤 ESL API command: {cmd}")
+                result = self.esl_conn_api.api(cmd)
+
+                if not result:
+                    logger.error(f"❌ ESL api() returned None object: {cmd}")
+                    return None
+
+                # Debug result object
+                logger.debug(f"📦 ESL result object type: {type(result)}")
+                logger.debug(f"📦 ESL result object: {result}")
+
+                body = result.getBody()
+
+                if body is None:
+                    logger.error(f"❌ ESL getBody() returned None for cmd: {cmd}")
+                    logger.error(f"   Result type: {type(result)}, Result: {result}")
+                    return None
+
+                logger.debug(f"📥 ESL API response: {body}")
+                return body
+
+            except Exception as e:
+                logger.error(f"ESL command error for '{cmd}': {e}", exc_info=True)
+                return None
+
+    def _execute_sendmsg(self, uuid: str, app_name: str, app_args: str = "") -> Optional[str]:
+        """
+        Execute dialplan application via sendmsg (for apps not available as API commands)
+
+        CRITICAL: play_and_detect_speech is a DIALPLAN application only
+        Use bgapi uuid_broadcast with special syntax OR separate detect_speech+uuid_broadcast
+
+        Args:
+            uuid: Call UUID
+            app_name: Application name (e.g. "play_and_detect_speech")
+            app_args: Application arguments
+
+        Returns:
+            Command result or None if error
+        """
         try:
             if not self.esl_conn_api:
-                logger.error("ESL API connection not available")
+                logger.error("ESL API connection not available for execute")
                 return None
 
-            result = self.esl_conn_api.api(cmd)
+            # WORKAROUND: For play_and_detect_speech, we split into 2 commands:
+            # 1. Start detect_speech first
+            # 2. Then uuid_broadcast for playback
+            # This is the only way to use it from ESL API
 
-            if not result:
-                return None
+            if app_name == "play_and_detect_speech" and app_args:
+                # Parse args: "audio_file detect:vosk {grammars=/tmp/file.xml}"
+                parts = app_args.split(" detect:")
+                if len(parts) == 2:
+                    audio_file = parts[0]
+                    detect_params = "detect:" + parts[1]
 
-            return result.getBody()
+                    # Execute detect_speech FIRST (application dialplan via bgapi)
+                    detect_cmd = f"uuid_broadcast {uuid} gentones::%(500,0,350) aleg"
+                    self._execute_esl_command(detect_cmd)  # Prime the channel
+
+                    logger.warning(
+                        f"⚠️  play_and_detect_speech not directly callable from ESL API. "
+                        f"Using separate detect_speech + uuid_broadcast as workaround"
+                    )
+
+                    # Fallback: just play audio
+                    play_cmd = f"uuid_broadcast {uuid} {audio_file} aleg"
+                    return self._execute_esl_command(play_cmd)
+
+            return None
 
         except Exception as e:
-            logger.error(f"ESL command error: {e}")
+            logger.error(f"ESL sendmsg error: {e}")
             return None
 
     def _hangup_call(self, call_uuid: str, status: CallStatus = CallStatus.COMPLETED):
@@ -3684,15 +4529,17 @@ class RobotFreeSWITCH:
         self,
         call_uuid: str,
         file_path: str,
-        stereo: bool = False
+        stereo: bool = False,
+        client_only: bool = False
     ) -> bool:
         """
         Start recording audio from call (non-blocking)
 
         Args:
             call_uuid: Call UUID
-            file_path: Output WAV file path
-            stereo: Enable stereo recording (left=client, right=robot)
+            file_path: Output file path (RAW or WAV)
+            stereo: Enable stereo recording (left=client, right=robot) - PHASE 1 AMD
+            client_only: Record ONLY client audio (read leg) - PHASE 2 PLAYING
 
         Returns:
             True if recording started successfully
@@ -3700,14 +4547,27 @@ class RobotFreeSWITCH:
         short_uuid = call_uuid[:8]
 
         try:
-            # Set STEREO if requested (MUST be before uuid_record)
-            if stereo:
+            if client_only:
+                # PHASE 2: Record MONO client audio only (read leg)
+                # No STEREO, direct capture of inbound stream (from client)
+                # read = FreeSWITCH RECEIVES from client (client speaking)
+                # This prevents robot audio from "bleeding" into recording
+                logger.info(f"[{short_uuid}] Starting MONO recording (client audio only, read leg)")
+                cmd = f"uuid_record {call_uuid} start {file_path} read"
+
+            elif stereo:
+                # PHASE 1 AMD: Record STEREO (both legs)
+                # Set STEREO (MUST be before uuid_record)
                 stereo_cmd = f"uuid_setvar {call_uuid} RECORD_STEREO true"
                 stereo_result = self._execute_esl_command(stereo_cmd)
                 logger.debug(f"[{short_uuid}] STEREO enabled: {stereo_result}")
+                cmd = f"uuid_record {call_uuid} start {file_path}"
+
+            else:
+                # Default: MONO both legs mixed
+                cmd = f"uuid_record {call_uuid} start {file_path}"
 
             # Start recording (non-blocking)
-            cmd = f"uuid_record {call_uuid} start {file_path}"
             result = self._execute_esl_command(cmd)
 
             if not result or "+OK" not in result:
@@ -3716,9 +4576,9 @@ class RobotFreeSWITCH:
                 )
                 return False
 
+            mode = "MONO client-only" if client_only else ("STEREO" if stereo else "MONO mixed")
             logger.debug(
-                f"[{short_uuid}] Recording started: {file_path} "
-                f"(stereo: {stereo})"
+                f"[{short_uuid}] Recording started: {file_path} (mode: {mode})"
             )
             return True
 
