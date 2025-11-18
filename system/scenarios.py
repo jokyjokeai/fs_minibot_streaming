@@ -280,7 +280,7 @@ class ScenarioManager:
 
     def get_step_config(self, scenario: Dict, step_name: str) -> Optional[Dict]:
         """
-        Récupère la configuration d'une étape.
+        Récupère la configuration d'une étape (case-insensitive).
 
         Args:
             scenario: Scénario chargé
@@ -289,10 +289,22 @@ class ScenarioManager:
         Returns:
             Dict config de l'étape ou None
         """
-        if "steps" not in scenario or step_name not in scenario["steps"]:
+        if "steps" not in scenario:
             return None
 
-        return scenario["steps"][step_name]
+        steps = scenario["steps"]
+
+        # Try exact match first
+        if step_name in steps:
+            return steps[step_name]
+
+        # Try case-insensitive match
+        step_name_lower = step_name.lower()
+        for key in steps.keys():
+            if key.lower() == step_name_lower:
+                return steps[key]
+
+        return None
 
     def get_next_step(
         self,
@@ -451,7 +463,11 @@ class ScenarioManager:
             >>> print(theme_file)
             objections_finance
         """
-        # Essayer d'abord "theme_file" (nouveau système)
+        # Essayer d'abord "metadata.theme_file" (nouveau système v3.0)
+        if "metadata" in scenario and "theme_file" in scenario["metadata"]:
+            return scenario["metadata"]["theme_file"]
+
+        # Fallback: "theme_file" direct (rétrocompatibilité)
         if "theme_file" in scenario:
             return scenario["theme_file"]
 

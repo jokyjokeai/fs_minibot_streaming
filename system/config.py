@@ -194,6 +194,19 @@ BARGE_IN_THRESHOLD = 1.5
 # Robot coupe pas direct, attend 0.3s pour effet naturel
 BARGE_IN_SMOOTH_DELAY = 0.3
 
+# Fade out audio duration (pour transition naturelle)
+# R�duction progressive du volume avant coupure (500ms)
+BARGE_IN_FADE_OUT_DURATION = 0.5
+
+# Breathing room apr�s speech_end (pause naturelle)
+# Petit d�lai avant Phase 3 pour effet humain (100ms)
+BARGE_IN_BREATHING_ROOM = 0.1
+
+# Minimum words for barge-in detection
+# Client doit dire au moins 5 mots pour d�clencher barge-in
+# (�vite faux positifs sur "oui", "ok", "all�", etc.)
+MIN_WORDS_FOR_BARGE_IN = 5
+
 # Dur�e minimale de parole pour d�tecter "start speech" (en secondes)
 # Evite faux positifs (bruits, respirations courtes)
 PLAYING_START_SPEECH_DURATION = 0.3
@@ -212,7 +225,7 @@ VAD_AGGRESSIVENESS = 3
 
 # Seuil de silence pour d�tecter fin de parole client (en secondes)
 # Client parle � silence 0.6s � consid�r� comme "fini de parler"
-SILENCE_THRESHOLD = 0.6
+SILENCE_THRESHOLD = 1.5  # Changed from 0.6s to 1.5s for better silence detection
 
 # Timeout max d'attente pour r�ponse client (en secondes)
 WAITING_TIMEOUT = 10.0
@@ -543,7 +556,7 @@ STREAMING_ASR_PORT = int(os.getenv("STREAMING_ASR_PORT", "8080"))
 
 # VAD configuration for streaming ASR
 VAD_AGGRESSIVENESS = 2  # 0-3, 2 = balanced quality/reactivity
-VAD_SILENCE_THRESHOLD_MS = 800  # 800ms silence = end of speech
+VAD_SILENCE_THRESHOLD_MS = 600  # 600ms silence = end of speech (optimisé pour réactivité)
 VAD_SPEECH_START_THRESHOLD_MS = 500  # 500ms speech = start detected
 
 # PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
@@ -586,6 +599,9 @@ class Config:
     BARGE_IN_ENABLED = BARGE_IN_ENABLED
     BARGE_IN_THRESHOLD = BARGE_IN_THRESHOLD
     BARGE_IN_SMOOTH_DELAY = BARGE_IN_SMOOTH_DELAY
+    BARGE_IN_FADE_OUT_DURATION = BARGE_IN_FADE_OUT_DURATION
+    BARGE_IN_BREATHING_ROOM = BARGE_IN_BREATHING_ROOM
+    MIN_WORDS_FOR_BARGE_IN = MIN_WORDS_FOR_BARGE_IN
     PLAYING_START_SPEECH_DURATION = PLAYING_START_SPEECH_DURATION
     PLAYING_BG_TRANSCRIBE_TRIGGER = PLAYING_BG_TRANSCRIBE_TRIGGER
     VAD_AGGRESSIVENESS = VAD_AGGRESSIVENESS

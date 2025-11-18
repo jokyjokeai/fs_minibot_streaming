@@ -210,12 +210,28 @@ class ColoredLogger:
 
     # ========== PHASE 2: PLAYING ==========
 
-    def phase2_start(self, audio_file: str, uuid: Optional[str] = None):
+    def phase2_start(
+        self,
+        audio_file: str,
+        uuid: Optional[str] = None,
+        duration_seconds: Optional[float] = None
+    ):
         """
         Log PHASE 2 START with futuristic panel (GREEN)
+
+        Args:
+            audio_file: Audio file name
+            uuid: Short UUID (8 chars)
+            duration_seconds: Audio duration in seconds (for verification)
         """
+        # Format message with duration if available
+        if duration_seconds:
+            message = f"Playing: {audio_file} (duration: {duration_seconds:.2f}s) - Barge-in: ENABLED"
+        else:
+            message = f"Playing: {audio_file} - Barge-in: ENABLED"
+
         self._log_panel(
-            message=f"Playing: {audio_file} - Barge-in: ENABLED",
+            message=message,
             title="PHASE 2: PLAYING START",
             color=self.COLORS["phase2_border"],
             box_style=self.BOX_STYLES["phase2"],

@@ -1,25 +1,17 @@
 """
-Streaming ASR Service - MiniBotPanel v3
+Streaming ASR Service V3 - SIMPLIFIÉ
 
-Service de transcription audio temps réel avec détection d'activité vocale (VAD).
-Adapté de live_asr_vad.py pour FreeSWITCH.
+Changements V3:
+- ❌ SUPPRIMÉ reset_recognizer() (causait crash Vosk)
+- ✅ AJOUTÉ durée dans événements speech_end
+- ✅ AJOUTÉ durée dans événements transcription
+- ✅ Gestion événements simplifiée
 
 Architecture:
 - Serveur WebSocket qui reçoit audio depuis FreeSWITCH
 - WebRTC VAD pour détection parole/silence
 - Vosk ASR pour transcription streaming
-- Callbacks pour barge-in et IA Freestyle
-
-Utilisation:
-    from system.services.streaming_asr import StreamingASR
-
-    asr = StreamingASR()
-
-    # Démarrer serveur
-    await asr.start_server()
-
-    # Register callback pour un call
-    asr.register_callback(call_uuid, callback_function)
+- Callbacks pour barge-in avec durée incluse
 """
 
 import asyncio
@@ -47,21 +39,21 @@ try:
 except ImportError:
     VOSK_AVAILABLE = False
 
-from system.config import config
+from system.config_v3 import config
 from system.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class StreamingASR:
+class StreamingASRV3:
     """
-    Service de transcription streaming avec VAD pour FreeSWITCH.
-    Gère le barge-in et la détection de silence.
+    Service de transcription streaming V3 avec VAD pour FreeSWITCH.
+    Version simplifiée sans reset_recognizer, avec durée de parole incluse.
     """
 
     def __init__(self):
-        """Initialise le service streaming ASR"""
-        logger.info("Initializing StreamingASR...")
+        """Initialise le service streaming ASR V3"""
+        logger.info("🚀 Initializing StreamingASR V3...")
 
         self.is_available = WEBSOCKETS_AVAILABLE and VAD_AVAILABLE and VOSK_AVAILABLE
 
@@ -73,7 +65,7 @@ class StreamingASR:
                 missing.append("webrtcvad")
             if not VOSK_AVAILABLE:
                 missing.append("vosk")
-            logger.warning(f"🚫 StreamingASR not available - missing: {', '.join(missing)}")
+            logger.warning(f"🚫 StreamingASR V3 not available - missing: {', '.join(missing)}")
             return
 
         # Configuration VAD
@@ -82,9 +74,9 @@ class StreamingASR:
         self.frame_duration_ms = 30  # 30ms frames
         self.frame_size = int(self.sample_rate * self.frame_duration_ms / 1000)
 
-        # Seuils (lus depuis config pour cohérence)
-        self.silence_threshold = config.VAD_SILENCE_THRESHOLD_MS / 1000.0  # 800ms → 0.8s
-        self.speech_start_threshold = config.VAD_SPEECH_START_THRESHOLD_MS / 1000.0  # 500ms → 0.5s
+        # Seuils V3 (depuis config_v3)
+        self.silence_threshold = config.VAD_SILENCE_THRESHOLD  # 0.8s
+        self.speech_start_threshold = config.VAD_SPEECH_START_THRESHOLD  # 0.5s
 
         # Modèle Vosk
         self.model = None
@@ -111,7 +103,7 @@ class StreamingASR:
         # Charger modèle Vosk
         self._load_vosk_model()
 
-        logger.info(f"{'✅' if self.is_available else '❌'} StreamingASR initialized")
+        logger.info(f"{'✅' if self.is_available else '❌'} StreamingASR V3 initialized")
 
     def _load_vosk_model(self):
         """Charge le modèle Vosk"""
@@ -135,17 +127,20 @@ class StreamingASR:
             logger.error(f"❌ Failed to load Vosk model: {e}")
             self.is_available = False
 
-    async def start_server(self, host: str = "127.0.0.1", port: int = 8080):
+    async def start_server(self, host: str = None, port: int = None):
         """
         Démarre le serveur WebSocket pour recevoir audio depuis FreeSWITCH
 
         Args:
-            host: Host à écouter
-            port: Port à écouter
+            host: Host à écouter (défaut: config.WEBSOCKET_HOST)
+            port: Port à écouter (défaut: config.WEBSOCKET_PORT)
         """
         if not self.is_available:
             logger.error("🚫 Cannot start server - dependencies not available")
             return
+
+        host = host or config.WEBSOCKET_HOST
+        port = port or config.WEBSOCKET_PORT
 
         try:
             logger.info(f"🌐 Starting WebSocket server on {host}:{port}")
@@ -173,7 +168,6 @@ class StreamingASR:
         call_uuid = None
         try:
             # Extraire call_uuid du path: /stream/{UUID}
-            # websockets 15+ utilise websocket.request.path
             path = websocket.request.path if hasattr(websocket, 'request') else websocket.path
             call_uuid = path.split('/')[-1]
             logger.info(f"📞 New audio stream for call: {call_uuid[:8]}")
@@ -186,18 +180,34 @@ class StreamingASR:
 
             async for message in websocket:
                 if isinstance(message, bytes):
-                    # Audio brut (SLIN16, 16kHz, mono, 16-bit)
+                    # Audio brut (SLIN16, 16kHz, stereo ou mono, 16-bit)
                     audio_buffer += message
 
-                    # Traiter par frames de 30ms
-                    bytes_per_frame = self.frame_size * 2  # 2 bytes par sample
+                    # DEBUG: Log audio reception
+                    if not hasattr(self, f'_audio_received_{call_uuid}'):
+                        setattr(self, f'_audio_received_{call_uuid}', True)
+                        logger.info(f"🎤 [{call_uuid[:8]}] First audio chunk received: {len(message)} bytes")
+
+                    # V3: Traiter l'audio en MONO (SMBF_READ_STREAM)
+                    # Le mode "mono" de mod_audio_stream envoie seulement le READ stream
+                    # = audio REÇU par FreeSWITCH (client qui parle)
+                    #
+                    # Format: SLIN16, 16kHz, mono, 16-bit
+                    # = 2 bytes par sample
+                    bytes_per_sample = 2
+                    bytes_per_frame = self.frame_size * bytes_per_sample
+
+                    # DEBUG: Log frame calculations once
+                    if not hasattr(self, f'_frame_calc_logged_{call_uuid}'):
+                        setattr(self, f'_frame_calc_logged_{call_uuid}', True)
+                        logger.info(f"📊 [{call_uuid[:8]}] MONO mode: frame_size={self.frame_size}, bytes_per_frame={bytes_per_frame}, buffer_size={len(audio_buffer)}")
 
                     while len(audio_buffer) >= bytes_per_frame:
-                        frame_bytes = audio_buffer[:bytes_per_frame]
+                        mono_frame = audio_buffer[:bytes_per_frame]
                         audio_buffer = audio_buffer[bytes_per_frame:]
 
-                        # Traitement temps réel
-                        await self._process_audio_frame(call_uuid, frame_bytes)
+                        # Traitement temps réel avec audio MONO du client (READ stream)
+                        await self._process_audio_frame(call_uuid, mono_frame)
 
         except websockets.exceptions.ConnectionClosed:
             if call_uuid:
@@ -219,6 +229,7 @@ class StreamingASR:
             recognizer.SetWords(True)
             self.recognizers[call_uuid] = recognizer
 
+        # V3: Ajout de speech_start_time pour calcul durée
         self.active_streams[call_uuid] = {
             "start_time": time.time(),
             "frame_count": 0,
@@ -227,6 +238,7 @@ class StreamingASR:
             "current_speech_duration": 0.0,
             "current_silence_duration": 0.0,
             "in_speech": False,
+            "speech_start_time": 0.0,  # ← NOUVEAU V3
             "partial_transcription": "",
             "final_transcription": "",
             "last_speech_time": 0.0
@@ -269,6 +281,7 @@ class StreamingASR:
                     # Début de parole
                     if stream_info["current_speech_duration"] >= self.speech_start_threshold:
                         stream_info["in_speech"] = True
+                        stream_info["speech_start_time"] = time.time()  # ← V3: Enregistrer temps début
                         logger.debug(f"🗣️ Speech START detected: {call_uuid[:8]}")
                         await self._notify_speech_start(call_uuid)
 
@@ -283,22 +296,15 @@ class StreamingASR:
                     # Vérifier si fin de parole
                     if stream_info["current_silence_duration"] >= self.silence_threshold:
                         stream_info["in_speech"] = False
-                        logger.info(f"🤐 Speech END detected: {call_uuid[:8]} (silence: {stream_info['current_silence_duration']:.1f}s, threshold: {self.silence_threshold}s)")
-                        await self._notify_speech_end(call_uuid)
-                    else:
-                        # Log progression du silence
-                        if stream_info["current_silence_duration"] % 0.5 < frame_duration_s:  # Log tous les 0.5s
-                            logger.debug(f"⏱️ Silence accumulating: {call_uuid[:8]} ({stream_info['current_silence_duration']:.1f}s / {self.silence_threshold}s)")
-                else:
-                    # NOUVEAU: Détecter paroles courtes (< 500ms) qui ne triggent pas in_speech
-                    # Si on a reçu une transcription FINAL et qu'on a du silence suffisant
-                    if stream_info.get("final_transcription") and stream_info["current_silence_duration"] >= self.silence_threshold:
-                        logger.info(
-                            f"🤐 Speech END detected (short utterance): {call_uuid[:8]} "
-                            f"(transcription: '{stream_info['final_transcription']}')"
-                        )
-                        await self._notify_speech_end(call_uuid)
-                        stream_info["final_transcription"] = None  # Reset pour éviter double détection
+
+                        # V3: Calculer durée totale de la parole
+                        speech_duration = time.time() - stream_info["speech_start_time"]
+
+                        logger.info(f"🤐 Speech END detected: {call_uuid[:8]} (durée: {speech_duration:.2f}s, silence: {stream_info['current_silence_duration']:.1f}s)")
+                        await self._notify_speech_end(call_uuid, speech_duration)
+
+                        # V3 FIX: Réinitialiser speech_start_time pour éviter accumulation
+                        stream_info["speech_start_time"] = 0.0
 
             # ASR - Transcription streaming
             if recognizer.AcceptWaveform(frame_bytes):
@@ -306,26 +312,22 @@ class StreamingASR:
                 result = json.loads(recognizer.Result())
                 text = result.get("text", "").strip()
 
-                # IMPORTANT: Envoyer le FINAL même si text est vide!
-                # Sinon Phase 3 attend indéfiniment un FINAL qui ne viendra jamais
-                stream_info["final_transcription"] = text if text else None
-
                 if text:
+                    stream_info["final_transcription"] = text
                     self.stats["transcriptions"] += 1
 
-                latency_ms = (time.time() - start_time) * 1000
-                if text:
+                    latency_ms = (time.time() - start_time) * 1000
                     self._update_latency_stats(latency_ms)
 
-                # Log avec info sur in_speech state
-                in_speech_state = "IN_SPEECH" if stream_info["in_speech"] else "SILENCE"
-                if text:
-                    logger.info(f"📝 FINAL transcription [{call_uuid[:8]}]: '{text}' ({latency_ms:.1f}ms) [VAD state: {in_speech_state}, silence_duration: {stream_info['current_silence_duration']:.1f}s]")
-                else:
-                    logger.debug(f"📝 FINAL transcription [{call_uuid[:8]}]: (empty - Vosk couldn't transcribe) [VAD state: {in_speech_state}]")
+                    # V3: Calculer durée de parole pour transcription
+                    speech_duration = 0.0
+                    if stream_info["speech_start_time"] > 0:
+                        speech_duration = time.time() - stream_info["speech_start_time"]
 
-                # Envoyer callback FINAL (même si vide)
-                await self._notify_transcription(call_uuid, text, "final", latency_ms)
+                    in_speech_state = "IN_SPEECH" if stream_info["in_speech"] else "SILENCE"
+                    logger.info(f"📝 FINAL transcription [{call_uuid[:8]}]: '{text}' (durée: {speech_duration:.2f}s, latency: {latency_ms:.1f}ms) [VAD state: {in_speech_state}]")
+
+                    await self._notify_transcription(call_uuid, text, "final", speech_duration, latency_ms)
 
             else:
                 # Transcription partielle
@@ -336,8 +338,14 @@ class StreamingASR:
                     stream_info["partial_transcription"] = partial_text
 
                     latency_ms = (time.time() - start_time) * 1000
-                    logger.debug(f"📝 PARTIAL transcription [{call_uuid[:8]}]: '{partial_text}'")
-                    await self._notify_transcription(call_uuid, partial_text, "partial", latency_ms)
+
+                    # V3: Durée partielle
+                    speech_duration = 0.0
+                    if stream_info["speech_start_time"] > 0:
+                        speech_duration = time.time() - stream_info["speech_start_time"]
+
+                    logger.debug(f"📝 PARTIAL transcription [{call_uuid[:8]}]: '{partial_text}' (durée: {speech_duration:.2f}s)")
+                    await self._notify_transcription(call_uuid, partial_text, "partial", speech_duration, latency_ms)
 
         except Exception as e:
             logger.error(f"❌ Error processing frame for {call_uuid[:8]}: {e}")
@@ -351,12 +359,21 @@ class StreamingASR:
             self.stats["avg_latency_ms"] = self.stats["avg_latency_ms"] * 0.9 + latency_ms * 0.1
 
     async def _notify_speech_start(self, call_uuid: str):
-        """Notifie début de parole (pour barge-in)"""
+        """
+        V3: Notifie début de parole (pour barge-in)
+
+        Événement envoyé:
+        {
+            "type": "speech_start",
+            "call_uuid": str,
+            "timestamp": float
+        }
+        """
         if call_uuid in self.callbacks:
             try:
                 callback = self.callbacks[call_uuid]
                 event_data = {
-                    "event": "speech_start",
+                    "type": "speech_start",  # V3: type au lieu de event
                     "call_uuid": call_uuid,
                     "timestamp": time.time()
                 }
@@ -369,18 +386,27 @@ class StreamingASR:
             except Exception as e:
                 logger.error(f"❌ Callback error (speech_start): {e}")
 
-    async def _notify_speech_end(self, call_uuid: str):
-        """Notifie fin de parole"""
+    async def _notify_speech_end(self, call_uuid: str, duration: float):
+        """
+        V3: Notifie fin de parole AVEC durée incluse
+
+        Événement envoyé:
+        {
+            "type": "speech_end",
+            "call_uuid": str,
+            "duration": float,  ← NOUVEAU V3
+            "timestamp": float
+        }
+        """
         if call_uuid in self.callbacks:
             try:
                 callback = self.callbacks[call_uuid]
-                stream_info = self.active_streams[call_uuid]
 
                 event_data = {
-                    "event": "speech_end",
+                    "type": "speech_end",  # V3: type au lieu de event
                     "call_uuid": call_uuid,
-                    "timestamp": time.time(),
-                    "silence_duration": stream_info["current_silence_duration"]
+                    "duration": duration,  # ← NOUVEAU V3
+                    "timestamp": time.time()
                 }
 
                 if asyncio.iscoroutinefunction(callback):
@@ -391,21 +417,31 @@ class StreamingASR:
             except Exception as e:
                 logger.error(f"❌ Callback error (speech_end): {e}")
 
-    async def _notify_transcription(self, call_uuid: str, text: str, transcription_type: str, latency_ms: float):
-        """Notifie transcription"""
-        logger.debug(f"🔔 [{call_uuid[:8]}] _notify_transcription called: type={transcription_type}, text='{text[:50]}'")
-        logger.debug(f"🔔 [{call_uuid[:8]}] Registered callbacks: {list(self.callbacks.keys())}")
+    async def _notify_transcription(self, call_uuid: str, text: str, transcription_type: str, duration: float, latency_ms: float):
+        """
+        V3: Notifie transcription AVEC durée incluse
 
+        Événement envoyé:
+        {
+            "type": "transcription",
+            "call_uuid": str,
+            "text": str,
+            "transcription_type": str,  (final/partial)
+            "duration": float,  ← NOUVEAU V3
+            "latency_ms": float,
+            "timestamp": float
+        }
+        """
         if call_uuid in self.callbacks:
             try:
                 callback = self.callbacks[call_uuid]
-                logger.info(f"🔔 [{call_uuid[:8]}] Calling transcription callback (type={transcription_type})")
 
                 event_data = {
-                    "event": "transcription",
+                    "type": "transcription",  # V3: type au lieu de event
                     "call_uuid": call_uuid,
                     "text": text,
-                    "type": transcription_type,  # "final" ou "partial"
+                    "transcription_type": transcription_type,  # V3: transcription_type au lieu de type
+                    "duration": duration,  # ← NOUVEAU V3
                     "latency_ms": latency_ms,
                     "timestamp": time.time()
                 }
@@ -416,9 +452,7 @@ class StreamingASR:
                     callback(event_data)
 
             except Exception as e:
-                logger.error(f"❌ Callback error (transcription): {e}", exc_info=True)
-        else:
-            logger.warning(f"⚠️ [{call_uuid[:8]}] No callback registered for transcription (UUID: {call_uuid})")
+                logger.error(f"❌ Callback error (transcription): {e}")
 
     def register_callback(self, call_uuid: str, callback: Callable):
         """
@@ -428,75 +462,41 @@ class StreamingASR:
             call_uuid: UUID de l'appel
             callback: Fonction à appeler (peut être async)
         """
-        logger.info(f"🔧 Registering callback for UUID: {call_uuid} (short: {call_uuid[:8]})")
-        logger.info(f"🔧 Callback function: {callback.__name__ if hasattr(callback, '__name__') else callback}")
-        logger.info(f"🔧 Current callbacks before: {list(self.callbacks.keys())}")
-
         self.callbacks[call_uuid] = callback
-
-        logger.info(f"✅ Callback registered for {call_uuid[:8]}")
-        logger.info(f"🔧 Current callbacks after: {list(self.callbacks.keys())}")
+        logger.debug(f"✅ Callback registered for {call_uuid[:8]}")
 
     def unregister_callback(self, call_uuid: str):
         """Désenregistre callback"""
-        logger.info(f"🔧 Unregistering callback for UUID: {call_uuid} (short: {call_uuid[:8]})")
-        logger.info(f"🔧 Current callbacks before: {list(self.callbacks.keys())}")
-
         if call_uuid in self.callbacks:
             del self.callbacks[call_uuid]
-            logger.info(f"❌ Callback unregistered for {call_uuid[:8]}")
-        else:
-            logger.warning(f"⚠️ No callback to unregister for {call_uuid[:8]}")
+            logger.debug(f"❌ Callback unregistered for {call_uuid[:8]}")
 
-        logger.info(f"🔧 Current callbacks after: {list(self.callbacks.keys())}")
-
-    def reset_recognizer(self, call_uuid: str):
-        """
-        Réinitialise le recognizer Vosk pour vider le buffer audio
-
-        Utilisé après un barge-in pour éviter l'accumulation de transcriptions partielles.
-        Basé sur la méthode Reset() de KaldiRecognizer (vosk-api).
-
-        Args:
-            call_uuid: UUID de l'appel
-        """
-        if call_uuid in self.recognizers:
-            try:
-                self.recognizers[call_uuid].Reset()
-                logger.info(f"[{call_uuid[:8]}] 🔄 Vosk recognizer reset (buffer cleared)")
-
-                # Réinitialiser aussi les transcriptions partielles dans stream_info
-                if call_uuid in self.active_streams:
-                    self.active_streams[call_uuid]["partial_transcription"] = ""
-                    self.active_streams[call_uuid]["final_transcription"] = ""
-
-            except Exception as e:
-                logger.error(f"[{call_uuid[:8]}] ❌ Failed to reset recognizer: {e}")
-        else:
-            logger.warning(f"[{call_uuid[:8]}] ⚠️ Cannot reset - recognizer not found")
+    # ============================================================================
+    # V3: reset_recognizer() SUPPRIMÉ
+    # ============================================================================
+    # ANCIENNE MÉTHODE V2 (CAUSAIT CRASH):
+    # def reset_recognizer(self, call_uuid: str):
+    #     self.recognizers[call_uuid].Reset()  # ❌ corrupted double-linked list
+    #
+    # RAISON SUPPRESSION:
+    # - Vosk ne supporte pas Reset() pendant traitement audio actif
+    # - Causait crash "corrupted double-linked list"
+    # - Pas nécessaire: Vosk se nettoie automatiquement
+    # ============================================================================
 
     def _cleanup_stream(self, call_uuid: str):
         """Nettoie un stream"""
-        logger.info(f"🧹 [{call_uuid[:8]}] Cleaning up WebSocket stream")
-
         if call_uuid in self.active_streams:
             del self.active_streams[call_uuid]
-            logger.debug(f"🧹 [{call_uuid[:8]}] Removed active_stream")
 
         if call_uuid in self.recognizers:
             del self.recognizers[call_uuid]
-            logger.debug(f"🧹 [{call_uuid[:8]}] Removed recognizer")
 
-        # ❌ NE PAS supprimer le callback automatiquement !
-        # Le callback est géré explicitement par register/unregister
-        # Sinon, quand une connexion WebSocket se ferme (ex: AMD),
-        # elle supprime le callback de la phase suivante (Phase 2/3)
-        #
-        # if call_uuid in self.callbacks:
-        #     del self.callbacks[call_uuid]
+        if call_uuid in self.callbacks:
+            del self.callbacks[call_uuid]
 
         self.stats["active_streams"] = len(self.active_streams)
-        logger.info(f"🧹 [{call_uuid[:8]}] Stream cleanup completed (callback preserved)")
+        logger.debug(f"🧹 Cleaned up stream for {call_uuid[:8]}")
 
     def get_stats(self) -> Dict[str, Any]:
         """Retourne statistiques"""
@@ -507,14 +507,14 @@ class StreamingASR:
         }
 
 
-# Instance globale
-streaming_asr = StreamingASR()
+# Instance globale V3
+streaming_asr_v3 = StreamingASRV3()
 
 
-# Fonction helper pour démarrer le serveur
-async def start_streaming_asr_server():
-    """Démarre le serveur ASR streaming"""
-    if streaming_asr.is_available:
-        await streaming_asr.start_server()
+# Fonction helper pour démarrer le serveur V3
+async def start_streaming_asr_server_v3():
+    """Démarre le serveur ASR streaming V3"""
+    if streaming_asr_v3.is_available:
+        await streaming_asr_v3.start_server()
     else:
-        logger.error("❌ Cannot start streaming ASR server - dependencies not available")
+        logger.error("❌ Cannot start streaming ASR V3 server - dependencies not available")

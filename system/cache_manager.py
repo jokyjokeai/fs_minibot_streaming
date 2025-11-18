@@ -7,7 +7,7 @@ Système de cache intelligent centralisé pour optimiser les performances.
 Fonctionnalités:
 - Cache scénarios en RAM (évite lecture disque répétée)
 - Cache objections filtrées par thématique
-- Pré-chargement modèles AI (Ollama, ASR)
+- Pré-chargement modèles AI (Faster-Whisper, Vosk)
 - Cache TTL configurable
 - Statistiques temps réel
 - Invalidation sélective
@@ -68,8 +68,10 @@ class CacheManager:
             "scenario_ttl": 3600,  # 1h (scénarios changent peu)
             "objections_ttl": 14400,  # 4h (pour campagnes longues 3h+)
             "models_ttl": 0,  # Infini (modèles restent en mémoire)
+            "audio_duration_ttl": 3600,  # 1h (fichiers audio changent rarement)
             "max_scenarios": 50,  # Max scénarios en cache
             "max_objections": 20,  # Max thématiques objections
+            "max_audio_durations": 100,  # Max fichiers audio en cache
             "enable_stats": True
         }
 
@@ -77,10 +79,12 @@ class CacheManager:
         self._scenarios_cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()
         self._objections_cache: OrderedDict[str, List[Any]] = OrderedDict()
         self._models_cache: Dict[str, Any] = {}  # Models pré-chargés
+        self._audio_duration_cache: OrderedDict[str, float] = OrderedDict()  # Path → duration (seconds)
 
         # Metadata (timestamps, hits, etc.)
         self._scenarios_meta: Dict[str, Dict[str, Any]] = {}
         self._objections_meta: Dict[str, Dict[str, Any]] = {}
+        self._audio_duration_meta: Dict[str, Dict[str, Any]] = {}
 
         # Statistics
         self.stats = {
@@ -99,6 +103,12 @@ class CacheManager:
             "models": {
                 "preloaded": [],
                 "cache_size": 0
+            },
+            "audio_durations": {
+                "hits": 0,
+                "misses": 0,
+                "total_requests": 0,
+                "cache_size": 0
             }
         }
 
@@ -106,6 +116,7 @@ class CacheManager:
         self._scenarios_lock = threading.Lock()
         self._objections_lock = threading.Lock()
         self._models_lock = threading.Lock()
+        self._audio_duration_lock = threading.Lock()
 
         # Marquer comme initialisé
         CacheManager._initialized = True
@@ -330,10 +341,10 @@ class CacheManager:
 
     def register_model(self, model_name: str, model_instance: Any):
         """
-        Enregistre un modèle pré-chargé (Ollama, ASR, etc.).
+        Enregistre un modèle pré-chargé (Faster-Whisper, Vosk, etc.).
 
         Args:
-            model_name: Nom du modèle (ex: "ollama_mistral", "vosk_asr")
+            model_name: Nom du modèle (ex: "faster_whisper", "vosk_asr")
             model_instance: Instance du modèle
         """
         with self._models_lock:
@@ -369,6 +380,101 @@ class CacheManager:
                 self.stats["models"]["cache_size"] = len(self._models_cache)
                 logger.info(f"Model UNREGISTERED: '{model_name}'")
 
+    # ========== AUDIO DURATION CACHE ==========
+
+    def get_audio_duration(self, audio_path: str) -> Optional[float]:
+        """
+        Récupère la durée d'un fichier audio du cache.
+
+        Args:
+            audio_path: Chemin complet vers le fichier audio
+
+        Returns:
+            Durée en secondes ou None si pas en cache/expiré
+        """
+        with self._audio_duration_lock:
+            self.stats["audio_durations"]["total_requests"] += 1
+
+            if audio_path not in self._audio_duration_cache:
+                self.stats["audio_durations"]["misses"] += 1
+                return None
+
+            # Vérifier TTL
+            meta = self._audio_duration_meta.get(audio_path, {})
+            cached_at = meta.get("cached_at", 0)
+            ttl = self.config["audio_duration_ttl"]
+
+            if ttl > 0 and (time.time() - cached_at) > ttl:
+                # Expiré
+                logger.debug(f"Cache EXPIRED: audio duration '{audio_path}'")
+                del self._audio_duration_cache[audio_path]
+                del self._audio_duration_meta[audio_path]
+                self.stats["audio_durations"]["misses"] += 1
+                return None
+
+            # Hit
+            self.stats["audio_durations"]["hits"] += 1
+            meta["last_accessed"] = time.time()
+            meta["access_count"] = meta.get("access_count", 0) + 1
+
+            # LRU: move to end
+            self._audio_duration_cache.move_to_end(audio_path)
+
+            duration = self._audio_duration_cache[audio_path]
+            logger.debug(f"Cache HIT: audio duration '{audio_path}' = {duration:.2f}s")
+            return duration
+
+    def cache_audio_duration(self, audio_path: str, duration: float):
+        """
+        Met en cache la durée d'un fichier audio.
+
+        Args:
+            audio_path: Chemin complet vers le fichier audio
+            duration: Durée en secondes
+        """
+        with self._audio_duration_lock:
+            # LRU eviction si nécessaire
+            max_size = self.config["max_audio_durations"]
+            if len(self._audio_duration_cache) >= max_size:
+                # Supprimer le plus ancien (FIFO car OrderedDict)
+                oldest_key = next(iter(self._audio_duration_cache))
+                logger.debug(f"Cache EVICT: audio duration '{oldest_key}' (LRU)")
+                del self._audio_duration_cache[oldest_key]
+                del self._audio_duration_meta[oldest_key]
+
+            # Ajouter au cache
+            self._audio_duration_cache[audio_path] = duration
+            self._audio_duration_meta[audio_path] = {
+                "cached_at": time.time(),
+                "last_accessed": time.time(),
+                "access_count": 0,
+                "duration_seconds": duration
+            }
+
+            self.stats["audio_durations"]["cache_size"] = len(self._audio_duration_cache)
+            logger.debug(
+                f"Cache SET: audio duration '{audio_path}' = {duration:.2f}s "
+                f"(size: {len(self._audio_duration_cache)}/{max_size})"
+            )
+
+    def invalidate_audio_duration(self, audio_path: str):
+        """Invalide la durée d'un fichier audio du cache"""
+        with self._audio_duration_lock:
+            if audio_path in self._audio_duration_cache:
+                del self._audio_duration_cache[audio_path]
+                del self._audio_duration_meta[audio_path]
+                self.stats["audio_durations"]["cache_size"] = len(self._audio_duration_cache)
+                logger.info(f"Cache INVALIDATE: audio duration '{audio_path}'")
+
+    def clear_audio_durations(self):
+        """Vide tout le cache des durées audio"""
+        with self._audio_duration_lock:
+            count = len(self._audio_duration_cache)
+            self._audio_duration_cache.clear()
+            self._audio_duration_meta.clear()
+            self.stats["audio_durations"]["cache_size"] = 0
+            logger.info(f"Cache CLEAR: {count} audio durations removed")
+
     # ========== STATISTICS & MONITORING ==========
 
     def get_stats(self) -> Dict[str, Any]:
@@ -378,7 +484,7 @@ class CacheManager:
         Returns:
             Dict avec stats détaillées
         """
-        with self._scenarios_lock, self._objections_lock, self._models_lock:
+        with self._scenarios_lock, self._objections_lock, self._models_lock, self._audio_duration_lock:
             # Calcul hit rates
             scenarios_total = self.stats["scenarios"]["total_requests"]
             scenarios_hit_rate = (
@@ -390,6 +496,12 @@ class CacheManager:
             objections_hit_rate = (
                 (self.stats["objections"]["hits"] / objections_total * 100)
                 if objections_total > 0 else 0
+            )
+
+            audio_durations_total = self.stats["audio_durations"]["total_requests"]
+            audio_durations_hit_rate = (
+                (self.stats["audio_durations"]["hits"] / audio_durations_total * 100)
+                if audio_durations_total > 0 else 0
             )
 
             return {
@@ -405,6 +517,11 @@ class CacheManager:
                 },
                 "models": {
                     **self.stats["models"]
+                },
+                "audio_durations": {
+                    **self.stats["audio_durations"],
+                    "hit_rate_pct": round(audio_durations_hit_rate, 1),
+                    "cached_count": len(self._audio_duration_cache)
                 },
                 "config": self.config
             }
@@ -432,6 +549,12 @@ class CacheManager:
         print(f"\n🤖 MODELS CACHE:")
         print(f"  • Preloaded: {stats['models']['cache_size']} models")
         print(f"  • Models: {', '.join(stats['models']['preloaded'])}")
+
+        print(f"\n🎵 AUDIO DURATIONS CACHE:")
+        print(f"  • Hit rate: {stats['audio_durations']['hit_rate_pct']}%")
+        print(f"  • Hits: {stats['audio_durations']['hits']} / Misses: {stats['audio_durations']['misses']}")
+        print(f"  • Cache size: {stats['audio_durations']['cache_size']}/{self.config['max_audio_durations']}")
+        print(f"  • Cached files: {stats['audio_durations']['cached_count']}")
 
         print("="*70 + "\n")
 

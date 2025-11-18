@@ -82,9 +82,9 @@ class StreamingASR:
         self.frame_duration_ms = 30  # 30ms frames
         self.frame_size = int(self.sample_rate * self.frame_duration_ms / 1000)
 
-        # Seuils (lus depuis config pour cohérence)
-        self.silence_threshold = config.VAD_SILENCE_THRESHOLD_MS / 1000.0  # 800ms → 0.8s
-        self.speech_start_threshold = config.VAD_SPEECH_START_THRESHOLD_MS / 1000.0  # 500ms → 0.5s
+        # Seuils (optimisés pour réactivité, basé recherche 2025)
+        self.silence_threshold = 0.8  # 800ms de silence = fin de parole (standard 2025: 500-800ms)
+        self.speech_start_threshold = 0.5  # 500ms de parole = début détecté (éviter faux positifs)
 
         # Modèle Vosk
         self.model = None
@@ -289,16 +289,6 @@ class StreamingASR:
                         # Log progression du silence
                         if stream_info["current_silence_duration"] % 0.5 < frame_duration_s:  # Log tous les 0.5s
                             logger.debug(f"⏱️ Silence accumulating: {call_uuid[:8]} ({stream_info['current_silence_duration']:.1f}s / {self.silence_threshold}s)")
-                else:
-                    # NOUVEAU: Détecter paroles courtes (< 500ms) qui ne triggent pas in_speech
-                    # Si on a reçu une transcription FINAL et qu'on a du silence suffisant
-                    if stream_info.get("final_transcription") and stream_info["current_silence_duration"] >= self.silence_threshold:
-                        logger.info(
-                            f"🤐 Speech END detected (short utterance): {call_uuid[:8]} "
-                            f"(transcription: '{stream_info['final_transcription']}')"
-                        )
-                        await self._notify_speech_end(call_uuid)
-                        stream_info["final_transcription"] = None  # Reset pour éviter double détection
 
             # ASR - Transcription streaming
             if recognizer.AcceptWaveform(frame_bytes):
@@ -306,26 +296,17 @@ class StreamingASR:
                 result = json.loads(recognizer.Result())
                 text = result.get("text", "").strip()
 
-                # IMPORTANT: Envoyer le FINAL même si text est vide!
-                # Sinon Phase 3 attend indéfiniment un FINAL qui ne viendra jamais
-                stream_info["final_transcription"] = text if text else None
-
                 if text:
+                    stream_info["final_transcription"] = text
                     self.stats["transcriptions"] += 1
 
-                latency_ms = (time.time() - start_time) * 1000
-                if text:
+                    latency_ms = (time.time() - start_time) * 1000
                     self._update_latency_stats(latency_ms)
 
-                # Log avec info sur in_speech state
-                in_speech_state = "IN_SPEECH" if stream_info["in_speech"] else "SILENCE"
-                if text:
+                    # Log avec info sur in_speech state
+                    in_speech_state = "IN_SPEECH" if stream_info["in_speech"] else "SILENCE"
                     logger.info(f"📝 FINAL transcription [{call_uuid[:8]}]: '{text}' ({latency_ms:.1f}ms) [VAD state: {in_speech_state}, silence_duration: {stream_info['current_silence_duration']:.1f}s]")
-                else:
-                    logger.debug(f"📝 FINAL transcription [{call_uuid[:8]}]: (empty - Vosk couldn't transcribe) [VAD state: {in_speech_state}]")
-
-                # Envoyer callback FINAL (même si vide)
-                await self._notify_transcription(call_uuid, text, "final", latency_ms)
+                    await self._notify_transcription(call_uuid, text, "final", latency_ms)
 
             else:
                 # Transcription partielle
@@ -393,13 +374,9 @@ class StreamingASR:
 
     async def _notify_transcription(self, call_uuid: str, text: str, transcription_type: str, latency_ms: float):
         """Notifie transcription"""
-        logger.debug(f"🔔 [{call_uuid[:8]}] _notify_transcription called: type={transcription_type}, text='{text[:50]}'")
-        logger.debug(f"🔔 [{call_uuid[:8]}] Registered callbacks: {list(self.callbacks.keys())}")
-
         if call_uuid in self.callbacks:
             try:
                 callback = self.callbacks[call_uuid]
-                logger.info(f"🔔 [{call_uuid[:8]}] Calling transcription callback (type={transcription_type})")
 
                 event_data = {
                     "event": "transcription",
@@ -416,9 +393,7 @@ class StreamingASR:
                     callback(event_data)
 
             except Exception as e:
-                logger.error(f"❌ Callback error (transcription): {e}", exc_info=True)
-        else:
-            logger.warning(f"⚠️ [{call_uuid[:8]}] No callback registered for transcription (UUID: {call_uuid})")
+                logger.error(f"❌ Callback error (transcription): {e}")
 
     def register_callback(self, call_uuid: str, callback: Callable):
         """
@@ -428,27 +403,14 @@ class StreamingASR:
             call_uuid: UUID de l'appel
             callback: Fonction à appeler (peut être async)
         """
-        logger.info(f"🔧 Registering callback for UUID: {call_uuid} (short: {call_uuid[:8]})")
-        logger.info(f"🔧 Callback function: {callback.__name__ if hasattr(callback, '__name__') else callback}")
-        logger.info(f"🔧 Current callbacks before: {list(self.callbacks.keys())}")
-
         self.callbacks[call_uuid] = callback
-
-        logger.info(f"✅ Callback registered for {call_uuid[:8]}")
-        logger.info(f"🔧 Current callbacks after: {list(self.callbacks.keys())}")
+        logger.debug(f"✅ Callback registered for {call_uuid[:8]}")
 
     def unregister_callback(self, call_uuid: str):
         """Désenregistre callback"""
-        logger.info(f"🔧 Unregistering callback for UUID: {call_uuid} (short: {call_uuid[:8]})")
-        logger.info(f"🔧 Current callbacks before: {list(self.callbacks.keys())}")
-
         if call_uuid in self.callbacks:
             del self.callbacks[call_uuid]
-            logger.info(f"❌ Callback unregistered for {call_uuid[:8]}")
-        else:
-            logger.warning(f"⚠️ No callback to unregister for {call_uuid[:8]}")
-
-        logger.info(f"🔧 Current callbacks after: {list(self.callbacks.keys())}")
+            logger.debug(f"❌ Callback unregistered for {call_uuid[:8]}")
 
     def reset_recognizer(self, call_uuid: str):
         """
@@ -477,26 +439,17 @@ class StreamingASR:
 
     def _cleanup_stream(self, call_uuid: str):
         """Nettoie un stream"""
-        logger.info(f"🧹 [{call_uuid[:8]}] Cleaning up WebSocket stream")
-
         if call_uuid in self.active_streams:
             del self.active_streams[call_uuid]
-            logger.debug(f"🧹 [{call_uuid[:8]}] Removed active_stream")
 
         if call_uuid in self.recognizers:
             del self.recognizers[call_uuid]
-            logger.debug(f"🧹 [{call_uuid[:8]}] Removed recognizer")
 
-        # ❌ NE PAS supprimer le callback automatiquement !
-        # Le callback est géré explicitement par register/unregister
-        # Sinon, quand une connexion WebSocket se ferme (ex: AMD),
-        # elle supprime le callback de la phase suivante (Phase 2/3)
-        #
-        # if call_uuid in self.callbacks:
-        #     del self.callbacks[call_uuid]
+        if call_uuid in self.callbacks:
+            del self.callbacks[call_uuid]
 
         self.stats["active_streams"] = len(self.active_streams)
-        logger.info(f"🧹 [{call_uuid[:8]}] Stream cleanup completed (callback preserved)")
+        logger.debug(f"🧹 Cleaned up stream for {call_uuid[:8]}")
 
     def get_stats(self) -> Dict[str, Any]:
         """Retourne statistiques"""

@@ -35,13 +35,14 @@ from typing import Dict, Optional, List, Tuple, Union
 from difflib import SequenceMatcher
 import logging
 
-# Import ObjectionEntry pour support Phase 6
+# Import ObjectionEntry pour support Phase 6 (nouveau système modulaire)
 try:
-    from system.objections_database import ObjectionEntry, get_objections_by_theme, get_all_themes
+    from system.objections_db import ObjectionEntry, load_objections, list_available_themes
     OBJECTIONS_DB_AVAILABLE = True
 except ImportError:
     OBJECTIONS_DB_AVAILABLE = False
     ObjectionEntry = None
+    logger.warning("objections_db module not available, objection matching will be disabled")
 
 # Phase 8: CacheManager pour cache objections par thématique
 from system.cache_manager import get_cache
@@ -200,7 +201,9 @@ class ObjectionMatcher:
 
         try:
             # Charger objections pour la thématique (inclut GENERAL automatiquement)
-            objections_list = get_objections_by_theme(theme)
+            # Note: load_objections attend "objections_finance" pas juste "finance"
+            theme_file = theme if theme.startswith("objections_") else f"objections_{theme}"
+            objections_list = load_objections(theme_file)
 
             if not objections_list:
                 logger.warning(f"⚠️  No objections found for theme '{theme}'")
@@ -298,7 +301,8 @@ class ObjectionMatcher:
         self,
         user_input: str,
         min_score: float = 0.5,
-        top_n: int = 3
+        top_n: int = 3,
+        silent: bool = False
     ) -> Optional[Dict]:
         """
         Trouve la meilleure objection correspondant à l'input utilisateur.
@@ -307,6 +311,7 @@ class ObjectionMatcher:
             user_input: Ce que le prospect a dit
             min_score: Score minimum pour considérer un match (0.0-1.0)
             top_n: Nombre de candidats à évaluer en détail
+            silent: Si True, désactive les logs INFO (utile pour warmup)
 
         Returns:
             Dict avec {objection, response, score, method} ou None si pas de match
@@ -337,7 +342,8 @@ class ObjectionMatcher:
         best_objection, best_score = top_matches[0]
 
         if best_score >= min_score:
-            logger.info(f"✅ Match trouvé: '{best_objection}' (score: {best_score:.2f})")
+            if not silent:
+                logger.info(f"✅ Match trouvé: '{best_objection}' (score: {best_score:.2f})")
             return {
                 "objection": best_objection,
                 "response": self.objections[best_objection],
@@ -347,7 +353,8 @@ class ObjectionMatcher:
                 "confidence": "high" if best_score >= 0.8 else "medium"
             }
         else:
-            logger.info(f"❌ Pas de match suffisant (meilleur: {best_score:.2f} < {min_score})")
+            if not silent:
+                logger.info(f"❌ Pas de match suffisant (meilleur: {best_score:.2f} < {min_score})")
             return None
 
     def find_all_matches(

@@ -62,7 +62,6 @@ async def lifespan(app: FastAPI):
         logger.info("🧠 Preloading AI models...")
         try:
             from system.services.faster_whisper_stt import FasterWhisperSTT
-            from system.services.ollama_nlp import OllamaNLP
 
             # Initialiser services pour préchargement
             fw_stt = FasterWhisperSTT(
@@ -70,14 +69,6 @@ async def lifespan(app: FastAPI):
                 device=config.FASTER_WHISPER_DEVICE,
                 compute_type=config.FASTER_WHISPER_COMPUTE_TYPE
             )
-
-            # Phase 8: Prewarm Ollama (keep_alive 30min)
-            logger.info("🔥 Prewarming Ollama model...")
-            nlp = OllamaNLP()
-            if nlp.prewarm():
-                logger.info("✅ Ollama prewarmed (latency optimized)")
-            else:
-                logger.warning("⚠️ Ollama prewarm failed (will use on-demand)")
 
             # TTS removed - using pre-recorded audio only
 
@@ -367,16 +358,6 @@ def health():
             health_status["components"]["faster_whisper"] = {"status": "unhealthy"}
     except Exception as e:
         health_status["components"]["faster_whisper"] = {"status": "unknown", "error": str(e)}
-
-    try:
-        from system.services.ollama_nlp import OllamaNLP
-        nlp = OllamaNLP()
-        if nlp.is_available:
-            health_status["components"]["ollama"] = {"status": "healthy"}
-        else:
-            health_status["components"]["ollama"] = {"status": "unhealthy"}
-    except:
-        health_status["components"]["ollama"] = {"status": "unknown"}
 
     # Déterminer code HTTP
     if health_status["status"] == "unhealthy":
