@@ -26,6 +26,7 @@ import asyncio
 import json
 import time
 import struct
+import numpy as np
 from typing import Dict, Optional, Any, Callable
 from pathlib import Path
 
@@ -46,6 +47,20 @@ try:
     VOSK_AVAILABLE = True
 except ImportError:
     VOSK_AVAILABLE = False
+
+try:
+    from scipy import signal
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+
+# NoiseReduce import désactivé (non utilisé - enable_noisereduce = False)
+# try:
+#     import noisereduce as nr
+#     NOISEREDUCE_AVAILABLE = True
+# except ImportError:
+#     NOISEREDUCE_AVAILABLE = False
+NOISEREDUCE_AVAILABLE = False  # Forcé à False
 
 from system.config import config
 from system.logger import get_logger
@@ -83,8 +98,32 @@ class StreamingASR:
         self.frame_size = int(self.sample_rate * self.frame_duration_ms / 1000)
 
         # Seuils (lus depuis config pour cohérence)
-        self.silence_threshold = config.VAD_SILENCE_THRESHOLD_MS / 1000.0  # 800ms → 0.8s
+        self.silence_threshold = config.VAD_SILENCE_THRESHOLD_MS / 1000.0  # 500ms → 0.5s (optimisé bruits)
         self.speech_start_threshold = config.VAD_SPEECH_START_THRESHOLD_MS / 1000.0  # 500ms → 0.5s
+
+        # High-pass filter pour réduction bruit (filtre fréquences <80Hz)
+        self.enable_highpass_filter = SCIPY_AVAILABLE  # Auto-enable si scipy disponible
+        if self.enable_highpass_filter:
+            # Butterworth high-pass filter: 80Hz cutoff, ordre 5
+            self.hp_cutoff = 80  # Hz
+            self.hp_order = 5
+            self.hp_sos = signal.butter(self.hp_order, self.hp_cutoff, btype='highpass',
+                                         fs=self.sample_rate, output='sos')
+            # État du filtre par appel (pour continuité entre frames)
+            self.hp_filter_states = {}  # {call_uuid: zi}
+            logger.info(f"✅ High-pass filter enabled (cutoff: {self.hp_cutoff}Hz)")
+        else:
+            logger.warning("⚠️ High-pass filter disabled (scipy not available)")
+
+        # NoiseReduce pour suppression avancée bruits (spectral gating)
+        # DÉSACTIVÉ: Cause des problèmes de latence/qualité
+        self.enable_noisereduce = False  # Forcé à False (Phase 2 revert)
+        # if self.enable_noisereduce:
+        #     # Configuration: mode stationary (bruits constants: AC, ventilateur, musique)
+        #     # Plus rapide et efficace que non-stationary pour téléphonie
+        #     logger.info("✅ NoiseReduce enabled (stationary mode)")
+        # else:
+        #     logger.warning("⚠️ NoiseReduce disabled (package not available)")
 
         # Modèle Vosk
         self.model = None
@@ -134,6 +173,94 @@ class StreamingASR:
         except Exception as e:
             logger.error(f"❌ Failed to load Vosk model: {e}")
             self.is_available = False
+
+    def _apply_highpass_filter(self, call_uuid: str, frame_bytes: bytes) -> bytes:
+        """
+        Applique high-pass filter sur frame audio pour réduire bruits bas (<80Hz).
+        Maintient l'état du filtre entre frames pour continuité (évite discontinuités de phase).
+
+        Args:
+            call_uuid: UUID de l'appel (pour gestion état)
+            frame_bytes: Audio brut (16-bit PCM mono)
+
+        Returns:
+            Audio filtré (16-bit PCM mono)
+        """
+        if not self.enable_highpass_filter:
+            return frame_bytes
+
+        # Validation input (Fix #5)
+        if not frame_bytes or len(frame_bytes) == 0:
+            return frame_bytes
+        if len(frame_bytes) % 2 != 0:
+            logger.warning(f"⚠️ Invalid frame size: {len(frame_bytes)} bytes (not even)")
+            return frame_bytes
+
+        try:
+            # Initialiser état du filtre pour ce call_uuid (si premier frame)
+            if call_uuid not in self.hp_filter_states:
+                # sosfilt_zi calcule l'état initial pour step response = 0 (pas de transient)
+                self.hp_filter_states[call_uuid] = signal.sosfilt_zi(self.hp_sos)
+
+            # Convertir bytes → numpy array int16 → float32
+            audio_int16 = np.frombuffer(frame_bytes, dtype=np.int16)
+            audio_float = audio_int16.astype(np.float32)
+
+            # Appliquer filtre avec état (sos = second-order sections, plus stable que ba)
+            # zi maintient la continuité entre frames → pas de discontinuités
+            filtered_float, self.hp_filter_states[call_uuid] = signal.sosfilt(
+                self.hp_sos,
+                audio_float,
+                zi=self.hp_filter_states[call_uuid]
+            )
+
+            # Reconvertir → int16 (clamp pour éviter overflow)
+            filtered_int16 = np.clip(filtered_float, -32768, 32767).astype(np.int16)
+
+            # Reconvertir → bytes
+            return filtered_int16.tobytes()
+
+        except Exception as e:
+            logger.warning(f"⚠️ High-pass filter failed for {call_uuid[:8]}: {e}, using original audio")
+            return frame_bytes
+
+    def _apply_noise_reduction(self, frame_bytes: bytes) -> bytes:
+        """
+        Applique noise reduction (spectral gating) pour bruits variables.
+
+        Args:
+            frame_bytes: Audio brut (16-bit PCM mono)
+
+        Returns:
+            Audio nettoyé (16-bit PCM mono)
+        """
+        if not self.enable_noisereduce:
+            return frame_bytes
+
+        try:
+            # Convertir bytes → numpy array int16 → float normalized
+            audio_int16 = np.frombuffer(frame_bytes, dtype=np.int16)
+            audio_float = audio_int16.astype(np.float32) / 32768.0  # Normalize to [-1, 1]
+
+            # Appliquer NoiseReduce (stationary mode - bruits constants)
+            # stationary=True: Plus rapide et efficace pour bruits constants (AC, ventilateur, musique)
+            # prop_decrease=1.0: Réduction agressive (0.0-1.0, default=1.0)
+            reduced_float = nr.reduce_noise(
+                y=audio_float,
+                sr=self.sample_rate,
+                stationary=True,
+                prop_decrease=1.0
+            )
+
+            # Reconvertir → int16 (clamp pour éviter overflow)
+            reduced_int16 = np.clip(reduced_float * 32768, -32768, 32767).astype(np.int16)
+
+            # Reconvertir → bytes
+            return reduced_int16.tobytes()
+
+        except Exception as e:
+            logger.warning(f"⚠️ Noise reduction failed: {e}, using original audio")
+            return frame_bytes
 
     async def start_server(self, host: str = "127.0.0.1", port: int = 8080):
         """
@@ -248,7 +375,8 @@ class StreamingASR:
             return
 
         try:
-            # VAD - Détection activité vocale
+            # VAD - Détection activité vocale (sur audio ORIGINAL, non filtré)
+            # WebRTC VAD a été entraîné sur audio complet (toutes fréquences)
             is_speech = self.vad.is_speech(frame_bytes, self.sample_rate)
 
             # Mise à jour statistiques
@@ -300,8 +428,12 @@ class StreamingASR:
                         await self._notify_speech_end(call_uuid)
                         stream_info["final_transcription"] = None  # Reset pour éviter double détection
 
-            # ASR - Transcription streaming
-            if recognizer.AcceptWaveform(frame_bytes):
+            # HIGH-PASS FILTER - Appliqué UNIQUEMENT pour Vosk ASR (pas pour VAD)
+            # Réduction bruits bas (<80Hz: ventilateurs, rumble, etc.)
+            filtered_frame = self._apply_highpass_filter(call_uuid, frame_bytes)
+
+            # ASR - Transcription streaming (sur audio filtré)
+            if recognizer.AcceptWaveform(filtered_frame):
                 # Transcription finale
                 result = json.loads(recognizer.Result())
                 text = result.get("text", "").strip()
@@ -399,7 +531,7 @@ class StreamingASR:
         if call_uuid in self.callbacks:
             try:
                 callback = self.callbacks[call_uuid]
-                logger.info(f"🔔 [{call_uuid[:8]}] Calling transcription callback (type={transcription_type})")
+                logger.debug(f"🔔 [{call_uuid[:8]}] Calling transcription callback (type={transcription_type})")
 
                 event_data = {
                     "event": "transcription",
@@ -428,27 +560,27 @@ class StreamingASR:
             call_uuid: UUID de l'appel
             callback: Fonction à appeler (peut être async)
         """
-        logger.info(f"🔧 Registering callback for UUID: {call_uuid} (short: {call_uuid[:8]})")
-        logger.info(f"🔧 Callback function: {callback.__name__ if hasattr(callback, '__name__') else callback}")
-        logger.info(f"🔧 Current callbacks before: {list(self.callbacks.keys())}")
+        logger.debug(f"🔧 Registering callback for UUID: {call_uuid} (short: {call_uuid[:8]})")
+        logger.debug(f"🔧 Callback function: {callback.__name__ if hasattr(callback, '__name__') else callback}")
+        logger.debug(f"🔧 Current callbacks before: {list(self.callbacks.keys())}")
 
         self.callbacks[call_uuid] = callback
 
-        logger.info(f"✅ Callback registered for {call_uuid[:8]}")
-        logger.info(f"🔧 Current callbacks after: {list(self.callbacks.keys())}")
+        logger.debug(f"✅ Callback registered for {call_uuid[:8]}")
+        logger.debug(f"🔧 Current callbacks after: {list(self.callbacks.keys())}")
 
     def unregister_callback(self, call_uuid: str):
         """Désenregistre callback"""
-        logger.info(f"🔧 Unregistering callback for UUID: {call_uuid} (short: {call_uuid[:8]})")
-        logger.info(f"🔧 Current callbacks before: {list(self.callbacks.keys())}")
+        logger.debug(f"🔧 Unregistering callback for UUID: {call_uuid} (short: {call_uuid[:8]})")
+        logger.debug(f"🔧 Current callbacks before: {list(self.callbacks.keys())}")
 
         if call_uuid in self.callbacks:
             del self.callbacks[call_uuid]
-            logger.info(f"❌ Callback unregistered for {call_uuid[:8]}")
+            logger.debug(f"❌ Callback unregistered for {call_uuid[:8]}")
         else:
             logger.warning(f"⚠️ No callback to unregister for {call_uuid[:8]}")
 
-        logger.info(f"🔧 Current callbacks after: {list(self.callbacks.keys())}")
+        logger.debug(f"🔧 Current callbacks after: {list(self.callbacks.keys())}")
 
     def reset_recognizer(self, call_uuid: str):
         """
@@ -463,7 +595,7 @@ class StreamingASR:
         if call_uuid in self.recognizers:
             try:
                 self.recognizers[call_uuid].Reset()
-                logger.info(f"[{call_uuid[:8]}] 🔄 Vosk recognizer reset (buffer cleared)")
+                logger.debug(f"[{call_uuid[:8]}] 🔄 Vosk recognizer reset (buffer cleared)")
 
                 # Réinitialiser aussi les transcriptions partielles dans stream_info
                 if call_uuid in self.active_streams:
@@ -477,7 +609,7 @@ class StreamingASR:
 
     def _cleanup_stream(self, call_uuid: str):
         """Nettoie un stream"""
-        logger.info(f"🧹 [{call_uuid[:8]}] Cleaning up WebSocket stream")
+        logger.debug(f"🧹 [{call_uuid[:8]}] Cleaning up WebSocket stream")
 
         if call_uuid in self.active_streams:
             del self.active_streams[call_uuid]
@@ -486,6 +618,11 @@ class StreamingASR:
         if call_uuid in self.recognizers:
             del self.recognizers[call_uuid]
             logger.debug(f"🧹 [{call_uuid[:8]}] Removed recognizer")
+
+        # Nettoyer état du high-pass filter
+        if self.enable_highpass_filter and call_uuid in self.hp_filter_states:
+            del self.hp_filter_states[call_uuid]
+            logger.debug(f"🧹 [{call_uuid[:8]}] Removed high-pass filter state")
 
         # ❌ NE PAS supprimer le callback automatiquement !
         # Le callback est géré explicitement par register/unregister
@@ -496,7 +633,7 @@ class StreamingASR:
         #     del self.callbacks[call_uuid]
 
         self.stats["active_streams"] = len(self.active_streams)
-        logger.info(f"🧹 [{call_uuid[:8]}] Stream cleanup completed (callback preserved)")
+        logger.debug(f"🧹 [{call_uuid[:8]}] Stream cleanup completed (callback preserved)")
 
     def get_stats(self) -> Dict[str, Any]:
         """Retourne statistiques"""

@@ -107,7 +107,7 @@ DEVICE = _detect_gpu_device()
 # PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
 
 # Dur�e max d'�coute pour AMD (en secondes)
-AMD_MAX_DURATION = 2.3  # Test intermédiaire pour répondeurs (peut augmenter à 2.5s)
+AMD_MAX_DURATION = 2.5  # Extended timing (comfortable margin for late speakers + speech_end detection)
 
 # Keywords pour d�tecter HUMAIN
 AMD_KEYWORDS_HUMAN = [
@@ -556,7 +556,7 @@ STREAMING_ASR_PORT = int(os.getenv("STREAMING_ASR_PORT", "8080"))
 
 # VAD configuration for streaming ASR
 VAD_AGGRESSIVENESS = 2  # 0-3, 2 = balanced quality/reactivity
-VAD_SILENCE_THRESHOLD_MS = 600  # 600ms silence = end of speech (optimisé pour réactivité)
+VAD_SILENCE_THRESHOLD_MS = 600  # 600ms silence = end of speech (tolérance pauses naturelles)
 VAD_SPEECH_START_THRESHOLD_MS = 500  # 500ms speech = start detected
 
 # PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
