@@ -192,11 +192,8 @@ BARGE_IN_THRESHOLD = 1.5
 
 # Smooth delay apr�s d�tection barge-in (pour naturel)
 # Robot coupe pas direct, attend 0.3s pour effet naturel
+# NOTE: Fade-out progressif appliqu� pendant ce d�lai (0 dB -> -40 dB en 10 steps)
 BARGE_IN_SMOOTH_DELAY = 0.3
-
-# Fade out audio duration (pour transition naturelle)
-# R�duction progressive du volume avant coupure (500ms)
-BARGE_IN_FADE_OUT_DURATION = 1.0
 
 # Breathing room apr�s speech_end (pause naturelle)
 # Petit d�lai avant Phase 3 pour effet humain (100ms)
@@ -556,7 +553,7 @@ STREAMING_ASR_PORT = int(os.getenv("STREAMING_ASR_PORT", "8080"))
 
 # VAD configuration for streaming ASR
 VAD_AGGRESSIVENESS = 2  # 0-3, 2 = balanced quality/reactivity
-VAD_SILENCE_THRESHOLD_MS = 600  # 600ms silence = end of speech (tolérance pauses naturelles)
+VAD_SILENCE_THRESHOLD_MS = 500  # 500ms silence = end of speech (réactivité optimisée)
 VAD_SPEECH_START_THRESHOLD_MS = 500  # 500ms speech = start detected
 
 # PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
@@ -599,7 +596,6 @@ class Config:
     BARGE_IN_ENABLED = BARGE_IN_ENABLED
     BARGE_IN_THRESHOLD = BARGE_IN_THRESHOLD
     BARGE_IN_SMOOTH_DELAY = BARGE_IN_SMOOTH_DELAY
-    BARGE_IN_FADE_OUT_DURATION = BARGE_IN_FADE_OUT_DURATION
     BARGE_IN_BREATHING_ROOM = BARGE_IN_BREATHING_ROOM
     MIN_WORDS_FOR_BARGE_IN = MIN_WORDS_FOR_BARGE_IN
     PLAYING_START_SPEECH_DURATION = PLAYING_START_SPEECH_DURATION

@@ -646,7 +646,9 @@ class RobotFreeSWITCH:
                 "origination_caller_id_number=0000000000",
                 "ignore_early_media=true",
                 "RECORD_STEREO=true",           # Enable STEREO recording (BEFORE answer)
-                "media_bug_answer_req=true"     # Wait for ANSWER before starting media
+                "media_bug_answer_req=true",    # Wait for ANSWER before starting media
+                "rtp_timeout_sec=2",            # CRITIQUE: Détection HANGUP rapide (2s au lieu de 300s!)
+                "rtp_hold_timeout_sec=2"        # Même timeout pour HOLD state
             ]
 
             # Join variables
@@ -803,17 +805,17 @@ class RobotFreeSWITCH:
         - If robot initiated hangup → use robot's status (already set)
         - If client hung up → NOT_INTERESTED (client rejected)
         """
+        import time
+        hangup_timestamp = time.time()
         short_uuid = call_uuid[:8]
-
-        logger.info(f"[{short_uuid}] CHANNEL_HANGUP_COMPLETE")
 
         # Get hangup cause from event
         hangup_cause = event.getHeader("Hangup-Cause")
         caller_hangup = event.getHeader("variable_sip_hangup_disposition")
 
         logger.info(
-            f"[{short_uuid}] Hangup details: "
-            f"cause={hangup_cause}, disposition={caller_hangup}"
+            f"🔴 [{short_uuid}] HANGUP: cause={hangup_cause}, "
+            f"disposition={caller_hangup}"
         )
 
         # ===================================================================
@@ -825,44 +827,45 @@ class RobotFreeSWITCH:
         robot_initiated_hangup = session.get("robot_hangup", False)
         existing_status = session.get("final_status")
 
+        # ===== SET HANGUP DETECTION FLAG (CRITICAL for immediate detection) =====
+        if call_uuid in self.call_sessions:
+            self.call_sessions[call_uuid]["hangup_detected"] = True
+            self.call_sessions[call_uuid]["hangup_timestamp"] = hangup_timestamp
+            logger.info(
+                f"🚨 [{short_uuid}] HANGUP FLAG SET in session "
+                f"(timestamp: {hangup_timestamp:.6f})"
+            )
+
+            # ===== INTERRUPT PLAYBACK IMMEDIATELY if Phase 2 active =====
+            # uuid_break arrête uuid_broadcast instantanément!
+            try:
+                break_result = self._execute_esl_command(f"uuid_break {call_uuid}")
+                if break_result:
+                    logger.info(
+                        f"⚡ [{short_uuid}] PLAYBACK INTERRUPTED via uuid_break "
+                        f"(result: {break_result.strip()})"
+                    )
+            except Exception as e:
+                logger.debug(f"[{short_uuid}] uuid_break failed (channel may be gone): {e}")
+
         if robot_initiated_hangup:
             # Robot initiated hangup → use robot's status
             final_status = existing_status or CallStatus.COMPLETED
-            logger.info(
-                f"[{short_uuid}] Robot-initiated hangup "
-                f"-> Status: {final_status.value}"
-            )
+            logger.info(f"[{short_uuid}] 🤖 ROBOT-INITIATED (status: {final_status.value})")
 
         else:
-            # Client hung up → NOT_INTERESTED
-            # This is the REACTIVE detection that was difficult before!
-
-            # Additional checks for hangup cause
+            # Client hung up
             client_hangup_causes = [
-                "NORMAL_CLEARING",           # Client hung up normally
-                "ORIGINATOR_CANCEL",         # Client cancelled call
-                "USER_BUSY",                 # Client rejected
-                "NO_USER_RESPONSE",          # Client didn't respond
-                "NO_ANSWER"                  # Client didn't answer
+                "NORMAL_CLEARING", "ORIGINATOR_CANCEL", "USER_BUSY",
+                "NO_USER_RESPONSE", "NO_ANSWER"
             ]
 
             if hangup_cause in client_hangup_causes or caller_hangup == "recv_bye":
                 final_status = CallResult.NOT_INTERESTED
-
-                logger.warning(
-                    f"[{short_uuid}] CLIENT HANGUP DETECTED! "
-                    f"(cause: {hangup_cause}) "
-                    f"-> Status: NOT_INTERESTED"
-                )
-
+                logger.info(f"[{short_uuid}] 👤 CLIENT-INITIATED → NOT_INTERESTED")
             else:
-                # Other causes (network error, etc.) → retry candidate
                 final_status = existing_status or CallResult.NO_ANSWER
-
-                logger.info(
-                    f"[{short_uuid}] Hangup (cause: {hangup_cause}) "
-                    f"-> Status: {final_status.value} (retry candidate)"
-                )
+                logger.info(f"[{short_uuid}] 👤 CLIENT-INITIATED (non-standard) → {final_status.value}")
 
         # ===================================================================
         # Update database with final status
@@ -892,19 +895,43 @@ class RobotFreeSWITCH:
         # ===================================================================
         # Cleanup call data structures
         # ===================================================================
+        logger.info(f"[{short_uuid}] 🧹 Starting cleanup...")
+
+        cleanup_report = []
+
         if call_uuid in self.active_calls:
             del self.active_calls[call_uuid]
+            cleanup_report.append("active_calls ✓")
+            logger.info(f"[{short_uuid}]   ✓ Removed from active_calls")
+        else:
+            cleanup_report.append("active_calls (already removed)")
+            logger.info(f"[{short_uuid}]   ⚠️  Not in active_calls (already removed)")
 
         if call_uuid in self.call_threads:
             del self.call_threads[call_uuid]
+            cleanup_report.append("call_threads ✓")
+            logger.info(f"[{short_uuid}]   ✓ Removed from call_threads")
+        else:
+            cleanup_report.append("call_threads (already removed)")
+            logger.info(f"[{short_uuid}]   ⚠️  Not in call_threads (already removed)")
 
         if call_uuid in self.call_sessions:
             del self.call_sessions[call_uuid]
+            cleanup_report.append("call_sessions ✓")
+            logger.info(f"[{short_uuid}]   ✓ Removed from call_sessions")
+        else:
+            cleanup_report.append("call_sessions (already removed)")
+            logger.info(f"[{short_uuid}]   ⚠️  Not in call_sessions (already removed)")
 
         if call_uuid in self.barge_in_active:
             del self.barge_in_active[call_uuid]
+            cleanup_report.append("barge_in_active ✓")
+            logger.info(f"[{short_uuid}]   ✓ Removed from barge_in_active")
+        else:
+            cleanup_report.append("barge_in_active (not set)")
 
-        logger.info(f"[{short_uuid}] Call cleanup completed")
+        logger.info(f"[{short_uuid}] ✅ Cleanup completed: {', '.join(cleanup_report)}")
+        logger.info("=" * 80)
 
     def _handle_dtmf(self, call_uuid: str, event):
         """Handle DTMF event (optional)"""
@@ -1956,6 +1983,11 @@ class RobotFreeSWITCH:
         if max_duration is None:
             max_duration = config.WAITING_TIMEOUT
 
+        # Calculate gap Phase 2→3
+        gap_phase2_3 = 0
+        if call_uuid in self.call_sessions and "phase2_end_timestamp" in self.call_sessions[call_uuid]:
+            gap_phase2_3 = (phase_start - self.call_sessions[call_uuid]["phase2_end_timestamp"]) * 1000
+
         self.clog.phase3_start(uuid=short_uuid)
 
         # État détection
@@ -1964,7 +1996,12 @@ class RobotFreeSWITCH:
             "final_received": False,  # ← FLAG pour savoir si FINAL reçu (comme AMD)
             "speech_ended": False,
             "silence_detected": False,
-            "last_update": time.time()
+            "last_update": time.time(),
+            # Timestamps pour analyse latence détaillée
+            "first_partial_timestamp": None,  # Quand premier PARTIAL reçu
+            "last_partial_timestamp": None,   # Quand dernier PARTIAL reçu
+            "speech_end_timestamp": None,     # Quand SPEECH_END reçu
+            "partial_count": 0                # Nombre de PARTIAL reçus
         }
 
         def streaming_callback(event_data):
@@ -1982,39 +2019,53 @@ class RobotFreeSWITCH:
                     detection_state["final_received"] = True  # ← Set flag!
                     detection_state["last_update"] = time.time()
                     if text:
-                        logger.info(
-                            f"📝 [{short_uuid}] \033[94mCALLBACK received FINAL transcription: '{text}'\033[0m"
-                        )
+                        # Afficher transcription avec panel Rich visible
+                        self.clog.transcription(text, uuid=short_uuid, latency_ms=0)
                     else:
                         logger.info(
-                            f"📝 [{short_uuid}] \033[94mCALLBACK received FINAL (empty - no transcription)\033[0m"
+                            f"📝 [{short_uuid}] FINAL transcription (empty - no text detected)"
                         )
                 else:  # partial
-                    # Afficher partial avec comptage mots (comme Phase 2)
+                    # Tracker timestamps pour analyse latence
+                    current_time = time.time()
+                    if detection_state["first_partial_timestamp"] is None:
+                        detection_state["first_partial_timestamp"] = current_time
+                    detection_state["last_partial_timestamp"] = current_time
+                    detection_state["partial_count"] += 1
+
+                    # Calculer temps écoulé depuis début Phase 3
+                    elapsed_ms = (current_time - monitoring_start) * 1000
+
+                    # Afficher partial avec timestamp et comptage mots
                     word_count = len(text.split()) if text else 0
                     logger.info(
-                        f"📝 [{short_uuid}] CALLBACK received PARTIAL: '{text}' ({word_count} words)"
+                        f"📝 [{short_uuid}] PARTIAL #{detection_state['partial_count']} at {elapsed_ms:.0f}ms: "
+                        f"'{text}' ({word_count} words)"
                     )
 
             elif event == "speech_end":
                 # Fin de parole détectée (silence > 0.8s)
                 detection_state["speech_ended"] = True
                 detection_state["silence_detected"] = True
+                detection_state["speech_end_timestamp"] = time.time()
+
+                # Calculer temps écoulé depuis début Phase 3
+                elapsed_ms = (detection_state["speech_end_timestamp"] - monitoring_start) * 1000
+
                 silence_duration = event_data.get("silence_duration", 0)
                 logger.info(
-                    f"🤐 [{short_uuid}] CALLBACK received SPEECH_END "
-                    f"(silence: {silence_duration:.1f}s)"
+                    f"🤐 [{short_uuid}] SPEECH_END at {elapsed_ms:.0f}ms "
+                    f"(silence: {silence_duration:.1f}s, {detection_state['partial_count']} partials received)"
                 )
             else:
                 logger.debug(f"🔔 [{short_uuid}] CALLBACK unknown event: {event}")
 
         try:
             # Register callback
-            logger.info(f"🔧 [{short_uuid}] Registering Phase 3 callback for UUID: {call_uuid}")
             self.streaming_asr.register_callback(call_uuid, streaming_callback)
-            logger.info(f"✅ [{short_uuid}] Phase 3 callback registered successfully")
 
             # Démarrer audio fork → WebSocket
+            fork_start = time.time()
             ws_url = (
                 f"ws://{config.STREAMING_ASR_HOST}:{config.STREAMING_ASR_PORT}"
                 f"/stream/{call_uuid}"
@@ -2028,23 +2079,54 @@ class RobotFreeSWITCH:
                 self.streaming_asr.unregister_callback(call_uuid)
                 return self._execute_phase_waiting(call_uuid, max_duration)
 
-            logger.info(f"✅ [{short_uuid}] Audio fork started for PHASE 3")
+            fork_latency = (time.time() - fork_start) * 1000
 
             # Attendre fin parole OU timeout
             timeout = max_duration
             monitoring_start = time.time()
+            last_check_log = 0  # Pour logger toutes les secondes
 
             while (time.time() - monitoring_start) < timeout:
-                # PROACTIVE CHECK: Call still active?
-                if call_uuid not in self.active_calls:
-                    logger.info(
-                        f"[{short_uuid}] Call hung up during Phase 3 monitoring, "
-                        f"stopping immediately"
+                current_time = time.time()
+                elapsed = current_time - monitoring_start
+
+                # ===== ULTRA-FAST HANGUP DETECTION (20ms polling) =====
+                # Vérification 1: Flag session (setté par HANGUP handler)
+                session = self.call_sessions.get(call_uuid, {})
+                if session.get("hangup_detected", False):
+                    hangup_ts = session.get("hangup_timestamp", 0)
+                    detection_delay_ms = (current_time - hangup_ts) * 1000
+                    logger.warning(
+                        f"🚨 [{short_uuid}] HANGUP FLAG detected in Phase 3! "
+                        f"Detection delay: {detection_delay_ms:.1f}ms, "
+                        f"elapsed in phase: {elapsed:.1f}s - STOPPING IMMEDIATELY!"
                     )
                     break
 
+                # Vérification 2: ESL DIRECT (instantané!)
+                if not self._channel_exists(call_uuid):
+                    logger.warning(
+                        f"🚨 [{short_uuid}] Channel NO LONGER EXISTS (ESL check) - STOPPING Phase 3!"
+                    )
+                    break
+
+                # Legacy check (moins fiable)
+                if call_uuid not in self.active_calls:
+                    logger.info(
+                        f"[{short_uuid}] Call removed from active_calls during Phase 3"
+                    )
+                    break
+
+                # Log état toutes les secondes pour debug
+                if elapsed - last_check_log >= 1.0:
+                    logger.debug(
+                        f"[{short_uuid}] Phase 3 monitoring: elapsed={elapsed:.1f}s, "
+                        f"timeout={timeout}s, speech_ended={detection_state['speech_ended']}"
+                    )
+                    last_check_log = elapsed
+
                 if detection_state["speech_ended"]:
-                    logger.info(f"✅ [{short_uuid}] Speech ended, waiting for FINAL transcription...")
+                    speech_end_time = (time.time() - monitoring_start) * 1000
 
                     # CRITIQUE: Attendre le FINAL (max 1500ms) - plus long que AMD
                     # Vosk peut prendre 100-600ms selon longueur de la phrase
@@ -2052,21 +2134,32 @@ class RobotFreeSWITCH:
                     max_final_wait = 1.5  # 1500ms pour gérer phrases longues
 
                     while (time.time() - final_wait_start) < max_final_wait:
+                        # HANGUP check even during FINAL wait!
+                        session = self.call_sessions.get(call_uuid, {})
+                        if session.get("hangup_detected", False):
+                            hangup_ts = session.get("hangup_timestamp", 0)
+                            detection_delay_ms = (time.time() - hangup_ts) * 1000
+                            logger.warning(
+                                f"🚨 [{short_uuid}] HANGUP during FINAL wait! "
+                                f"Detection delay: {detection_delay_ms:.1f}ms - ABORTING!"
+                            )
+                            break
+
                         if detection_state["final_received"]:
-                            logger.info(f"✅ [{short_uuid}] FINAL received, stopping audio fork")
                             break
                         time.sleep(0.05)  # Poll every 50ms
+
+                    final_wait_latency = (time.time() - final_wait_start) * 1000
 
                     # Si pas de FINAL après 1500ms, continuer quand même
                     if not detection_state["final_received"]:
                         logger.warning(
-                            f"⚠️ [{short_uuid}] No FINAL received after 1500ms wait, "
-                            f"using last partial: '{detection_state['transcription']}'"
+                            f"⚠️ [{short_uuid}] No FINAL after {final_wait_latency:.0f}ms, using last partial"
                         )
 
                     break
 
-                time.sleep(0.1)  # Poll every 100ms
+                time.sleep(0.02)  # Poll every 20ms (5x faster than before!)
 
             # Stop audio fork
             stop_cmd = f"uuid_audio_fork {call_uuid} stop"
@@ -2081,19 +2174,39 @@ class RobotFreeSWITCH:
 
             total_latency_ms = (time.time() - phase_start) * 1000
 
+            # Compact latency breakdown (single line) avec décomposition détaillée
+            if detection_state["speech_ended"]:
+                # Calculer timings précis
+                first_word_ms = 0
+                speaking_ms = 0
+                silence_wait_ms = 0
+
+                if detection_state["first_partial_timestamp"]:
+                    first_word_ms = (detection_state["first_partial_timestamp"] - monitoring_start) * 1000
+
+                    if detection_state["last_partial_timestamp"]:
+                        speaking_ms = (detection_state["last_partial_timestamp"] - detection_state["first_partial_timestamp"]) * 1000
+
+                        if detection_state["speech_end_timestamp"]:
+                            silence_wait_ms = (detection_state["speech_end_timestamp"] - detection_state["last_partial_timestamp"]) * 1000
+
+                logger.info(
+                    f"📊 [{short_uuid}] PHASE 3: Gap={gap_phase2_3:.0f}ms | Fork={fork_latency:.0f}ms | "
+                    f"FirstWord={first_word_ms:.0f}ms | Speaking={speaking_ms:.0f}ms | "
+                    f"SilenceWait={silence_wait_ms:.0f}ms | FinalWait={final_wait_latency:.0f}ms | "
+                    f"TOTAL={total_latency_ms:.0f}ms ({detection_state['partial_count']} partials)"
+                )
+            else:
+                logger.info(
+                    f"📊 [{short_uuid}] PHASE 3: Gap={gap_phase2_3:.0f}ms | Fork={fork_latency:.0f}ms | "
+                    f"NoSpeech/Timeout | TOTAL={total_latency_ms:.0f}ms ({detection_state['partial_count']} partials)"
+                )
+
             self.clog.phase3_end(total_latency_ms, uuid=short_uuid)
 
-            # Afficher transcription avec ellipsis si trop longue
-            trans = detection_state['transcription']
-            trans_display = trans[:100] + ('...' if len(trans) > 100 else '')
-
-            logger.info(
-                f"[{short_uuid}] Phase 3 STREAMING: "
-                f"duration={duration:.1f}s, "
-                f"transcription='{trans_display}', "
-                f"silence={detection_state['silence_detected']}, "
-                f"timeout={timeout_reached}"
-            )
+            # Store end timestamp for gap calculation Phase 3→2
+            if call_uuid in self.call_sessions:
+                self.call_sessions[call_uuid]["phase3_end_timestamp"] = time.time()
 
             return {
                 "transcription": detection_state["transcription"],
@@ -2417,7 +2530,7 @@ class RobotFreeSWITCH:
         # ===================================================================
         # STEP 3: Analyze intent
         # ===================================================================
-        intent_result = self._analyze_intent(transcription, scenario)
+        intent_result = self._analyze_intent(transcription, scenario, step_name)
         intent = intent_result["intent"]
 
         logger.info(
@@ -2431,6 +2544,8 @@ class RobotFreeSWITCH:
         intent_mapping = step_config.get("intent_mapping", {})
 
         # --- OBJECTION/QUESTION HANDLING with MaxTurn ---
+        # OPTION B: question ET objection détectés via objections_db (intents_general.py supprimé)
+        # TRAITEMENT IDENTIQUE pour les deux (MaxTurn loop)
         if intent == "objection" or intent == "question":
             max_turns = self.scenario_manager.get_max_autonomous_turns(
                 scenario,
@@ -2705,7 +2820,7 @@ class RobotFreeSWITCH:
             reaction = waiting_result.get("transcription", "").strip()
 
             # Analyze reaction intent
-            intent_result = self._analyze_intent(reaction, scenario)
+            intent_result = self._analyze_intent(reaction, scenario, step_name)
             intent = intent_result["intent"]
 
             logger.info(
@@ -2823,11 +2938,18 @@ class RobotFreeSWITCH:
 
         return False
 
-    def _analyze_intent(self, transcription: str, scenario: Optional[Dict] = None) -> Dict[str, Any]:
+    def _analyze_intent(
+        self,
+        transcription: str,
+        scenario: Optional[Dict] = None,
+        step_name: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Analyze client intent using BETON ARME keywords matching
 
         Architecture 3 niveaux (basee sur research NLP + best practices):
+        NIVEAU 0: Fuzzy matching (intents_basic)
+        NIVEAU 0.5: Objections_db fallback (SEULEMENT si max_turn > 0)
         NIVEAU 1: Pre-traitement (negations, MWEs, interrogatifs)
         NIVEAU 2: Keywords matching (keywords simples)
         NIVEAU 3: Resolution prioritaire (deny > question > objection > affirm)
@@ -2838,12 +2960,13 @@ class RobotFreeSWITCH:
         - affirm: Acceptation positive
         - deny: Refus/rejet
         - unsure: Hesitation
-        - question: Demande info
-        - objection: Objection (pour ObjectionMatcher)
+        - question: Demande info (détecté via objections_db si max_turn>0)
+        - objection: Objection (détecté via objections_db si max_turn>0)
 
         Args:
             transcription: Client transcription
             scenario: Optional scenario context (for custom intent keywords)
+            step_name: Optional step name (pour récupérer max_turn config)
 
         Returns:
             {
@@ -2867,6 +2990,11 @@ class RobotFreeSWITCH:
 
         text_lower = transcription.lower().strip()
 
+        # Récupérer max_turns pour savoir si objections_db doit être utilisé (OPTION B)
+        max_turns = 0
+        if step_name and scenario:
+            max_turns = self.scenario_manager.get_max_autonomous_turns(scenario, step_name)
+
         # ===== NIVEAU 0: FUZZY MATCHING (Intents Database) =====
         # Try fuzzy matching first (faster than keyword matching, more flexible)
         if hasattr(self, 'intents_db') and self.intents_db:
@@ -2886,6 +3014,45 @@ class RobotFreeSWITCH:
                     "reason": "fuzzy_match",
                     "latency_ms": latency_ms
                 }
+
+        # ===== NIVEAU 0.5: OBJECTIONS_DB FALLBACK (OPTION B simplification) =====
+        # Si fuzzy matching intents_db rate, tester directement objections_db
+        # Élimine duplication keywords (intents_general.py supprimé)
+        # IMPORTANT: SEULEMENT si max_turns > 0 (désactive objection_matcher si max_turn=0)
+        if max_turns > 0 and hasattr(self, 'objection_matcher_default') and self.objection_matcher_default:
+            # Get theme from scenario (fallback to "general")
+            theme = self.scenario_manager.get_theme_file(scenario) if scenario else "general"
+
+            # Try to find match in objections_db
+            objection_matcher = ObjectionMatcher.load_objections_for_theme(theme)
+            if objection_matcher:
+                match_result = objection_matcher.find_best_match(
+                    text_lower,
+                    min_score=0.5,
+                    silent=True  # Pas de logs ici (déjà géré dans _find_objection_response)
+                )
+
+                if match_result:
+                    # Determine intent based on entry_type (faq vs objection)
+                    entry_type = match_result.get("entry_type", "objection")
+                    intent = "question" if entry_type == "faq" else "objection"
+                    confidence = match_result["score"]
+
+                    latency_ms = (time.time() - analyze_start) * 1000
+                    logger.info(
+                        f"Intent analysis: '{transcription[:30]}...' -> {intent} "
+                        f"(conf: {confidence:.2f}, reason: objections_db_match, "
+                        f"entry_type: {entry_type}, latency: {latency_ms:.1f}ms)"
+                    )
+                    return {
+                        "intent": intent,
+                        "confidence": confidence,
+                        "keywords_matched": [match_result["objection"]],
+                        "reason": "objections_db_match",
+                        "matched_response_id": match_result["objection"],
+                        "entry_type": entry_type,
+                        "latency_ms": latency_ms
+                    }
 
         # ===== NIVEAU 1: PRE-TRAITEMENT =====
         # Ordre FINAL: negations explicites > fixed expressions > interrogatifs > negation generale
@@ -3545,7 +3712,8 @@ class RobotFreeSWITCH:
                         text = event_data.get("text", "").strip()
                         amd_state["transcription"] = text
                         amd_state["final_received"] = True
-                        logger.info(f"📝 [{short_uuid}] \033[94mAMD CALLBACK received FINAL: '{text}'\033[0m")
+                        # Afficher transcription AMD avec panel Rich visible
+                        self.clog.transcription(text, uuid=short_uuid, latency_ms=0)
                     else:
                         logger.debug(f"📝 [{short_uuid}] AMD CALLBACK received PARTIAL: '{event_data.get('text', '')}'")
 
@@ -3559,13 +3727,14 @@ class RobotFreeSWITCH:
             self.streaming_asr.register_callback(call_uuid, amd_callback)
 
             # Prime RTP stream
-            logger.debug(f"[{short_uuid}] Priming RTP stream with silence...")
+            rtp_prime_start = time.time()
             silence_cmd = f"uuid_broadcast {call_uuid} silence_stream://100 both"
             self._execute_esl_command(silence_cmd)
             time.sleep(0.35)  # 350ms for RTP priming
-            logger.info(f"🎧 [{short_uuid}] RTP stream primed, ready to record")
+            rtp_prime_latency = (time.time() - rtp_prime_start) * 1000
 
             # Start uuid_audio_fork (streaming to Vosk)
+            fork_start = time.time()
             ws_url = f"ws://{config.STREAMING_ASR_HOST}:{config.STREAMING_ASR_PORT}/stream/{call_uuid}"
             fork_cmd = f"uuid_audio_fork {call_uuid} start {ws_url} mono 16000"
             fork_result = self._execute_esl_command(fork_cmd)
@@ -3575,13 +3744,61 @@ class RobotFreeSWITCH:
                 self.streaming_asr.unregister_callback(call_uuid)
                 return self._execute_phase_amd_whisper(call_uuid)
 
-            logger.info(f"✅ [{short_uuid}] Audio fork started for AMD")
+            fork_latency = (time.time() - fork_start) * 1000
 
-            # Wait for AMD duration
-            logger.info(f"🎧 [{short_uuid}] Recording {config.AMD_MAX_DURATION}s audio (Vosk streaming)...")
+            # Wait for AMD duration (AVEC VÉRIFICATION HANGUP!)
             record_start = time.time()
-            time.sleep(config.AMD_MAX_DURATION)
+            amd_timeout = config.AMD_MAX_DURATION
+            amd_hangup_detected = False
+
+            while (time.time() - record_start) < amd_timeout:
+                # ===== ULTRA-FAST HANGUP DETECTION pendant AMD =====
+                # Vérification 1: Flag session (setté par HANGUP handler)
+                session = self.call_sessions.get(call_uuid, {})
+                if session.get("hangup_detected", False):
+                    hangup_ts = session.get("hangup_timestamp", 0)
+                    detection_delay_ms = (time.time() - hangup_ts) * 1000
+                    logger.warning(
+                        f"🚨 [{short_uuid}] HANGUP FLAG detected during AMD! "
+                        f"Detection delay: {detection_delay_ms:.1f}ms - ABORTING!"
+                    )
+                    amd_hangup_detected = True
+                    break
+
+                # Vérification 2: ESL DIRECT (instantané!)
+                if not self._channel_exists(call_uuid):
+                    logger.warning(
+                        f"🚨 [{short_uuid}] Channel NO LONGER EXISTS (ESL check) during AMD - ABORTING!"
+                    )
+                    amd_hangup_detected = True
+                    break
+
+                if call_uuid not in self.active_calls:
+                    logger.info(f"[{short_uuid}] Call removed from active_calls during AMD")
+                    amd_hangup_detected = True
+                    break
+
+                time.sleep(0.02)  # Poll every 20ms
+
             record_latency = (time.time() - record_start) * 1000
+
+            # Si HANGUP détecté, on arrête tout de suite
+            if amd_hangup_detected:
+                stop_cmd = f"uuid_audio_fork {call_uuid} stop"
+                self._execute_esl_command(stop_cmd)
+                self.streaming_asr.unregister_callback(call_uuid)
+
+                total_latency = (time.time() - phase_start) * 1000
+                self.clog.phase1_end(total_latency, uuid=short_uuid)
+
+                return {
+                    "result": "HANGUP",
+                    "confidence": 1.0,
+                    "transcription": "",
+                    "latencies": {
+                        "total_ms": total_latency
+                    }
+                }
 
             # Wait for final transcription (max 500ms)
             transcribe_start = time.time()
@@ -3589,14 +3806,19 @@ class RobotFreeSWITCH:
             wait_start = time.time()
 
             while (time.time() - wait_start) < max_wait:
-                # PROACTIVE CHECK: Call still active?
+                # HANGUP check même pendant l'attente FINAL!
+                session = self.call_sessions.get(call_uuid, {})
+                if session.get("hangup_detected", False):
+                    logger.warning(f"🚨 [{short_uuid}] HANGUP during AMD FINAL wait!")
+                    break
+
                 if call_uuid not in self.active_calls:
-                    logger.info(f"[{short_uuid}] Call hung up during AMD, stopping")
+                    logger.info(f"[{short_uuid}] Call hung up during AMD FINAL wait")
                     break
 
                 if amd_state["final_received"]:
                     break
-                time.sleep(0.05)  # Poll every 50ms
+                time.sleep(0.02)  # Poll every 20ms (faster!)
 
             transcribe_latency = (time.time() - transcribe_start) * 1000
 
@@ -3625,12 +3847,21 @@ class RobotFreeSWITCH:
                 }
 
             # AMD Detection with keywords matching
+            detection_start = time.time()
             amd_result = self.amd_service.detect(transcription)
             result_type = amd_result["result"]  # HUMAN/MACHINE/UNKNOWN
             confidence = amd_result["confidence"]
+            detection_latency = (time.time() - detection_start) * 1000
 
-            # Total latency
+            # TOTAL PHASE LATENCY
             total_latency = (time.time() - phase_start) * 1000
+
+            # Compact latency breakdown (single line)
+            logger.info(
+                f"📊 [{short_uuid}] AMD: RTP={rtp_prime_latency:.0f}ms | Fork={fork_latency:.0f}ms | "
+                f"Rec={record_latency:.0f}ms | Wait={transcribe_latency:.0f}ms | "
+                f"Detect={detection_latency:.0f}ms | TOTAL={total_latency:.0f}ms"
+            )
 
             # PHASE 1 END - Colored log
             self.clog.success(
@@ -3639,11 +3870,16 @@ class RobotFreeSWITCH:
             )
             self.clog.phase1_end(total_latency, uuid=short_uuid)
 
+            # Store end timestamp for gap calculation
+            if call_uuid in self.call_sessions:
+                self.call_sessions[call_uuid]["phase1_end_timestamp"] = time.time()
+
             return {
                 "result": result_type,
                 "transcription": transcription,
                 "confidence": confidence,
-                "latency_ms": total_latency
+                "latency_ms": total_latency,
+                "end_timestamp": time.time()  # Pour calculer gap Phase 1→2
             }
 
         except Exception as e:
@@ -3964,6 +4200,15 @@ class RobotFreeSWITCH:
         short_uuid = call_uuid[:8]
         phase_start = time.time()
 
+        # Calculate gap Phase X→2 (from Phase 1 or Phase 3)
+        gap_to_phase2 = 0
+        if call_uuid in self.call_sessions:
+            # Priorité Phase 3 (conversation loop) sinon Phase 1 (premier audio)
+            if "phase3_end_timestamp" in self.call_sessions[call_uuid]:
+                gap_to_phase2 = (phase_start - self.call_sessions[call_uuid]["phase3_end_timestamp"]) * 1000
+            elif "phase1_end_timestamp" in self.call_sessions[call_uuid]:
+                gap_to_phase2 = (phase_start - self.call_sessions[call_uuid]["phase1_end_timestamp"]) * 1000
+
         # PHASE 2 START - Colored log
         self.clog.phase2_start(Path(audio_path).name, uuid=short_uuid)
 
@@ -3971,8 +4216,16 @@ class RobotFreeSWITCH:
         detection_state = {
             "barged_in": False,
             "transcription": "",
+            "final_received": False,  # Flag pour savoir si transcription finale reçue
             "audio_finished": False,
-            "speech_ended": False
+            "speech_ended": False,
+            "last_update": time.time(),  # Timestamp dernière mise à jour
+            # Timestamps pour analyse latence détaillée (barge-in)
+            "first_partial_timestamp": None,  # Quand premier PARTIAL reçu
+            "last_partial_timestamp": None,   # Quand dernier PARTIAL reçu
+            "barge_in_timestamp": None,       # Quand barge-in déclenché
+            "speech_end_timestamp": None,     # Quand SPEECH_END reçu
+            "partial_count": 0                # Nombre de PARTIAL reçus
         }
 
         try:
@@ -3986,8 +4239,15 @@ class RobotFreeSWITCH:
                     detection_state["speech_ended"] = False  # Reset for new speech
 
                 elif event_type == "speech_end":
-                    logger.info(f"🤐 [{short_uuid}] Speech END detected")
                     detection_state["speech_ended"] = True
+                    detection_state["speech_end_timestamp"] = time.time()
+
+                    # Calculer temps écoulé depuis début monitoring
+                    elapsed_ms = (detection_state["speech_end_timestamp"] - monitoring_start) * 1000
+                    logger.info(
+                        f"🤐 [{short_uuid}] SPEECH_END at {elapsed_ms:.0f}ms "
+                        f"({detection_state['partial_count']} partials received)"
+                    )
 
                 elif event_type == "transcription":
                     text = event_data.get("text", "")
@@ -3995,39 +4255,47 @@ class RobotFreeSWITCH:
                     latency = event_data.get("latency_ms", 0)
 
                     if trans_type == "partial":
+                        # Tracker timestamps pour analyse latence
+                        current_time = time.time()
+                        if detection_state["first_partial_timestamp"] is None:
+                            detection_state["first_partial_timestamp"] = current_time
+                        detection_state["last_partial_timestamp"] = current_time
+                        detection_state["partial_count"] += 1
+
+                        # Calculer temps écoulé depuis début monitoring
+                        elapsed_ms = (current_time - monitoring_start) * 1000
+
                         # Compter mots pour détecter barge-in (MIN_WORDS_FOR_BARGE_IN minimum)
                         words = text.strip().split()
                         word_count = len(words)
                         min_words = config.MIN_WORDS_FOR_BARGE_IN
 
                         if word_count >= min_words and not detection_state["barged_in"]:
-                            logger.info(
-                                f"⚡ [{short_uuid}] BARGE-IN detected! "
-                                f"(partial: '{text}', {word_count} words >={min_words})"
-                            )
                             detection_state["barged_in"] = True
+                            detection_state["barge_in_timestamp"] = current_time
+                            logger.info(
+                                f"⚡ [{short_uuid}] BARGE-IN at {elapsed_ms:.0f}ms! "
+                                f"(PARTIAL #{detection_state['partial_count']}: '{text}', {word_count} words >={min_words})"
+                            )
                         else:
                             # Afficher comptage même si < min_words (pour debug/suivi)
                             logger.info(
-                                f"📝 [{short_uuid}] Partial: '{text}' "
-                                f"({word_count} words <{min_words} - NO barge-in)"
+                                f"📝 [{short_uuid}] PARTIAL #{detection_state['partial_count']} at {elapsed_ms:.0f}ms: "
+                                f"'{text}' ({word_count} words <{min_words} - NO barge-in)"
                             )
 
                     elif trans_type == "final":
-                        logger.info(
-                            f"📝 [{short_uuid}] \033[94mFinal transcription: '{text}'\033[0m "
-                            f"(latency: {latency:.1f}ms)"
-                        )
+                        # Afficher transcription avec panel Rich visible
+                        self.clog.transcription(text, uuid=short_uuid, latency_ms=latency)
                         detection_state["transcription"] = text
+                        detection_state["final_received"] = True  # Marquer final reçu
+                        detection_state["last_update"] = time.time()  # Update timestamp
 
             self.streaming_asr.register_callback(call_uuid, streaming_callback)
-            logger.info(f"✅ [{short_uuid}] Streaming ASR callback registered")
 
             # Étape 2: Démarrer audio fork → WebSocket
+            fork_start = time.time()
             ws_url = f"ws://{config.STREAMING_ASR_HOST}:{config.STREAMING_ASR_PORT}/stream/{call_uuid}"
-
-            logger.info(f"🔊 [{short_uuid}] Starting audio fork to {ws_url}")
-
             fork_cmd = f"uuid_audio_fork {call_uuid} start {ws_url} mono 16000"
             fork_result = self._execute_esl_command(fork_cmd)
 
@@ -4036,13 +4304,13 @@ class RobotFreeSWITCH:
                 # Fallback to WebRTC VAD
                 return self._execute_phase_playing(call_uuid, audio_path, enable_barge_in)
 
-            logger.info(f"✅ [{short_uuid}] Audio fork started")
+            fork_latency = (time.time() - fork_start) * 1000
 
             # Petit délai pour que le stream WebSocket se connecte
             time.sleep(0.1)
 
             # Étape 3: Démarrer playback
-            logger.info(f"🎵 [{short_uuid}] Starting playback: {Path(audio_path).name}")
+            playback_start = time.time()
 
             # Utiliser uuid_broadcast pour playback (permet arrêt via uuid_break)
             playback_cmd = f"uuid_broadcast {call_uuid} {audio_path} aleg"
@@ -4053,6 +4321,8 @@ class RobotFreeSWITCH:
                 # Arrêter audio fork
                 self._execute_esl_command(f"uuid_audio_fork {call_uuid} stop")
                 return self._execute_phase_playing(call_uuid, audio_path, enable_barge_in)
+
+            playback_latency = (time.time() - playback_start) * 1000
 
             # Étape 4: Attendre barge-in OU fin playback
             # Calculer durée audio réelle pour timeout précis
@@ -4066,51 +4336,118 @@ class RobotFreeSWITCH:
             )
 
             while (time.time() - monitoring_start) < timeout:
-                # PROACTIVE CHECK: Call still active?
+                current_time = time.time()
+
+                # ===== ULTRA-FAST HANGUP DETECTION (20ms polling) =====
+                # Vérification 1: Flag session (setté par HANGUP handler)
+                session = self.call_sessions.get(call_uuid, {})
+                if session.get("hangup_detected", False):
+                    hangup_ts = session.get("hangup_timestamp", 0)
+                    detection_delay_ms = (current_time - hangup_ts) * 1000
+                    logger.warning(
+                        f"🚨 [{short_uuid}] HANGUP FLAG detected in Phase 2! "
+                        f"Detection delay: {detection_delay_ms:.1f}ms - STOPPING PLAYBACK!"
+                    )
+                    break
+
+                # Vérification 2: ESL DIRECT (instantané, pas besoin d'attendre HANGUP EVENT!)
+                if not self._channel_exists(call_uuid):
+                    logger.warning(
+                        f"🚨 [{short_uuid}] Channel NO LONGER EXISTS (ESL check) - STOPPING PLAYBACK!"
+                    )
+                    break
+
+                # Legacy check (moins fiable)
                 if call_uuid not in self.active_calls:
                     logger.info(
-                        f"[{short_uuid}] Call hung up during Phase 2 monitoring, "
-                        f"stopping immediately"
+                        f"[{short_uuid}] Call removed from active_calls during Phase 2"
                     )
                     break
 
                 # Check if barge-in detected (via callback on 5+ words)
                 if detection_state["barged_in"]:
-                    # Smooth delay
-                    logger.info(f"🔉 [{short_uuid}] Smooth delay: {config.BARGE_IN_SMOOTH_DELAY}s")
-                    time.sleep(config.BARGE_IN_SMOOTH_DELAY)
+                    barge_in_time = (time.time() - monitoring_start) * 1000
 
-                    # Fade out audio (transition naturelle)
-                    logger.info(f"🎚️ [{short_uuid}] Fading out audio: {config.BARGE_IN_FADE_OUT_DURATION}s")
-                    fade_ms = int(config.BARGE_IN_FADE_OUT_DURATION * 1000)
-                    self._execute_esl_command(f"uuid_audio_fade {call_uuid} out {fade_ms}")
-                    time.sleep(config.BARGE_IN_FADE_OUT_DURATION)
+                    # Progressive fade-out during smooth delay
+                    # Reduce volume from 0 dB to -40 dB over 0.3s (10 steps)
+                    logger.info(f"🔉 [{short_uuid}] Fade-out + smooth delay: {config.BARGE_IN_SMOOTH_DELAY}s...")
 
-                    # Arrêter playback
-                    logger.info(f"🛑 [{short_uuid}] Stopping playback (barge-in)")
-                    self._execute_esl_command(f"uuid_break {call_uuid}")
+                    fade_steps = 10
+                    step_duration = config.BARGE_IN_SMOOTH_DELAY / fade_steps
+
+                    for step in range(fade_steps):
+                        # Calculate volume: 0 dB → -40 dB (linear fade)
+                        volume_db = -4 * step  # 0, -4, -8, -12, ..., -36
+                        volume_level = volume_db / 4.0  # FreeSWITCH uses -4 to +4 range
+
+                        # Apply volume adjustment
+                        audio_cmd = f"uuid_audio {call_uuid} start write level {volume_level}"
+                        self._execute_esl_command(audio_cmd)
+
+                        time.sleep(step_duration)
+
+                    # Stop audio playback
+                    break_cmd = f"uuid_break {call_uuid}"
+                    self._execute_esl_command(break_cmd)
+
+                    # Reset audio level to normal
+                    reset_cmd = f"uuid_audio {call_uuid} start write level 0"
+                    self._execute_esl_command(reset_cmd)
+
+                    logger.info(f"🔇 [{short_uuid}] Audio stopped (fade-out complete)")
 
                     # Attendre que le client finisse de parler
+                    speech_end_wait_start = time.time()
                     while not detection_state["speech_ended"] and call_uuid in self.active_calls:
-                        time.sleep(0.1)
+                        # HANGUP check même pendant l'attente speech_end!
+                        session = self.call_sessions.get(call_uuid, {})
+                        if session.get("hangup_detected", False):
+                            logger.warning(
+                                f"🚨 [{short_uuid}] HANGUP during speech_ended wait in Phase 2!"
+                            )
+                            break
+                        time.sleep(0.02)  # Poll every 20ms
+
+                    speech_end_wait_latency = (time.time() - speech_end_wait_start) * 1000
 
                     # Breathing room (pause naturelle)
-                    logger.info(f"💨 [{short_uuid}] Breathing room: {config.BARGE_IN_BREATHING_ROOM}s")
                     time.sleep(config.BARGE_IN_BREATHING_ROOM)
 
-                    logger.info(f"✅ [{short_uuid}] Speech ended after barge-in, proceeding to Phase 3")
+                    # CRITIQUE: Attendre transcription FINALE (max 1000ms)
+                    final_wait_start = time.time()
+                    max_final_wait = 1.0  # 1000ms timeout (équilibre vitesse/précision)
+
+                    while (time.time() - final_wait_start) < max_final_wait:
+                        # HANGUP check même pendant l'attente FINAL!
+                        session = self.call_sessions.get(call_uuid, {})
+                        if session.get("hangup_detected", False):
+                            logger.warning(
+                                f"🚨 [{short_uuid}] HANGUP during FINAL wait in Phase 2!"
+                            )
+                            break
+
+                        if detection_state["final_received"]:
+                            break
+                        time.sleep(0.02)  # Poll every 20ms (faster!)
+
+                    final_wait_latency = (time.time() - final_wait_start) * 1000
+
+                    if not detection_state["final_received"]:
+                        logger.warning(
+                            f"⚠️ [{short_uuid}] No FINAL after {final_wait_latency:.0f}ms, "
+                            f"using last transcription"
+                        )
+
                     break
 
-                # Petit sleep pour ne pas surcharger CPU
-                time.sleep(0.1)
+                # Petit sleep pour ne pas surcharger CPU (20ms au lieu de 100ms)
+                time.sleep(0.02)
 
             # Fin du monitoring (timeout atteint ou barge-in/hangup)
             if not detection_state["barged_in"] and call_uuid in self.active_calls:
-                logger.info(f"🎵 [{short_uuid}] Playback finished (no barge-in)")
                 detection_state["audio_finished"] = True
 
             # Étape 5: Arrêter audio fork
-            logger.info(f"🛑 [{short_uuid}] Stopping audio fork")
             self._execute_esl_command(f"uuid_audio_fork {call_uuid} stop")
 
             # CRITICAL: Attendre que WebSocket se ferme complètement (évite race condition)
@@ -4122,6 +4459,37 @@ class RobotFreeSWITCH:
             # Calculer latence totale
             phase_duration = (time.time() - phase_start) * 1000
 
+            # Compact latency breakdown (single line) avec décomposition détaillée
+            if detection_state["barged_in"]:
+                # Calculer timings précis
+                first_word_ms = 0
+                speaking_ms = 0
+                barge_in_detect_ms = 0
+
+                if detection_state["first_partial_timestamp"]:
+                    first_word_ms = (detection_state["first_partial_timestamp"] - monitoring_start) * 1000
+
+                    if detection_state["barge_in_timestamp"]:
+                        # Speaking = durée entre premier et dernier PARTIAL avant barge-in
+                        if detection_state["last_partial_timestamp"]:
+                            speaking_ms = (detection_state["last_partial_timestamp"] - detection_state["first_partial_timestamp"]) * 1000
+
+                        # BargeInDetect = délai système pour détecter barge-in (après dernier PARTIAL)
+                        barge_in_detect_ms = (detection_state["barge_in_timestamp"] - detection_state["last_partial_timestamp"]) * 1000 if detection_state["last_partial_timestamp"] else 0
+
+                logger.info(
+                    f"📊 [{short_uuid}] PHASE 2: Gap={gap_to_phase2:.0f}ms | Fork={fork_latency:.0f}ms | "
+                    f"Play={playback_latency:.0f}ms | FirstWord={first_word_ms:.0f}ms | "
+                    f"Speaking={speaking_ms:.0f}ms | BargeInDetect={barge_in_detect_ms:.0f}ms | "
+                    f"SpeechEndWait={speech_end_wait_latency:.0f}ms | FinalWait={final_wait_latency:.0f}ms | "
+                    f"TOTAL={phase_duration:.0f}ms ({detection_state['partial_count']} partials)"
+                )
+            else:
+                logger.info(
+                    f"📊 [{short_uuid}] PHASE 2: Gap={gap_to_phase2:.0f}ms | Fork={fork_latency:.0f}ms | "
+                    f"Play={playback_latency:.0f}ms | NoBargeIn | TOTAL={phase_duration:.0f}ms ({detection_state['partial_count']} partials)"
+                )
+
             logger.info(
                 f"✅ [{short_uuid}] PHASE 2 completed: "
                 f"barge_in={detection_state['barged_in']}, "
@@ -4131,6 +4499,10 @@ class RobotFreeSWITCH:
 
             # PHASE 2 END - Colored log
             self.clog.phase2_end(detection_state["barged_in"], uuid=short_uuid)
+
+            # Store end timestamp for gap calculation
+            if call_uuid in self.call_sessions:
+                self.call_sessions[call_uuid]["phase2_end_timestamp"] = time.time()
 
             return {
                 "barged_in": detection_state["barged_in"],
@@ -4808,6 +5180,29 @@ class RobotFreeSWITCH:
             except Exception as e:
                 logger.error(f"ESL command error for '{cmd}': {e}", exc_info=True)
                 return None
+
+    def _channel_exists(self, call_uuid: str) -> bool:
+        """
+        Vérification ULTRA-RAPIDE si le canal FreeSWITCH existe encore.
+
+        CRITIQUE pour détecter HANGUP instantanément sans attendre MEDIA_TIMEOUT!
+        uuid_exists est instantané (<1ms) car vérifie directement dans FreeSWITCH core.
+
+        Args:
+            call_uuid: UUID du call
+
+        Returns:
+            True si canal existe, False sinon
+        """
+        result = self._execute_esl_command(f"uuid_exists {call_uuid}")
+        exists = result and "true" in result.lower()
+
+        # Debug logging pour tracer les vérifications
+        short_uuid = call_uuid[:8]
+        if not exists:
+            logger.info(f"⚡ [{short_uuid}] uuid_exists returned: {result} -> Channel GONE!")
+
+        return exists
 
     def _execute_sendmsg(self, uuid: str, app_name: str, app_args: str = "") -> Optional[str]:
         """
