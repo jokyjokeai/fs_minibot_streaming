@@ -196,7 +196,7 @@ BARGE_IN_SMOOTH_DELAY = 0.3
 
 # Fade out audio duration (pour transition naturelle)
 # R�duction progressive du volume avant coupure (500ms)
-BARGE_IN_FADE_OUT_DURATION = 0.5
+BARGE_IN_FADE_OUT_DURATION = 1.0
 
 # Breathing room apr�s speech_end (pause naturelle)
 # Petit d�lai avant Phase 3 pour effet humain (100ms)

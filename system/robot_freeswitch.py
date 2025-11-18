@@ -47,9 +47,10 @@ from system.services.faster_whisper_stt import FasterWhisperSTT
 from system.services.amd_service import AMDService
 from system.services.streaming_asr import StreamingASR
 
-# Scenarios & Objections
+# Scenarios & Objections & Intents
 from system.scenarios import ScenarioManager
 from system.objection_matcher import ObjectionMatcher
+from system.intents_db import load_intents_database, match_intent
 
 # Colored Logger (Futuristic Design 🚀)
 from system.logger_colored import get_colored_logger
@@ -281,6 +282,16 @@ class RobotFreeSWITCH:
         except Exception as e:
             logger.warning(f"ObjectionMatcher not available: {e}")
             self.objection_matcher_default = None
+
+        # 7. Intents Database (PRELOAD fuzzy matching system)
+        try:
+            theme = default_theme if default_theme else "general"
+            logger.info(f"Loading Intents Database (theme: {theme})...")
+            self.intents_db = load_intents_database(theme)
+            logger.info(f"Intents Database loaded ({len(self.intents_db)} intents total)")
+        except Exception as e:
+            logger.warning(f"Intents Database not available: {e}")
+            self.intents_db = []
 
         # ===================================================================
         # WARMUP TESTS (CRITICAL - Avoid first-call latency spikes)
@@ -1009,8 +1020,20 @@ class RobotFreeSWITCH:
                     f"[{short_uuid}] === STEP {step_count}: {current_step} ==="
                 )
 
-                # Check if this is a terminal step (bye/bye_failed/Bye_* steps end conversation)
-                if current_step.lower() in ["bye", "bye_failed"] or current_step.lower().startswith("bye_"):
+                # Get step config
+                step_config = scenario.get("steps", {}).get(current_step)
+                if not step_config:
+                    logger.error(f"[{short_uuid}] Step '{current_step}' not found in scenario!")
+                    break
+
+                # Check if this is a terminal step (is_terminal property OR legacy names)
+                is_terminal = (
+                    step_config.get("is_terminal", False) or
+                    current_step.lower() in ["bye", "bye_failed", "end"] or
+                    current_step.lower().startswith("bye_")
+                )
+
+                if is_terminal:
                     logger.info(
                         f"[{short_uuid}] Terminal step reached: {current_step}"
                     )
@@ -1056,6 +1079,9 @@ class RobotFreeSWITCH:
                             f"[{short_uuid}] Unknown step result '{step_result}' -> "
                             f"Final status: NOT_INTERESTED"
                         )
+
+                    # Execute step actions (email, webhook, transfer, etc.) BEFORE ending
+                    self._execute_step_actions(call_uuid, step_config, session)
 
                     # End conversation
                     self._hangup_call(call_uuid, final_status)
@@ -1957,11 +1983,11 @@ class RobotFreeSWITCH:
                     detection_state["last_update"] = time.time()
                     if text:
                         logger.info(
-                            f"📝 [{short_uuid}] CALLBACK received FINAL transcription: '{text}'"
+                            f"📝 [{short_uuid}] \033[94mCALLBACK received FINAL transcription: '{text}'\033[0m"
                         )
                     else:
                         logger.info(
-                            f"📝 [{short_uuid}] CALLBACK received FINAL (empty - no transcription)"
+                            f"📝 [{short_uuid}] \033[94mCALLBACK received FINAL (empty - no transcription)\033[0m"
                         )
                 else:  # partial
                     # Afficher partial avec comptage mots (comme Phase 2)
@@ -2451,14 +2477,21 @@ class RobotFreeSWITCH:
             # ALWAYS follow scenario JSON mapping for silence
             # The scenario defines the flow (e.g., hello → retry_silence → end)
 
-            # CRITICAL: Si on est déjà en "bye" ou "bye_failed", forcer "end" pour éviter boucle
-            if step_name.lower() in ["bye", "bye_failed"]:
+            # CRITICAL: Si step terminal (is_terminal OU legacy names), forcer "end" pour éviter boucle
+            is_terminal = (
+                step_config.get("is_terminal", False) or
+                step_name.lower() in ["bye", "bye_failed", "end"]
+            )
+
+            if is_terminal:
                 next_step = "end"
                 logger.info(
                     f"[{short_uuid}] Silence in terminal step '{step_name}' → Forcing end"
                 )
             else:
-                next_step = intent_mapping.get("silence", "bye_failed")
+                # Get default fallback from scenario metadata (or hardcoded "bye_failed")
+                default_silence_fallback = scenario.get("metadata", {}).get("fallbacks", {}).get("silence", "bye_failed")
+                next_step = intent_mapping.get("silence", default_silence_fallback)
                 logger.info(
                     f"[{short_uuid}] Silence detected → Next step: {next_step} "
                     f"(following scenario mapping)"
@@ -2471,9 +2504,10 @@ class RobotFreeSWITCH:
             next_step = intent_mapping.get(intent)
 
             if not next_step:
-                # No mapping -> try "unknown" fallback or deny
+                # No mapping -> try "unknown" fallback from metadata (or deny)
                 logger.warning(f"[{short_uuid}] No mapping for intent: {intent}")
-                next_step = intent_mapping.get("unknown", intent_mapping.get("deny"))
+                default_unknown_fallback = scenario.get("metadata", {}).get("fallbacks", {}).get("unknown", "bye_failed")
+                next_step = intent_mapping.get("unknown", default_unknown_fallback)
 
         # ===================================================================
         # STEP 5: Qualification update
@@ -2832,6 +2866,26 @@ class RobotFreeSWITCH:
             }
 
         text_lower = transcription.lower().strip()
+
+        # ===== NIVEAU 0: FUZZY MATCHING (Intents Database) =====
+        # Try fuzzy matching first (faster than keyword matching, more flexible)
+        if hasattr(self, 'intents_db') and self.intents_db:
+            fuzzy_result = match_intent(text_lower, self.intents_db, min_confidence=0.7)
+            if fuzzy_result:
+                latency_ms = (time.time() - analyze_start) * 1000
+                logger.info(
+                    f"Intent analysis: '{transcription[:30]}...' -> {fuzzy_result['intent']} "
+                    f"(conf: {fuzzy_result['confidence']:.2f}, "
+                    f"reason: fuzzy_match '{fuzzy_result['matched_keyword']}', "
+                    f"latency: {latency_ms:.1f}ms)"
+                )
+                return {
+                    "intent": fuzzy_result['intent'],
+                    "confidence": fuzzy_result['confidence'],
+                    "keywords_matched": [fuzzy_result['matched_keyword']],
+                    "reason": "fuzzy_match",
+                    "latency_ms": latency_ms
+                }
 
         # ===== NIVEAU 1: PRE-TRAITEMENT =====
         # Ordre FINAL: negations explicites > fixed expressions > interrogatifs > negation generale
@@ -3491,7 +3545,7 @@ class RobotFreeSWITCH:
                         text = event_data.get("text", "").strip()
                         amd_state["transcription"] = text
                         amd_state["final_received"] = True
-                        logger.info(f"📝 [{short_uuid}] AMD CALLBACK received FINAL: '{text}'")
+                        logger.info(f"📝 [{short_uuid}] \033[94mAMD CALLBACK received FINAL: '{text}'\033[0m")
                     else:
                         logger.debug(f"📝 [{short_uuid}] AMD CALLBACK received PARTIAL: '{event_data.get('text', '')}'")
 
@@ -3961,7 +4015,7 @@ class RobotFreeSWITCH:
 
                     elif trans_type == "final":
                         logger.info(
-                            f"📝 [{short_uuid}] Final transcription: '{text}' "
+                            f"📝 [{short_uuid}] \033[94mFinal transcription: '{text}'\033[0m "
                             f"(latency: {latency:.1f}ms)"
                         )
                         detection_state["transcription"] = text
@@ -5056,6 +5110,131 @@ class RobotFreeSWITCH:
         except Exception as e:
             logger.error(f"Error reading WAV frames: {e}")
             return
+
+    # ========================================================================
+    # ACTIONS FRAMEWORK (Email, Webhook, Transfer, etc.)
+    # ========================================================================
+
+    def _execute_step_actions(self, call_uuid: str, step_config: Dict, session: Dict):
+        """
+        Execute configured actions for a step (email, webhook, transfer, etc.)
+
+        Actions are defined in scenario JSON:
+        {
+            "actions": [
+                {"type": "send_email", "config": {...}},
+                {"type": "webhook", "config": {...}},
+                {"type": "transfer", "config": {...}}
+            ]
+        }
+
+        Args:
+            call_uuid: Call UUID
+            step_config: Step configuration from scenario
+            session: Call session data
+        """
+        short_uuid = call_uuid[:8]
+        actions = step_config.get("actions", [])
+
+        if not actions:
+            return
+
+        logger.info(f"📋 [{short_uuid}] Executing {len(actions)} action(s)...")
+
+        for i, action in enumerate(actions):
+            action_type = action.get("type")
+            action_config = action.get("config", {})
+
+            try:
+                if action_type == "send_email":
+                    self._action_send_email(call_uuid, action_config, session)
+                elif action_type == "webhook":
+                    self._action_webhook(call_uuid, action_config, session)
+                elif action_type == "transfer":
+                    self._action_transfer(call_uuid, action_config, session)
+                elif action_type == "update_crm":
+                    self._action_update_crm(call_uuid, action_config, session)
+                else:
+                    logger.warning(f"⚠️ [{short_uuid}] Unknown action type: {action_type}")
+
+            except Exception as e:
+                logger.error(f"❌ [{short_uuid}] Action {i+1} failed ({action_type}): {e}")
+
+    def _action_send_email(self, call_uuid: str, config: Dict, session: Dict):
+        """Send email via API (placeholder for future implementation)"""
+        short_uuid = call_uuid[:8]
+        logger.info(f"📧 [{short_uuid}] EMAIL action triggered")
+        logger.info(f"   Template: {config.get('template', 'N/A')}")
+        logger.info(f"   To: {config.get('to', 'N/A')}")
+        # TODO: Implement API call to email service
+        # requests.post(config["api_endpoint"], json={...})
+
+    def _action_webhook(self, call_uuid: str, config: Dict, session: Dict):
+        """Call webhook API (placeholder for future implementation)"""
+        short_uuid = call_uuid[:8]
+        logger.info(f"🔗 [{short_uuid}] WEBHOOK action triggered")
+        logger.info(f"   URL: {config.get('url', 'N/A')}")
+        # TODO: Implement webhook call
+        # requests.post(config["url"], json=session)
+
+    def _action_transfer(self, call_uuid: str, config: Dict, session: Dict):
+        """
+        Transfer call to another destination (SIP URI, extension, etc.)
+
+        Config example:
+        {
+            "destination": "sip:sales@domain.com" or "1234" (extension),
+            "timeout": 30,
+            "on_no_answer": "leave_voicemail" (optional fallback step)
+        }
+
+        Args:
+            call_uuid: Call UUID
+            config: Transfer configuration
+            session: Call session data
+        """
+        short_uuid = call_uuid[:8]
+        destination = config.get("destination")
+        timeout = config.get("timeout", 30)
+
+        if not destination:
+            logger.error(f"❌ [{short_uuid}] Transfer failed: No destination specified")
+            return False
+
+        logger.info(f"📞 [{short_uuid}] Transferring call to: {destination}")
+        logger.info(f"   Timeout: {timeout}s")
+
+        try:
+            # FreeSWITCH uuid_transfer command
+            # Syntax: uuid_transfer <uuid> [-bleg|-both] <dest-exten> [<dialplan> <context>]
+            transfer_cmd = f"uuid_transfer {call_uuid} {destination}"
+
+            result = self._execute_esl_command(transfer_cmd)
+
+            if result:
+                logger.info(f"✅ [{short_uuid}] Call transferred successfully to {destination}")
+                return True
+            else:
+                logger.error(f"❌ [{short_uuid}] Transfer command failed")
+
+                # Fallback if configured
+                fallback_step = config.get("on_no_answer")
+                if fallback_step:
+                    logger.info(f"   Fallback: {fallback_step}")
+                    # TODO: Could execute fallback step here
+
+                return False
+
+        except Exception as e:
+            logger.error(f"❌ [{short_uuid}] Transfer error: {e}")
+            return False
+
+    def _action_update_crm(self, call_uuid: str, config: Dict, session: Dict):
+        """Update CRM via API (placeholder for future implementation)"""
+        short_uuid = call_uuid[:8]
+        logger.info(f"💼 [{short_uuid}] CRM UPDATE action triggered")
+        logger.info(f"   Endpoint: {config.get('api_endpoint', 'N/A')}")
+        # TODO: Implement CRM API call
 
 
 # ============================================================================

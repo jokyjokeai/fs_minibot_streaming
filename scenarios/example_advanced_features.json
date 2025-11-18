@@ -1,0 +1,161 @@
+{
+  "metadata": {
+    "name": "Advanced Features Demo",
+    "description": "Démontre toutes les nouvelles features: intents_db, steps terminaux, actions, transfert, fallbacks",
+    "version": "3.0",
+    "theme": "general",
+    "max_not_understood": 2,
+    "fallbacks": {
+      "silence": "retry_silence",
+      "unknown": "not_understood",
+      "deny": "bye_failed"
+    }
+  },
+  "rail": [
+    "intro",
+    "qualify_owner",
+    "transfer_or_callback"
+  ],
+  "steps": {
+    "intro": {
+      "message_text": "Bonjour, je suis Marie, je vous appelle pour une étude de marché rapide. Vous avez 2 minutes?",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/intro.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "intent_mapping": {
+        "affirm": "qualify_owner",
+        "deny": "bye_not_interested",
+        "silence": "retry_intro",
+        "unsure": "retry_intro"
+      }
+    },
+    "retry_intro": {
+      "message_text": "C'est juste 2 minutes pour une étude de marché. Vous êtes disponible?",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/retry_intro.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "intent_mapping": {
+        "affirm": "qualify_owner",
+        "deny": "bye_not_interested",
+        "silence": "bye_no_answer"
+      }
+    },
+    "qualify_owner": {
+      "message_text": "Parfait. Êtes-vous propriétaire de votre logement?",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/qualify_owner.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 10,
+      "max_autonomous_turns": 2,
+      "intent_mapping": {
+        "affirm": "transfer_or_callback",
+        "deny": "bye_not_qualified",
+        "silence": "bye_no_answer",
+        "objection": "objection_loop"
+      }
+    },
+    "transfer_or_callback": {
+      "message_text": "Excellent! Je vous transfère à un conseiller maintenant.",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/transfer.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 5,
+      "is_terminal": true,
+      "result": "completed",
+      "actions": [
+        {
+          "type": "transfer",
+          "config": {
+            "destination": "sip:sales@example.com",
+            "timeout": 30,
+            "on_no_answer": "leave_voicemail"
+          }
+        },
+        {
+          "type": "webhook",
+          "config": {
+            "url": "https://crm.example.com/api/leads",
+            "method": "POST",
+            "data": {
+              "source": "cold_call",
+              "status": "qualified",
+              "transfer_attempted": true
+            }
+          }
+        }
+      ],
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+    "bye_not_interested": {
+      "message_text": "Pas de souci, je comprends. Merci pour votre temps et bonne journée!",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/bye_not_interested.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 3,
+      "is_terminal": true,
+      "result": "failed",
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+    "bye_not_qualified": {
+      "message_text": "D'accord. Ce n'est pas pour vous alors. Merci et bonne journée!",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/bye_not_qualified.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 3,
+      "is_terminal": true,
+      "result": "failed",
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+    "bye_no_answer": {
+      "message_text": "Je ne vous entends pas. Je vous rappellerai. Au revoir!",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/bye_no_answer.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": false,
+      "timeout": 3,
+      "is_terminal": true,
+      "result": "no_answer",
+      "actions": [
+        {
+          "type": "webhook",
+          "config": {
+            "url": "https://crm.example.com/api/schedule-callback",
+            "method": "POST",
+            "data": {
+              "reason": "no_answer",
+              "retry_in_hours": 24
+            }
+          }
+        }
+      ],
+      "intent_mapping": {
+        "*": "end"
+      }
+    },
+    "not_understood": {
+      "message_text": "Désolée, je n'ai pas bien compris. Pouvez-vous répéter?",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/not_understood.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 8,
+      "intent_mapping": {
+        "*": "bye_not_interested"
+      }
+    }
+  }
+}
