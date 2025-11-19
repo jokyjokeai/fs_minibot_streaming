@@ -6,9 +6,9 @@ Script complet pour normaliser, ajuster volume et copier les fichiers audio vers
 
 Fonctionnalités:
 1. Normalisation audio (peak + RMS)
-2. Ajustement volume configurable (-5dB à +5dB, défaut +2dB)
+2. Ajustement volume configurable (-5dB à +5dB, défaut 0dB - pas de boost)
 3. Réduction automatique background audio (-10dB sous autres fichiers)
-4. Conversion format téléphonie (8kHz mono µ-law WAV)
+4. Conversion format téléphonie (16kHz mono PCM 16-bit WAV - qualité wideband)
 5. Copie vers FreeSWITCH avec permissions correctes
 
 Utilisation:
@@ -87,10 +87,10 @@ class AudioProcessor:
     """
 
     # Format cible téléphonie
-    TARGET_SAMPLE_RATE = 8000  # 8kHz (téléphonie)
-    TARGET_CHANNELS = 1        # Mono
+    TARGET_SAMPLE_RATE = 16000  # 16kHz (wideband - meilleure qualité)
+    TARGET_CHANNELS = 1         # Mono
     TARGET_FORMAT = "wav"
-    TARGET_CODEC = "pcm_mulaw"  # G.711 µ-law
+    TARGET_CODEC = "pcm_s16le"  # PCM 16-bit (meilleure qualité que µ-law)
 
     # Normalisation
     TARGET_PEAK_DB = -3.0      # Peak standard téléphonie
@@ -100,7 +100,7 @@ class AudioProcessor:
         self,
         source_dir: Path,
         target_dir: Path,
-        volume_adjust: float = 2.0,
+        volume_adjust: float = 0.0,
         background_reduction: float = -10.0,
         dry_run: bool = False,
         force: bool = False
@@ -111,7 +111,7 @@ class AudioProcessor:
         Args:
             source_dir: Dossier source (audio/)
             target_dir: Dossier FreeSWITCH (/usr/share/freeswitch/sounds/minibot)
-            volume_adjust: Ajustement volume global en dB (défaut +2dB)
+            volume_adjust: Ajustement volume global en dB (défaut 0dB - pas de boost)
             background_reduction: Réduction volume background en dB (défaut -10dB)
             dry_run: Mode simulation
             force: Re-traiter fichiers existants
@@ -540,8 +540,8 @@ Exemples:
     parser.add_argument(
         '--volume-adjust',
         type=float,
-        default=2.0,
-        help='Ajustement volume global en dB (défaut: +2.0, range: -5 à +5)'
+        default=0.0,
+        help='Ajustement volume global en dB (défaut: 0.0 = pas de boost, range: -5 à +5)'
     )
 
     parser.add_argument(

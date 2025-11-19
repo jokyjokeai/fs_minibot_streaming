@@ -2809,7 +2809,7 @@ class RobotFreeSWITCH:
                 break
 
             # Build full audio path for objection
-            audio_path = config.BASE_DIR / "sounds" / theme / "objections" / audio_file
+            audio_path = Path(config.FREESWITCH_SOUNDS_DIR) / theme / "objections" / audio_file
 
             if not audio_path.exists():
                 logger.error(f"[{short_uuid}] Objection audio not found: {audio_path}")
