@@ -276,6 +276,69 @@ class ScenarioManager:
                         logger.error(f"Step '{step_name}' qualification_weight must be 0-100")
                         return False
 
+        # ─────────────────────────────────────────────────────────────────────
+        # VALIDATION V3 FIELDS (is_terminal, actions, fallbacks)
+        # ─────────────────────────────────────────────────────────────────────
+        for step_name, step_config in scenario["steps"].items():
+            # is_terminal (v3): optionnel, doit être bool si présent
+            if "is_terminal" in step_config:
+                if not isinstance(step_config["is_terminal"], bool):
+                    logger.error(f"Step '{step_name}' field 'is_terminal' must be boolean")
+                    return False
+
+            # actions (v3): optionnel, doit être array si présent
+            if "actions" in step_config:
+                if not isinstance(step_config["actions"], list):
+                    logger.error(f"Step '{step_name}' field 'actions' must be array")
+                    return False
+
+                # Valider structure de chaque action
+                for i, action in enumerate(step_config["actions"]):
+                    if not isinstance(action, dict):
+                        logger.error(f"Step '{step_name}' action[{i}] must be dict")
+                        return False
+
+                    if "type" not in action:
+                        logger.error(f"Step '{step_name}' action[{i}] missing 'type' field")
+                        return False
+
+                    valid_action_types = ["webhook", "transfer", "send_email", "update_crm"]
+                    if action["type"] not in valid_action_types:
+                        logger.warning(f"Step '{step_name}' action[{i}] unknown type: {action['type']} (valid: {valid_action_types})")
+
+                    # Valider config selon type
+                    if "config" not in action:
+                        logger.error(f"Step '{step_name}' action[{i}] missing 'config' field")
+                        return False
+
+                    if not isinstance(action["config"], dict):
+                        logger.error(f"Step '{step_name}' action[{i}] 'config' must be dict")
+                        return False
+
+                    # Validation spécifique par type
+                    if action["type"] == "webhook":
+                        if "url" not in action["config"]:
+                            logger.error(f"Step '{step_name}' webhook action missing 'url' in config")
+                            return False
+
+                    elif action["type"] == "transfer":
+                        if "destination" not in action["config"]:
+                            logger.error(f"Step '{step_name}' transfer action missing 'destination' in config")
+                            return False
+
+        # Valider fallbacks (v3) dans metadata
+        if "metadata" in scenario and "fallbacks" in scenario["metadata"]:
+            fallbacks = scenario["metadata"]["fallbacks"]
+
+            if not isinstance(fallbacks, dict):
+                logger.error("metadata.fallbacks must be dict")
+                return False
+
+            # Vérifier que les fallback steps existent
+            for intent, target_step in fallbacks.items():
+                if target_step not in scenario["steps"] and target_step != "end":
+                    logger.warning(f"Fallback '{intent}' points to non-existent step: '{target_step}' (will use hardcoded fallback)")
+
         return True
 
     def get_step_config(self, scenario: Dict, step_name: str) -> Optional[Dict]:

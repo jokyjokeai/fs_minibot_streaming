@@ -16,6 +16,53 @@ logging.basicConfig(
     format='%(asctime)s | %(levelname)-8s | %(name)-25s | %(message)s'
 )
 
+# ===== MINIMAL LOGGING SETUP (garder strict minimum + focus HANGUP) =====
+def setup_minimal_logging():
+    """Configure logs pour garder SEULEMENT essentiels + focus HANGUP debug"""
+
+    import sys
+    import os
+
+    # Masquer COMPLÈTEMENT les logs websockets (même les erreurs)
+    logging.getLogger('websockets.server').setLevel(logging.CRITICAL)
+    logging.getLogger('websockets').setLevel(logging.CRITICAL)
+
+    # Masquer logs Vosk (très verbeux)
+    logging.getLogger('minibot.system.services.streaming_asr').setLevel(logging.ERROR)
+
+    # Masquer logs services (warmup, init, etc.)
+    logging.getLogger('system.services').setLevel(logging.ERROR)
+    logging.getLogger('system.services.amd_service').setLevel(logging.ERROR)
+    logging.getLogger('system.services.faster_whisper_stt').setLevel(logging.ERROR)
+
+    # Masquer logs cache/objections/intents (sauf erreurs critiques)
+    logging.getLogger('system.cache_manager').setLevel(logging.ERROR)
+    logging.getLogger('system.objections_db').setLevel(logging.ERROR)
+    logging.getLogger('system.objection_matcher').setLevel(logging.ERROR)
+    logging.getLogger('system.intents_db').setLevel(logging.ERROR)
+    logging.getLogger('system.scenarios').setLevel(logging.ERROR)
+    logging.getLogger('system.config').setLevel(logging.ERROR)
+
+    # GARDER logs importants (INFO level)
+    logging.getLogger('system.robot_freeswitch').setLevel(logging.INFO)
+
+    # Supprimer les logs Vosk C++ (rediriger stderr vers /dev/null temporairement)
+    # On le fait pendant l'init seulement
+    global vosk_stderr_backup
+    vosk_stderr_backup = sys.stderr
+    sys.stderr = open(os.devnull, 'w')
+
+    print("✅ Logs configurés: mode ULTRA minimal + focus HANGUP")
+
+def restore_stderr():
+    """Restaure stderr après init Vosk"""
+    import sys
+    if 'vosk_stderr_backup' in globals():
+        # Restaurer stderr sans fermer /dev/null (évite logging errors)
+        sys.stderr = vosk_stderr_backup
+
+setup_minimal_logging()
+
 logger = logging.getLogger(__name__)
 
 
@@ -28,7 +75,7 @@ def main():
 
     # Configuration
     phone_number = "33743130341"  # Ton numero
-    scenario_name = "dfdf"        # Ton scenario
+    scenario_name = "scen_test"   # Scenario de test OPTION B
 
     print(f"\n📋 Configuration:")
     print(f"   Numero: {phone_number}")
@@ -54,6 +101,9 @@ def main():
         start_time = time.time()
 
         robot = RobotFreeSWITCH(default_theme=theme_file)
+
+        # Restaurer stderr après init (pour voir les vraies erreurs ensuite)
+        restore_stderr()
 
         init_time = (time.time() - start_time) * 1000
         print(f"✅ Robot initialise en {init_time:.0f}ms")

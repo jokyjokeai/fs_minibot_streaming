@@ -71,6 +71,7 @@ class ObjectionMatcher:
         # Convertir ObjectionEntry en format interne unifié
         self.objections = {}  # {keywords_joined: response}
         self.audio_paths = {}  # {keywords_joined: audio_path}
+        self.entry_types = {}  # {keywords_joined: entry_type} (NEW: faq vs objection)
         self.objection_keys = []
 
         if isinstance(objections_input, dict):
@@ -78,6 +79,7 @@ class ObjectionMatcher:
             self.objections = objections_input
             self.objection_keys = list(objections_input.keys())
             self.audio_paths = {k: None for k in self.objection_keys}
+            self.entry_types = {k: "objection" for k in self.objection_keys}  # Default to objection
             logger.info(f"ObjectionMatcher initialized with dict (legacy format)")
 
         elif isinstance(objections_input, list) and OBJECTIONS_DB_AVAILABLE:
@@ -88,6 +90,7 @@ class ObjectionMatcher:
                     key = " | ".join(entry.keywords)
                     self.objections[key] = entry.response
                     self.audio_paths[key] = entry.audio_path
+                    self.entry_types[key] = entry.entry_type  # NEW: Stocker entry_type (faq/objection)
                     self.objection_keys.append(key)
             logger.info(f"ObjectionMatcher initialized with {len(self.objections)} ObjectionEntry")
         else:
@@ -348,6 +351,7 @@ class ObjectionMatcher:
                 "objection": best_objection,
                 "response": self.objections[best_objection],
                 "audio_path": self.audio_paths.get(best_objection),  # Phase 6: support audio_path
+                "entry_type": self.entry_types.get(best_objection, "objection"),  # NEW: faq vs objection
                 "score": best_score,
                 "method": "hybrid",
                 "confidence": "high" if best_score >= 0.8 else "medium"

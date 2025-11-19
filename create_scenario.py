@@ -175,7 +175,12 @@ class ScenarioBuilderV3:
                 "version": "3.0",
                 "theme_file": "",  # Nouveau système: theme_file au lieu de thematique
                 "voice": "",
-                "barge_in_default": True
+                "barge_in_default": True,
+                "fallbacks": {
+                    "silence": "retry_silence",
+                    "unknown": "not_understood",
+                    "deny": "bye_failed"
+                }
             },
             "variables": {
                 "first_name": "{{first_name}}",
@@ -192,6 +197,7 @@ class ScenarioBuilderV3:
         self.max_turns = 2  # Nombre max de tours pour objections/questions
         self.audio_files = {}  # {step_name: {"audio_path": "...", "transcription": "..."}}
         self.vosk_model = None  # Modèle Vosk pour transcription
+        self.terminal_actions = {}  # Actions configurées pour steps terminaux (v3)
 
     def run(self):
         """Lance le processus interactif complet"""
@@ -221,6 +227,9 @@ class ScenarioBuilderV3:
         # 6. Configuration max_autonomous_turns
         self._ask_max_turns_config()
 
+        # 6.5. Configuration actions terminales (v3)
+        self._ask_terminal_actions()
+
         # 7. Enregistrement audio pour chaque étape
         print_header("📹 ENREGISTREMENT AUDIO DES ÉTAPES")
         print_warning("Pour chaque étape, vous devrez enregistrer un fichier audio.")
@@ -228,10 +237,10 @@ class ScenarioBuilderV3:
 
         self._record_all_audio_files()
 
-        # 7. Construction de la structure
+        # 8. Construction de la structure
         self._build_all_steps()
 
-        # 8. Sauvegarder (pas de qualification_rules, le flow décide)
+        # 9. Sauvegarder (pas de qualification_rules, le flow décide)
         self._save_scenario()
 
         print_success(f"\n🎉 Scénario créé avec succès!")
@@ -441,6 +450,128 @@ class ScenarioBuilderV3:
             print_success(f"✅ max_turns = {self.max_turns} : Gestion d'objections complète")
 
         print_info(f"    → Le robot répondra jusqu'à {self.max_turns} fois aux objections/questions par étape")
+
+    def _ask_terminal_actions(self):
+        """Configuration des actions pour les steps terminaux (v3)"""
+        print_header("🎬 CONFIGURATION ACTIONS TERMINALES (v3)")
+
+        print_info("Les actions permettent d'exécuter des opérations automatiques sur les steps terminaux.")
+        print_info("Types d'actions disponibles:")
+        print_info("  • webhook   : Envoyer données vers API externe (CRM, analytics, etc.)")
+        print_info("  • transfer  : Transférer l'appel vers un agent humain\n")
+
+        # Demander si l'utilisateur veut configurer des actions
+        configure_actions = ask_yes_no("Voulez-vous configurer des actions pour les steps terminaux ?", default=False)
+
+        if not configure_actions:
+            print_info("Pas d'actions configurées (vous pourrez les ajouter manuellement dans le JSON)")
+            return
+
+        # Configuration pour chaque step terminal
+        terminal_steps = ["bye", "bye_failed"]
+
+        for step_name in terminal_steps:
+            print(f"\n{Colors.BOLD}{'─'*60}")
+            print(f"Configuration actions pour step: {Colors.CYAN}{step_name}{Colors.END}")
+            print(f"{'─'*60}{Colors.END}")
+
+            # Demander si des actions pour ce step
+            has_actions = ask_yes_no(f"Configurer des actions pour '{step_name}' ?", default=False)
+
+            if not has_actions:
+                continue
+
+            step_actions = []
+
+            # Boucle pour ajouter plusieurs actions
+            while True:
+                print(f"\n{Colors.YELLOW}Actions disponibles:{Colors.END}")
+                print("  1. webhook  - Appel API externe")
+                print("  2. transfer - Transfert d'appel")
+                print("  3. (fini)   - Passer au step suivant")
+
+                action_choice = input(f"\nChoisir action (1-3) [3]: ").strip()
+
+                if not action_choice or action_choice == "3":
+                    break
+
+                # ─── WEBHOOK ───
+                if action_choice == "1":
+                    print(f"\n{Colors.CYAN}Configuration WEBHOOK{Colors.END}")
+
+                    webhook_url = ask_text("URL du webhook (ex: https://crm.example.com/api/leads)", required=True)
+                    webhook_method = ask_text("Méthode HTTP [POST]", default="POST", required=False) or "POST"
+
+                    # Données optionnelles
+                    print_info("\nDonnées à envoyer (optionnel, format JSON):")
+                    print_info("  Laissez vide pour envoyer automatiquement les données de l'appel")
+                    print_info("  Ou entrez un JSON personnalisé (ex: {\"source\": \"cold_call\"})")
+
+                    custom_data = input("  Données JSON [auto]: ").strip()
+
+                    webhook_action = {
+                        "type": "webhook",
+                        "config": {
+                            "url": webhook_url,
+                            "method": webhook_method
+                        }
+                    }
+
+                    # Ajouter custom data si fourni
+                    if custom_data:
+                        try:
+                            import json as json_module
+                            webhook_action["config"]["data"] = json_module.loads(custom_data)
+                        except:
+                            print_warning("JSON invalide, données ignorées (sera auto généré)")
+
+                    step_actions.append(webhook_action)
+                    print_success(f"✅ Action webhook ajoutée: {webhook_url}")
+
+                # ─── TRANSFER ───
+                elif action_choice == "2":
+                    print(f"\n{Colors.CYAN}Configuration TRANSFER{Colors.END}")
+
+                    print_info("Formats destination acceptés:")
+                    print_info("  • SIP URI : sip:sales@example.com")
+                    print_info("  • Extension : 1234")
+                    print_info("  • DID : +33612345678")
+
+                    transfer_dest = ask_text("Destination du transfert", required=True)
+
+                    transfer_timeout_input = input("Timeout (secondes) [30]: ").strip()
+                    transfer_timeout = int(transfer_timeout_input) if transfer_timeout_input else 30
+
+                    transfer_action = {
+                        "type": "transfer",
+                        "config": {
+                            "destination": transfer_dest,
+                            "timeout": transfer_timeout
+                        }
+                    }
+
+                    step_actions.append(transfer_action)
+                    print_success(f"✅ Action transfer ajoutée: {transfer_dest}")
+
+                else:
+                    print_error("Choix invalide")
+
+            # Stocker les actions pour ce step
+            if step_actions:
+                self.terminal_actions[step_name] = step_actions
+                print_success(f"\n✅ {len(step_actions)} action(s) configurée(s) pour '{step_name}'")
+
+        # Résumé
+        if self.terminal_actions:
+            print(f"\n{Colors.GREEN}{'─'*60}")
+            print(f"RÉSUMÉ ACTIONS CONFIGURÉES")
+            print(f"{'─'*60}{Colors.END}")
+            for step, actions in self.terminal_actions.items():
+                print(f"  • {step}: {len(actions)} action(s)")
+                for action in actions:
+                    print(f"    - {action['type']}: {action['config']}")
+        else:
+            print_info("\nAucune action configurée (vous pourrez les ajouter manuellement)")
 
     def _transcribe_audio_with_vosk(self, audio_path: Path) -> Optional[str]:
         """
@@ -804,11 +935,16 @@ class ScenarioBuilderV3:
             "voice": self.voice_name,
             "barge_in": False,
             "timeout": 5,
+            "is_terminal": True,
             "result": "completed",
             "intent_mapping": {
                 "*": "end"
             }
         }
+
+        # Ajouter actions si configurées (v3)
+        if "bye" in self.terminal_actions:
+            steps["bye"]["actions"] = self.terminal_actions["bye"]
 
         # ─────────────────────────────────────────────────────────────────
         # BYE_NO_ANSWER supprimé - redirection directe vers "end" maintenant
@@ -824,11 +960,16 @@ class ScenarioBuilderV3:
             "voice": self.voice_name,
             "barge_in": False,
             "timeout": 5,
+            "is_terminal": True,
             "result": "failed",
             "intent_mapping": {
                 "*": "end"
             }
         }
+
+        # Ajouter actions si configurées (v3)
+        if "bye_failed" in self.terminal_actions:
+            steps["bye_failed"]["actions"] = self.terminal_actions["bye_failed"]
 
         # ─────────────────────────────────────────────────────────────────
         # NOT_UNDERSTOOD (fallback)
@@ -854,6 +995,7 @@ class ScenarioBuilderV3:
             "voice": self.voice_name,
             "barge_in": False,
             "timeout": 0,
+            "is_terminal": True,
             "result": "ended",
             "intent_mapping": {}
         }

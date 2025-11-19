@@ -241,9 +241,20 @@ class ColoredLogger:
 
     def phase2_end(self, total_ms: float, uuid: Optional[str] = None):
         """
-        Log PHASE 2 END with total latency (GREEN)
+        Log PHASE 2 END with total latency and status (GREEN)
         """
-        message = f"Total: {total_ms:.0f}ms"
+        # Choose status based on latency
+        if total_ms < 4000:
+            status = "EXCELLENT"
+            color = self.COLORS["latency_good"]
+        elif total_ms < 6000:
+            status = "GOOD"
+            color = self.COLORS["latency_warning"]
+        else:
+            status = "SLOW"
+            color = self.COLORS["latency_bad"]
+
+        message = f"Total: {total_ms:.0f}ms - Status: {status}"
         self._log_panel(
             message=message,
             title="PHASE 2: PLAYING END",
@@ -276,9 +287,20 @@ class ColoredLogger:
 
     def phase3_end(self, total_ms: float, uuid: Optional[str] = None):
         """
-        Log PHASE 3 END with total latency (MAGENTA)
+        Log PHASE 3 END with total latency and status (MAGENTA)
         """
-        message = f"Total: {total_ms:.0f}ms"
+        # Choose status based on latency
+        if total_ms < 2000:
+            status = "EXCELLENT"
+            color = self.COLORS["latency_good"]
+        elif total_ms < 3000:
+            status = "GOOD"
+            color = self.COLORS["latency_warning"]
+        else:
+            status = "SLOW"
+            color = self.COLORS["latency_bad"]
+
+        message = f"Total: {total_ms:.0f}ms - Status: {status}"
         self._log_panel(
             message=message,
             title="PHASE 3: WAITING END",

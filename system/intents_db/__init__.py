@@ -18,6 +18,7 @@ Usage:
 
 import importlib
 import logging
+import re
 from typing import List, Optional, Dict
 from dataclasses import dataclass
 from rapidfuzz import fuzz
@@ -44,14 +45,15 @@ def load_intents_database(theme: str = "general") -> List[IntentEntry]:
     """
     Charge les intents depuis les modules.
 
-    TOUJOURS charge: basic + general + theme (si fourni)
+    OPTION B: Charge SEULEMENT intents_basic (affirm, deny, unsure, silence)
+    Les intents question/objection sont détectés via objections_db (élimine duplication)
 
     Args:
         theme: Nom de la thématique (ex: "finance", "immobilier")
-               Valeur spéciale "general" = charge seulement basic + general
+               Non utilisé actuellement (legacy parameter)
 
     Returns:
-        Liste de IntentEntry (combinaison basic + general + theme)
+        Liste de IntentEntry (basic intents only)
     """
     all_intents = []
 
@@ -64,16 +66,11 @@ def load_intents_database(theme: str = "general") -> List[IntentEntry]:
     except Exception as e:
         logger.error(f"❌ Failed to load intents_basic: {e}")
 
-    # 2. TOUJOURS charger intents_general
-    try:
-        general_module = importlib.import_module("system.intents_db.intents_general")
-        general_intents = general_module.INTENTS_DATABASE
-        all_intents.extend(general_intents)
-        logger.info(f"✅ Loaded {len(general_intents)} general intents")
-    except Exception as e:
-        logger.error(f"❌ Failed to load intents_general: {e}")
+    # 2. intents_general SUPPRIMÉ (OPTION B simplification)
+    # Les intents "question" et "objection" sont maintenant détectés via objections_db
+    # dans _analyze_intent() NIVEAU 0.5 (fallback après fuzzy matching basic)
 
-    # 3. Charger thématique si spécifié (et différent de "general")
+    # 3. Charger thématique si spécifié (optionnel, pour extensions futures)
     if theme and theme != "general":
         try:
             theme_module = importlib.import_module(f"system.intents_db.intents_{theme}")
@@ -81,22 +78,25 @@ def load_intents_database(theme: str = "general") -> List[IntentEntry]:
             all_intents.extend(theme_intents)
             logger.info(f"✅ Loaded {len(theme_intents)} intents from theme '{theme}'")
         except ModuleNotFoundError:
-            logger.warning(f"⚠️ No intents file for theme '{theme}', using basic + general only")
+            logger.debug(f"No intents file for theme '{theme}' (expected)")
         except Exception as e:
             logger.error(f"❌ Failed to load intents_{theme}: {e}")
 
-    logger.info(f"📊 Total intents loaded: {len(all_intents)}")
+    logger.info(f"📊 Total intents loaded: {len(all_intents)} (basic only)")
     return all_intents
 
 
-def match_intent(transcription: str, intents_db: List[IntentEntry], min_confidence: float = 0.6) -> Optional[Dict]:
+def match_intent(transcription: str, intents_db: List[IntentEntry], min_confidence: float = 0.7) -> Optional[Dict]:
     """
     Match transcription contre intents database avec fuzzy matching.
+
+    AMÉLIORATION v3.1: Vérification de mots entiers pour éviter faux positifs
+    Exemple: "oui" ne matche PAS "suis" (évite match partiel "ui")
 
     Args:
         transcription: Texte à analyser
         intents_db: Database d'intents chargée
-        min_confidence: Confiance minimale pour retourner un match
+        min_confidence: Confiance minimale pour retourner un match (défaut: 0.7)
 
     Returns:
         {"intent": "affirm", "confidence": 0.95, "matched_keyword": "oui"} ou None
@@ -108,29 +108,55 @@ def match_intent(transcription: str, intents_db: List[IntentEntry], min_confiden
     best_match = None
     best_confidence = 0.0
     best_keyword = ""
+    best_reason = ""
 
     for intent_entry in intents_db:
         for keyword in intent_entry.keywords:
-            # Fuzzy matching (comme objections_db)
-            similarity = fuzz.partial_ratio(keyword.lower(), transcription_lower) / 100.0
+            keyword_lower = keyword.lower()
 
-            # Bonus si mot exact trouvé
-            if keyword.lower() in transcription_lower:
-                similarity = min(1.0, similarity + 0.1)
+            # ============================================================
+            # PRIORITÉ 1: MOT ENTIER (word boundary check)
+            # ============================================================
+            # Utilise regex pour vérifier que keyword est un mot complet
+            # Exemple: "oui" match "oui d'accord" mais PAS "suis" (évite "ui" substring)
+            word_pattern = r'\b' + re.escape(keyword_lower) + r'\b'
+            if re.search(word_pattern, transcription_lower):
+                # Mot entier trouvé → Confiance très haute
+                confidence = 0.90
+                reason = "word_exact"
 
-            # Calcul confiance finale
-            confidence = min(0.95, intent_entry.confidence_base + (similarity * 0.3))
+                if confidence > best_confidence:
+                    best_confidence = confidence
+                    best_match = intent_entry.intent
+                    best_keyword = keyword
+                    best_reason = reason
+                continue  # Passe au keyword suivant
 
-            if confidence > best_confidence:
-                best_confidence = confidence
-                best_match = intent_entry.intent
-                best_keyword = keyword
+            # ============================================================
+            # PRIORITÉ 2: FUZZY MATCHING (fallback)
+            # ============================================================
+            # Seulement si mot entier PAS trouvé
+            # Utilise partial_ratio mais avec seuil plus strict
+            similarity = fuzz.partial_ratio(keyword_lower, transcription_lower) / 100.0
+
+            # Seuil: Au moins 80% de similarité pour fuzzy
+            if similarity >= 0.8:
+                # Calcul confiance (moins élevée que word exact)
+                confidence = min(0.85, intent_entry.confidence_base + (similarity * 0.2))
+                reason = "fuzzy"
+
+                if confidence > best_confidence:
+                    best_confidence = confidence
+                    best_match = intent_entry.intent
+                    best_keyword = keyword
+                    best_reason = reason
 
     if best_confidence >= min_confidence:
         return {
             "intent": best_match,
             "confidence": best_confidence,
-            "matched_keyword": best_keyword
+            "matched_keyword": best_keyword,
+            "reason": best_reason
         }
 
     return None

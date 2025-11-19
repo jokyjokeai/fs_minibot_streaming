@@ -874,8 +874,13 @@ class RobotFreeSWITCH:
             # TODO: Database update implementation
             # For now, log the status that SHOULD be saved
 
+            # Check if AMD detected answering machine
+            status_display = final_status.value
+            if session.get("amd_machine_detected"):
+                status_display = "answering_machine"
+
             logger.info(
-                f"[{short_uuid}] FINAL STATUS: {final_status.value} "
+                f"[{short_uuid}] FINAL STATUS: {status_display} "
                 f"(robot_initiated: {robot_initiated_hangup})"
             )
 
@@ -966,7 +971,10 @@ class RobotFreeSWITCH:
                 logger.info(
                     f"[{short_uuid}] AMD: MACHINE detected -> Hangup call"
                 )
-                self._hangup_call(call_uuid, CallStatus.NO_ANSWER)
+                # Store AMD result in session for final status display
+                if call_uuid in self.call_sessions:
+                    self.call_sessions[call_uuid]["amd_machine_detected"] = True
+                self._hangup_call(call_uuid, CallResult.NO_ANSWER)
                 return
 
             elif amd_result["result"] == "NO_ANSWER":
@@ -2523,7 +2531,7 @@ class RobotFreeSWITCH:
                 "latencies": {"total_ms": 0.0}
             }
         else:
-            # Pas de barge-in → Exécuter Phase 3 normalement
+            # Pas de barge-in → Exécuter Phase 3 WAITING
             waiting_result = self._execute_phase_waiting_router(call_uuid)
             transcription = waiting_result.get("transcription", "").strip()
 
@@ -3698,6 +3706,7 @@ class RobotFreeSWITCH:
             # State pour récupérer la transcription Vosk
             amd_state = {
                 "transcription": "",
+                "last_partial": "",  # Fallback si FINAL n'arrive pas
                 "final_received": False,
                 "speech_detected": False
             }
@@ -3715,7 +3724,11 @@ class RobotFreeSWITCH:
                         # Afficher transcription AMD avec panel Rich visible
                         self.clog.transcription(text, uuid=short_uuid, latency_ms=0)
                     else:
-                        logger.debug(f"📝 [{short_uuid}] AMD CALLBACK received PARTIAL: '{event_data.get('text', '')}'")
+                        # Store PARTIAL as fallback
+                        partial_text = event_data.get("text", "").strip()
+                        if partial_text:
+                            amd_state["last_partial"] = partial_text
+                        logger.debug(f"📝 [{short_uuid}] AMD CALLBACK received PARTIAL: '{partial_text}'")
 
                 elif event == "speech_start":
                     amd_state["speech_detected"] = True
@@ -3800,9 +3813,10 @@ class RobotFreeSWITCH:
                     }
                 }
 
-            # Wait for final transcription (max 500ms)
+            # Wait for final transcription (max 1500ms)
+            # Vosk peut prendre 100-600ms selon longueur de la phrase
             transcribe_start = time.time()
-            max_wait = 0.5  # 500ms max
+            max_wait = 1.5  # 1500ms max (cohérence avec Phase 2 et Phase 3)
             wait_start = time.time()
 
             while (time.time() - wait_start) < max_wait:
@@ -3828,6 +3842,11 @@ class RobotFreeSWITCH:
             self.streaming_asr.unregister_callback(call_uuid)
 
             transcription = amd_state["transcription"]
+
+            # Use PARTIAL as fallback if FINAL didn't arrive
+            if not transcription and amd_state["last_partial"]:
+                transcription = amd_state["last_partial"]
+                logger.warning(f"[{short_uuid}] AMD: Using last PARTIAL as fallback (FINAL not received)")
 
             # Transcription - Colored log
             self.clog.transcription(transcription, uuid=short_uuid, latency_ms=transcribe_latency)
@@ -4327,12 +4346,14 @@ class RobotFreeSWITCH:
             # Étape 4: Attendre barge-in OU fin playback
             # Calculer durée audio réelle pour timeout précis
             audio_duration = self._get_audio_duration(audio_path)
-            timeout = audio_duration + 1.0  # Durée audio + 1s marge
+            # Early exit: stop monitoring Xs before audio ends for faster Phase 3 start
+            timeout = audio_duration - config.PHASE2_EARLY_EXIT
             monitoring_start = time.time()
 
             logger.debug(
                 f"⏱️ [{short_uuid}] Monitoring for barge-in "
-                f"(audio: {audio_duration:.1f}s, timeout: {timeout:.1f}s)"
+                f"(audio: {audio_duration:.1f}s, early exit: {timeout:.1f}s, "
+                f"Phase 3 starts {config.PHASE2_EARLY_EXIT}s before audio ends)"
             )
 
             while (time.time() - monitoring_start) < timeout:
@@ -4413,9 +4434,10 @@ class RobotFreeSWITCH:
                     # Breathing room (pause naturelle)
                     time.sleep(config.BARGE_IN_BREATHING_ROOM)
 
-                    # CRITIQUE: Attendre transcription FINALE (max 1000ms)
+                    # CRITIQUE: Attendre transcription FINALE (max 1500ms)
+                    # Vosk peut prendre 100-600ms selon longueur de la phrase
                     final_wait_start = time.time()
-                    max_final_wait = 1.0  # 1000ms timeout (équilibre vitesse/précision)
+                    max_final_wait = 1.5  # 1500ms timeout (comme Phase 3, pour phrases longues)
 
                     while (time.time() - final_wait_start) < max_final_wait:
                         # HANGUP check même pendant l'attente FINAL!
@@ -4446,8 +4468,17 @@ class RobotFreeSWITCH:
             # Fin du monitoring (timeout atteint ou barge-in/hangup)
             if not detection_state["barged_in"] and call_uuid in self.active_calls:
                 detection_state["audio_finished"] = True
+                # Early exit optimization: monitoring stopped but audio still playing!
+                # Phase 3 will start while last second of audio continues in background
+                remaining_audio = audio_duration - (time.time() - monitoring_start)
+                if remaining_audio > 0:
+                    logger.info(
+                        f"🎯 [{short_uuid}] Phase 2 monitoring ended early "
+                        f"(audio still playing for ~{remaining_audio:.1f}s, "
+                        f"Phase 3 will start immediately)"
+                    )
 
-            # Étape 5: Arrêter audio fork
+            # Étape 5: Arrêter audio fork (but NOT uuid_break - let audio finish naturally)
             self._execute_esl_command(f"uuid_audio_fork {call_uuid} stop")
 
             # CRITICAL: Attendre que WebSocket se ferme complètement (évite race condition)
@@ -4498,7 +4529,7 @@ class RobotFreeSWITCH:
             )
 
             # PHASE 2 END - Colored log
-            self.clog.phase2_end(detection_state["barged_in"], uuid=short_uuid)
+            self.clog.phase2_end(phase_duration, uuid=short_uuid)
 
             # Store end timestamp for gap calculation
             if call_uuid in self.call_sessions:

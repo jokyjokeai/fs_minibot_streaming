@@ -191,9 +191,9 @@ BARGE_IN_ENABLED = True
 BARGE_IN_THRESHOLD = 1.5
 
 # Smooth delay apr�s d�tection barge-in (pour naturel)
-# Robot coupe pas direct, attend 0.3s pour effet naturel
+# Robot coupe pas direct, attend 0.5s pour effet naturel
 # NOTE: Fade-out progressif appliqu� pendant ce d�lai (0 dB -> -40 dB en 10 steps)
-BARGE_IN_SMOOTH_DELAY = 0.3
+BARGE_IN_SMOOTH_DELAY = 0.5
 
 # Breathing room apr�s speech_end (pause naturelle)
 # Petit d�lai avant Phase 3 pour effet humain (100ms)
@@ -214,6 +214,12 @@ PLAYING_BG_TRANSCRIBE_TRIGGER = 0.5
 
 # VAD aggressiveness (0-3, 3 = plus agressif)
 VAD_AGGRESSIVENESS = 3
+
+# Phase 2 → Phase 3 transition optimization
+# Arrêter monitoring Phase 2 X secondes AVANT fin audio
+# Permet de démarrer Phase 3 plus tôt (écoute pendant dernière seconde audio)
+# Gain de réactivité sans threading complexe
+PHASE2_EARLY_EXIT = 1.0  # Stop Phase 2 monitoring 1s before audio ends
 
 
 # PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
@@ -601,6 +607,7 @@ class Config:
     PLAYING_START_SPEECH_DURATION = PLAYING_START_SPEECH_DURATION
     PLAYING_BG_TRANSCRIBE_TRIGGER = PLAYING_BG_TRANSCRIBE_TRIGGER
     VAD_AGGRESSIVENESS = VAD_AGGRESSIVENESS
+    PHASE2_EARLY_EXIT = PHASE2_EARLY_EXIT
 
     # Phase 3 - Waiting
     SILENCE_THRESHOLD = SILENCE_THRESHOLD
