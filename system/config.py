@@ -240,9 +240,9 @@ SILENCE_THRESHOLD = 1.5  # Changed from 0.6s to 1.5s for better silence detectio
 # Timeout max d'attente pour r�ponse client (en secondes)
 WAITING_TIMEOUT = 10.0
 
-# Timeout silence client (pour retry_silence apr�s robot parle)
-# Si client ne dit rien pendant 3s � retry_silence
-WAITING_SILENCE_TIMEOUT = 2.0
+# Timeout silence client (pour retry_silence après robot parle)
+# Si client ne dit rien pendant 3.7s → retry_silence
+WAITING_SILENCE_TIMEOUT = 3.7
 
 # Dur�e minimale de parole pour d�tecter "start speech" (en secondes)
 WAITING_START_SPEECH_DURATION = 0.3

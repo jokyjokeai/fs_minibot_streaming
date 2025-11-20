@@ -2135,6 +2135,19 @@ class RobotFreeSWITCH:
                     )
                     last_check_log = elapsed
 
+                # === SILENCE TIMEOUT (si pas de parole détectée) ===
+                # Si le client ne parle pas après WAITING_SILENCE_TIMEOUT → retry_silence
+                # On vérifie partial_count == 0 (aucun partial reçu = silence total)
+                if detection_state["partial_count"] == 0 and not detection_state["speech_ended"]:
+                    if elapsed >= config.WAITING_SILENCE_TIMEOUT:
+                        logger.info(
+                            f"🔇 [{short_uuid}] Silence timeout in Phase 3: {elapsed:.1f}s >= "
+                            f"{config.WAITING_SILENCE_TIMEOUT}s → triggering retry_silence"
+                        )
+                        # Marquer comme silence pour déclencher retry_silence
+                        detection_state["silence_detected"] = True
+                        break
+
                 if detection_state["speech_ended"]:
                     speech_end_time = (time.time() - monitoring_start) * 1000
 
@@ -5000,9 +5013,6 @@ class RobotFreeSWITCH:
         frame_duration_ms = config.WEBRTC_VAD_FRAME_DURATION_MS
         sample_rate = config.WEBRTC_VAD_SAMPLE_RATE
 
-        # Timeout tracking
-        start_time = time.time()
-
         try:
             # Wait for WAV file
             retries = 0
@@ -5017,6 +5027,9 @@ class RobotFreeSWITCH:
 
             # Small delay for WAV header
             time.sleep(0.1)
+
+            # Timeout tracking - START AFTER file wait to avoid hidden delays
+            start_time = time.time()
 
             logger.info(f"👂 [{short_uuid}] VAD monitoring started")
 
