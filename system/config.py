@@ -238,7 +238,8 @@ PHASE2_EARLY_EXIT = 1.0  # Stop Phase 2 monitoring 1s before audio ends
 SILENCE_THRESHOLD = 1.5  # Changed from 0.6s to 1.5s for better silence detection
 
 # Timeout max d'attente pour r�ponse client (en secondes)
-WAITING_TIMEOUT = 10.0
+# 60s car WAITING_SILENCE_TIMEOUT (3.7s) gère la détection de silence
+WAITING_TIMEOUT = 60.0
 
 # Timeout silence client (pour retry_silence après robot parle)
 # Si client ne dit rien pendant 3.7s → retry_silence
@@ -315,23 +316,8 @@ WEBRTC_VAD_FRAME_DURATION_MS = 30
 # Doit �tre 8000, 16000, 32000, ou 48000
 WEBRTC_VAD_SAMPLE_RATE = 8000
 
-# Noise Gate Dynamique (réduction bruit de fond pour Vosk streaming)
-# Active/désactive le noise gate
-NOISE_GATE_ENABLED = os.getenv("NOISE_GATE_ENABLED", "true").lower() == "true"
-
-# Seuil en dB pour ouvrir le gate (plus bas = plus sensible)
-# -35dB = bon pour téléphonie, -30dB = moins sensible, -40dB = très sensible
-NOISE_GATE_THRESHOLD_DB = float(os.getenv("NOISE_GATE_THRESHOLD_DB", "-35"))
-
-# Atténuation en dB quand gate fermé (plus négatif = plus d'atténuation)
-# -40dB = quasi silence, -20dB = atténuation légère
-NOISE_GATE_ATTENUATION_DB = float(os.getenv("NOISE_GATE_ATTENUATION_DB", "-40"))
-
-# Attack en ms (temps pour ouvrir le gate - rapide pour ne pas couper début de parole)
-NOISE_GATE_ATTACK_MS = float(os.getenv("NOISE_GATE_ATTACK_MS", "5"))
-
-# Release en ms (temps pour fermer le gate - plus lent pour éviter coupures)
-NOISE_GATE_RELEASE_MS = float(os.getenv("NOISE_GATE_RELEASE_MS", "50"))
+# Noise Gate et High-pass filter ont été supprimés
+# (causaient des problèmes de transcription avec état résiduel entre phases)
 
 
 # PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
@@ -594,7 +580,7 @@ STREAMING_ASR_PORT = int(os.getenv("STREAMING_ASR_PORT", "8080"))
 
 # VAD configuration for streaming ASR
 VAD_AGGRESSIVENESS = 2  # 0-3, 2 = balanced quality/reactivity
-VAD_SILENCE_THRESHOLD_MS = 500  # 500ms silence = end of speech (réactivité optimisée)
+VAD_SILENCE_THRESHOLD_MS = 600  # 600ms silence = end of speech (évite coupures micro-pauses)
 VAD_SPEECH_START_THRESHOLD_MS = 500  # 500ms speech = start detected
 
 # PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
@@ -668,13 +654,6 @@ class Config:
     WEBRTC_VAD_AGGRESSIVENESS = WEBRTC_VAD_AGGRESSIVENESS
     WEBRTC_VAD_FRAME_DURATION_MS = WEBRTC_VAD_FRAME_DURATION_MS
     WEBRTC_VAD_SAMPLE_RATE = WEBRTC_VAD_SAMPLE_RATE
-
-    # Noise Gate
-    NOISE_GATE_ENABLED = NOISE_GATE_ENABLED
-    NOISE_GATE_THRESHOLD_DB = NOISE_GATE_THRESHOLD_DB
-    NOISE_GATE_ATTENUATION_DB = NOISE_GATE_ATTENUATION_DB
-    NOISE_GATE_ATTACK_MS = NOISE_GATE_ATTACK_MS
-    NOISE_GATE_RELEASE_MS = NOISE_GATE_RELEASE_MS
 
     # Intent Keywords
     INTENT_KEYWORDS = INTENT_KEYWORDS

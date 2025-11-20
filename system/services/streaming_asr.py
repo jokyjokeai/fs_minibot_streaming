@@ -101,47 +101,9 @@ class StreamingASR:
         self.silence_threshold = config.VAD_SILENCE_THRESHOLD_MS / 1000.0  # 500ms → 0.5s (optimisé bruits)
         self.speech_start_threshold = config.VAD_SPEECH_START_THRESHOLD_MS / 1000.0  # 500ms → 0.5s
 
-        # High-pass filter pour réduction bruit (filtre fréquences <80Hz)
-        self.enable_highpass_filter = SCIPY_AVAILABLE  # Auto-enable si scipy disponible
-        if self.enable_highpass_filter:
-            # Butterworth high-pass filter: 80Hz cutoff, ordre 5
-            self.hp_cutoff = 80  # Hz
-            self.hp_order = 5
-            self.hp_sos = signal.butter(self.hp_order, self.hp_cutoff, btype='highpass',
-                                         fs=self.sample_rate, output='sos')
-            # État du filtre par appel (pour continuité entre frames)
-            self.hp_filter_states = {}  # {call_uuid: zi}
-            logger.info(f"✅ High-pass filter enabled (cutoff: {self.hp_cutoff}Hz)")
-        else:
-            logger.warning("⚠️ High-pass filter disabled (scipy not available)")
-
-        # NoiseReduce pour suppression avancée bruits (spectral gating)
-        # DÉSACTIVÉ: Cause des problèmes de latence/qualité
-        self.enable_noisereduce = False  # Forcé à False (Phase 2 revert)
-
-        # Noise Gate Dynamique (filtre le bruit sous un seuil RMS)
-        # Combiné avec high-pass filter pour réduction de bruit optimale
-        # Paramètres configurables via .env
-        self.enable_noise_gate = config.NOISE_GATE_ENABLED
-        self.noise_gate_threshold_db = config.NOISE_GATE_THRESHOLD_DB
-        self.noise_gate_attack_ms = config.NOISE_GATE_ATTACK_MS
-        self.noise_gate_release_ms = config.NOISE_GATE_RELEASE_MS
-        self.noise_gate_attenuation_db = config.NOISE_GATE_ATTENUATION_DB
-
-        # États du noise gate par appel
-        self.noise_gate_states = {}  # {call_uuid: {"gain": 1.0, "is_open": False}}
-
-        if self.enable_noise_gate:
-            # Précalculer coefficients attack/release
-            # attack_coef = exp(-1 / (sample_rate * attack_time))
-            self.noise_gate_attack_coef = np.exp(-1.0 / (self.sample_rate * self.noise_gate_attack_ms / 1000.0))
-            self.noise_gate_release_coef = np.exp(-1.0 / (self.sample_rate * self.noise_gate_release_ms / 1000.0))
-            # Convertir dB en linéaire
-            self.noise_gate_threshold_linear = 10 ** (self.noise_gate_threshold_db / 20.0) * 32768
-            self.noise_gate_attenuation_linear = 10 ** (self.noise_gate_attenuation_db / 20.0)
-            logger.info(f"✅ Noise Gate enabled (threshold: {self.noise_gate_threshold_db}dB, attenuation: {self.noise_gate_attenuation_db}dB)")
-        else:
-            logger.info("ℹ️ Noise Gate disabled")
+        # Audio filters DÉSACTIVÉS (causaient des problèmes de transcription)
+        # Les filtres high-pass et noise gate ont été supprimés
+        logger.info("ℹ️ Audio filters disabled (raw audio to Vosk)")
 
         # Modèle Vosk
         self.model = None
@@ -191,169 +153,6 @@ class StreamingASR:
         except Exception as e:
             logger.error(f"❌ Failed to load Vosk model: {e}")
             self.is_available = False
-
-    def _apply_highpass_filter(self, call_uuid: str, frame_bytes: bytes) -> bytes:
-        """
-        Applique high-pass filter sur frame audio pour réduire bruits bas (<80Hz).
-        Maintient l'état du filtre entre frames pour continuité (évite discontinuités de phase).
-
-        Args:
-            call_uuid: UUID de l'appel (pour gestion état)
-            frame_bytes: Audio brut (16-bit PCM mono)
-
-        Returns:
-            Audio filtré (16-bit PCM mono)
-        """
-        if not self.enable_highpass_filter:
-            return frame_bytes
-
-        # Validation input (Fix #5)
-        if not frame_bytes or len(frame_bytes) == 0:
-            return frame_bytes
-        if len(frame_bytes) % 2 != 0:
-            logger.warning(f"⚠️ Invalid frame size: {len(frame_bytes)} bytes (not even)")
-            return frame_bytes
-
-        try:
-            # Initialiser état du filtre pour ce call_uuid (si premier frame)
-            if call_uuid not in self.hp_filter_states:
-                # sosfilt_zi calcule l'état initial pour step response = 0 (pas de transient)
-                self.hp_filter_states[call_uuid] = signal.sosfilt_zi(self.hp_sos)
-
-            # Convertir bytes → numpy array int16 → float32
-            audio_int16 = np.frombuffer(frame_bytes, dtype=np.int16)
-            audio_float = audio_int16.astype(np.float32)
-
-            # Appliquer filtre avec état (sos = second-order sections, plus stable que ba)
-            # zi maintient la continuité entre frames → pas de discontinuités
-            filtered_float, self.hp_filter_states[call_uuid] = signal.sosfilt(
-                self.hp_sos,
-                audio_float,
-                zi=self.hp_filter_states[call_uuid]
-            )
-
-            # Reconvertir → int16 (clamp pour éviter overflow)
-            filtered_int16 = np.clip(filtered_float, -32768, 32767).astype(np.int16)
-
-            # Reconvertir → bytes
-            return filtered_int16.tobytes()
-
-        except Exception as e:
-            logger.warning(f"⚠️ High-pass filter failed for {call_uuid[:8]}: {e}, using original audio")
-            return frame_bytes
-
-    def _apply_noise_gate(self, call_uuid: str, frame_bytes: bytes) -> bytes:
-        """
-        Applique un Noise Gate Dynamique sur frame audio.
-
-        Le gate s'ouvre quand le signal dépasse le seuil (parole) et se ferme
-        quand le signal est sous le seuil (bruit de fond).
-        Utilise attack/release pour des transitions douces.
-
-        Args:
-            call_uuid: UUID de l'appel (pour gestion état)
-            frame_bytes: Audio brut (16-bit PCM mono)
-
-        Returns:
-            Audio avec gate appliqué (16-bit PCM mono)
-        """
-        if not self.enable_noise_gate:
-            return frame_bytes
-
-        # Validation input
-        if not frame_bytes or len(frame_bytes) == 0:
-            return frame_bytes
-        if len(frame_bytes) % 2 != 0:
-            return frame_bytes
-
-        try:
-            # Initialiser état pour ce call_uuid (si premier frame)
-            if call_uuid not in self.noise_gate_states:
-                self.noise_gate_states[call_uuid] = {
-                    "gain": self.noise_gate_attenuation_linear,  # Commence fermé
-                    "envelope": 0.0
-                }
-
-            state = self.noise_gate_states[call_uuid]
-
-            # Convertir bytes → numpy array int16
-            audio_int16 = np.frombuffer(frame_bytes, dtype=np.int16).astype(np.float32)
-
-            # Calculer RMS du frame pour déterminer si parole ou bruit
-            rms = np.sqrt(np.mean(audio_int16 ** 2))
-
-            # Mettre à jour l'envelope avec attack/release
-            if rms > state["envelope"]:
-                # Attack (signal monte)
-                state["envelope"] = self.noise_gate_attack_coef * state["envelope"] + \
-                                   (1 - self.noise_gate_attack_coef) * rms
-            else:
-                # Release (signal descend)
-                state["envelope"] = self.noise_gate_release_coef * state["envelope"] + \
-                                   (1 - self.noise_gate_release_coef) * rms
-
-            # Déterminer le gain cible basé sur l'envelope
-            if state["envelope"] > self.noise_gate_threshold_linear:
-                # Gate ouvert - laisser passer
-                target_gain = 1.0
-            else:
-                # Gate fermé - atténuer
-                target_gain = self.noise_gate_attenuation_linear
-
-            # Smooth transition vers le gain cible (évite les clics)
-            # Utilise une interpolation exponentielle
-            smooth_coef = 0.1  # Plus petit = plus lisse
-            state["gain"] = state["gain"] + smooth_coef * (target_gain - state["gain"])
-
-            # Appliquer le gain
-            gated_audio = audio_int16 * state["gain"]
-
-            # Reconvertir → int16 (clamp pour éviter overflow)
-            gated_int16 = np.clip(gated_audio, -32768, 32767).astype(np.int16)
-
-            return gated_int16.tobytes()
-
-        except Exception as e:
-            logger.warning(f"⚠️ Noise gate failed for {call_uuid[:8]}: {e}, using original audio")
-            return frame_bytes
-
-    def _apply_noise_reduction(self, frame_bytes: bytes) -> bytes:
-        """
-        Applique noise reduction (spectral gating) pour bruits variables.
-
-        Args:
-            frame_bytes: Audio brut (16-bit PCM mono)
-
-        Returns:
-            Audio nettoyé (16-bit PCM mono)
-        """
-        if not self.enable_noisereduce:
-            return frame_bytes
-
-        try:
-            # Convertir bytes → numpy array int16 → float normalized
-            audio_int16 = np.frombuffer(frame_bytes, dtype=np.int16)
-            audio_float = audio_int16.astype(np.float32) / 32768.0  # Normalize to [-1, 1]
-
-            # Appliquer NoiseReduce (stationary mode - bruits constants)
-            # stationary=True: Plus rapide et efficace pour bruits constants (AC, ventilateur, musique)
-            # prop_decrease=1.0: Réduction agressive (0.0-1.0, default=1.0)
-            reduced_float = nr.reduce_noise(
-                y=audio_float,
-                sr=self.sample_rate,
-                stationary=True,
-                prop_decrease=1.0
-            )
-
-            # Reconvertir → int16 (clamp pour éviter overflow)
-            reduced_int16 = np.clip(reduced_float * 32768, -32768, 32767).astype(np.int16)
-
-            # Reconvertir → bytes
-            return reduced_int16.tobytes()
-
-        except Exception as e:
-            logger.warning(f"⚠️ Noise reduction failed: {e}, using original audio")
-            return frame_bytes
 
     async def start_server(self, host: str = "127.0.0.1", port: int = 8080):
         """
@@ -438,6 +237,9 @@ class StreamingASR:
             recognizer = KaldiRecognizer(self.model, self.sample_rate)
             recognizer.SetWords(True)
             self.recognizers[call_uuid] = recognizer
+            logger.info(f"🎤 [{call_uuid[:8]}] NEW Vosk recognizer created")
+        else:
+            logger.error(f"❌ [{call_uuid[:8]}] No Vosk model loaded!")
 
         self.active_streams[call_uuid] = {
             "start_time": time.time(),
@@ -449,11 +251,21 @@ class StreamingASR:
             "in_speech": False,
             "partial_transcription": "",
             "final_transcription": "",
-            "last_speech_time": 0.0
+            "last_speech_time": 0.0,
+            "audio_warmup_done": False,  # Flag pour ignorer silence initial (RMS=0)
+            "first_audio_time": None  # Timestamp du premier audio réel reçu
         }
 
+        # Vérifier état des autres structures
+        num_callbacks = len(self.callbacks)
+        num_recognizers = len(self.recognizers)
+        num_streams = len(self.active_streams)
+
         self.stats["active_streams"] += 1
-        logger.debug(f"🎤 Initialized stream for {call_uuid[:8]}")
+        logger.info(
+            f"✅ [{call_uuid[:8]}] Stream initialized: "
+            f"callbacks={num_callbacks}, recognizers={num_recognizers}, streams={num_streams}"
+        )
 
     async def _process_audio_frame(self, call_uuid: str, frame_bytes: bytes):
         """Traite une frame audio en temps réel"""
@@ -478,6 +290,30 @@ class StreamingASR:
 
             frame_duration_s = self.frame_duration_ms / 1000.0
 
+            # === AUDIO WARMUP: Ignorer silence initial (frames avec RMS≈0) ===
+            # FreeSWITCH peut envoyer des frames vides au début du stream
+            # On ne compte le silence qu'après avoir reçu du vrai audio
+            import numpy as np
+            audio_samples_check = np.frombuffer(frame_bytes, dtype=np.int16)
+            frame_rms = np.sqrt(np.mean(audio_samples_check.astype(np.float32) ** 2))
+
+            # Seuil très bas - juste pour détecter les frames totalement vides (RMS=0)
+            # L'audio téléphonique peut avoir un RMS de 8-15 même en silence
+            MIN_AUDIO_RMS = 5
+            MAX_WARMUP_FRAMES = 30  # Max 30 frames (~0.9s) de warmup
+
+            if not stream_info["audio_warmup_done"]:
+                # Terminer warmup si : audio réel OU VAD détecte parole OU timeout warmup
+                if frame_rms > MIN_AUDIO_RMS or is_speech or stream_info["frame_count"] >= MAX_WARMUP_FRAMES:
+                    stream_info["audio_warmup_done"] = True
+                    stream_info["first_audio_time"] = time.time()
+                    warmup_frames = stream_info["frame_count"]
+                    reason = "RMS" if frame_rms > MIN_AUDIO_RMS else ("VAD" if is_speech else "TIMEOUT")
+                    logger.info(
+                        f"🔊 [{call_uuid[:8]}] Audio warmup complete after {warmup_frames} frames "
+                        f"(RMS={frame_rms:.0f}, is_speech={is_speech}, reason={reason})"
+                    )
+
             if is_speech:
                 # Parole détectée
                 stream_info["speech_frames"] += 1
@@ -496,9 +332,15 @@ class StreamingASR:
             else:
                 # Silence détecté
                 stream_info["silence_frames"] += 1
-                stream_info["current_silence_duration"] += frame_duration_s
                 stream_info["current_speech_duration"] = max(0, stream_info["current_speech_duration"] - frame_duration_s)
                 self.stats["silence_frames"] += 1
+
+                # NE PAS compter le silence pendant le warmup (évite faux positifs)
+                if stream_info["audio_warmup_done"]:
+                    stream_info["current_silence_duration"] += frame_duration_s
+                else:
+                    # Pendant warmup, reset silence pour éviter accumulation
+                    stream_info["current_silence_duration"] = 0.0
 
                 if stream_info["in_speech"]:
                     # Vérifier si fin de parole
@@ -521,14 +363,34 @@ class StreamingASR:
                         await self._notify_speech_end(call_uuid)
                         stream_info["final_transcription"] = None  # Reset pour éviter double détection
 
-            # AUDIO PREPROCESSING pour Vosk ASR (pas pour VAD qui utilise frame_bytes original)
-            # 1. High-pass filter: Réduction bruits bas (<80Hz: ventilateurs, rumble, etc.)
-            filtered_frame = self._apply_highpass_filter(call_uuid, frame_bytes)
-            # 2. Noise Gate: Atténue le bruit de fond quand pas de parole
-            filtered_frame = self._apply_noise_gate(call_uuid, filtered_frame)
+            # Audio brut envoyé directement à Vosk (filtres désactivés)
+            # Utiliser les valeurs RMS déjà calculées dans le warmup check
+            audio_rms = frame_rms
+            audio_max = np.max(np.abs(audio_samples_check))
 
-            # ASR - Transcription streaming (sur audio filtré + gated)
-            if recognizer.AcceptWaveform(filtered_frame):
+            # Log toutes les 50 frames (~1.5s) pour voir l'état
+            if stream_info["frame_count"] % 50 == 0:
+                warmup_status = "✅" if stream_info["audio_warmup_done"] else "⏳WARMUP"
+                logger.info(
+                    f"🔊 [{call_uuid[:8]}] Audio stats: frame={stream_info['frame_count']}, "
+                    f"RMS={audio_rms:.0f}, MAX={audio_max}, "
+                    f"in_speech={stream_info['in_speech']}, "
+                    f"silence_dur={stream_info['current_silence_duration']:.1f}s, "
+                    f"warmup={warmup_status}"
+                )
+
+            # ASR - Transcription streaming avec boost audio
+            # Boost pour améliorer la qualité de transcription Vosk
+            AUDIO_BOOST_FACTOR = 3.3  # Multiplier le volume par 3.3
+
+            # Appliquer boost avec clipping pour éviter overflow int16
+            boosted_samples = np.clip(
+                audio_samples_check.astype(np.float32) * AUDIO_BOOST_FACTOR,
+                -32768, 32767
+            ).astype(np.int16)
+            boosted_frame = boosted_samples.tobytes()
+
+            if recognizer.AcceptWaveform(boosted_frame):
                 # Transcription finale
                 result = json.loads(recognizer.Result())
                 text = result.get("text", "").strip()
@@ -549,7 +411,7 @@ class StreamingASR:
                 if text:
                     logger.info(f"📝 FINAL transcription [{call_uuid[:8]}]: '{text}' ({latency_ms:.1f}ms) [VAD state: {in_speech_state}, silence_duration: {stream_info['current_silence_duration']:.1f}s]")
                 else:
-                    logger.debug(f"📝 FINAL transcription [{call_uuid[:8]}]: (empty - Vosk couldn't transcribe) [VAD state: {in_speech_state}]")
+                    logger.info(f"📝 FINAL transcription [{call_uuid[:8]}]: (empty - Vosk couldn't transcribe) [VAD state: {in_speech_state}, RMS={audio_rms:.0f}]")
 
                 # Envoyer callback FINAL (même si vide)
                 await self._notify_transcription(call_uuid, text, "final", latency_ms)
@@ -563,7 +425,7 @@ class StreamingASR:
                     stream_info["partial_transcription"] = partial_text
 
                     latency_ms = (time.time() - start_time) * 1000
-                    logger.debug(f"📝 PARTIAL transcription [{call_uuid[:8]}]: '{partial_text}'")
+                    logger.info(f"📝 PARTIAL [{call_uuid[:8]}]: '{partial_text}' (RMS={audio_rms:.0f}, frame={stream_info['frame_count']})")
                     await self._notify_transcription(call_uuid, partial_text, "partial", latency_ms)
 
         except Exception as e:
@@ -704,25 +566,32 @@ class StreamingASR:
 
     def _cleanup_stream(self, call_uuid: str):
         """Nettoie un stream"""
-        logger.debug(f"🧹 [{call_uuid[:8]}] Cleaning up WebSocket stream")
+        # Log état avant cleanup
+        had_stream = call_uuid in self.active_streams
+        had_recognizer = call_uuid in self.recognizers
+        frame_count = 0
+        if had_stream:
+            frame_count = self.active_streams[call_uuid].get("frame_count", 0)
+
+        logger.info(
+            f"🧹 [{call_uuid[:8]}] Cleanup stream: "
+            f"had_stream={had_stream}, had_recognizer={had_recognizer}, frames={frame_count}"
+        )
 
         if call_uuid in self.active_streams:
             del self.active_streams[call_uuid]
-            logger.debug(f"🧹 [{call_uuid[:8]}] Removed active_stream")
 
         if call_uuid in self.recognizers:
+            # IMPORTANT: Vider le buffer interne de Vosk avant de supprimer
+            # Sinon l'état peut s'accumuler et causer des problèmes
+            try:
+                recognizer = self.recognizers[call_uuid]
+                # FinalResult() vide le buffer et retourne la dernière transcription
+                final = recognizer.FinalResult()
+                logger.debug(f"🧹 [{call_uuid[:8]}] Vosk buffer flushed: {final[:50] if final else 'empty'}...")
+            except Exception as e:
+                logger.warning(f"⚠️ [{call_uuid[:8]}] Error flushing Vosk buffer: {e}")
             del self.recognizers[call_uuid]
-            logger.debug(f"🧹 [{call_uuid[:8]}] Removed recognizer")
-
-        # Nettoyer état du high-pass filter
-        if self.enable_highpass_filter and call_uuid in self.hp_filter_states:
-            del self.hp_filter_states[call_uuid]
-            logger.debug(f"🧹 [{call_uuid[:8]}] Removed high-pass filter state")
-
-        # Nettoyer état du noise gate
-        if self.enable_noise_gate and call_uuid in self.noise_gate_states:
-            del self.noise_gate_states[call_uuid]
-            logger.debug(f"🧹 [{call_uuid[:8]}] Removed noise gate state")
 
         # ❌ NE PAS supprimer le callback automatiquement !
         # Le callback est géré explicitement par register/unregister

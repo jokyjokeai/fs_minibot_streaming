@@ -133,8 +133,8 @@ def main():
             print("\n📊 LOGS DETAILLES (avec latences):")
             print("-" * 80)
 
-            # Wait for call to complete (120 seconds)
-            time.sleep(120)
+            # Wait for call to complete (10 minutes)
+            time.sleep(600)
 
             print("\n" + "=" * 80)
             print("📊 STATISTIQUES APPEL")

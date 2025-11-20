@@ -62,7 +62,27 @@ from system.models import Call, CallStatus, CallResult
 # Config
 from system.config import config
 
+# Logger avec fichier pour debug détaillé
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+# FileHandler pour logs détaillés dans fichier
+_logs_dir = config.BASE_DIR / "logs" / "misc"
+_logs_dir.mkdir(parents=True, exist_ok=True)
+_log_file = _logs_dir / f"system.robot_freeswitch_{__import__('datetime').datetime.now().strftime('%Y%m%d')}.log"
+
+_file_handler = logging.handlers.RotatingFileHandler(
+    _log_file,
+    maxBytes=50*1024*1024,  # 50MB pour logs très détaillés
+    backupCount=5,
+    encoding='utf-8'
+)
+_file_handler.setLevel(logging.DEBUG)
+_file_handler.setFormatter(logging.Formatter(
+    '{"timestamp": "%(asctime)s", "level": "%(levelname)s", "module": "%(name)s", '
+    '"message": "%(message)s", "function": "%(funcName)s", "line": %(lineno)d}'
+))
+logger.addHandler(_file_handler)
 
 
 class RobotFreeSWITCH:
@@ -1081,7 +1101,8 @@ class RobotFreeSWITCH:
                         self._execute_phase_2_auto(
                             call_uuid,
                             audio_path,
-                            enable_barge_in=False  # No barge-in on goodbye
+                            enable_barge_in=False,  # No barge-in on goodbye
+                            is_terminal=True  # Play full audio, no early exit
                         )
 
                     # Determine final status based on step "result" attribute
@@ -2006,26 +2027,34 @@ class RobotFreeSWITCH:
             "final_received": False,  # ← FLAG pour savoir si FINAL reçu (comme AMD)
             "speech_ended": False,
             "silence_detected": False,
+            "speech_detected": False,  # ← FLAG pour savoir si speech_start reçu (évite silence timeout)
             "last_update": time.time(),
             # Timestamps pour analyse latence détaillée
             "first_partial_timestamp": None,  # Quand premier PARTIAL reçu
             "last_partial_timestamp": None,   # Quand dernier PARTIAL reçu
             "speech_end_timestamp": None,     # Quand SPEECH_END reçu
-            "partial_count": 0                # Nombre de PARTIAL reçus
+            "partial_count": 0,               # Nombre de PARTIAL reçus
+            "monitoring_start": None          # Timestamp début monitoring (pour callback)
         }
 
         def streaming_callback(event_data):
             """Callback pour events Streaming ASR"""
-            logger.debug(f"🔔 [{short_uuid}] CALLBACK TRIGGERED: {event_data}")
             event = event_data.get("event")
+            logger.debug(f"🔔 [{short_uuid}] CALLBACK: event={event}")
 
-            if event == "transcription":
+            if event == "speech_start":
+                detection_state["speech_detected"] = True  # ← Évite silence timeout
+                logger.info(f"🗣️ [{short_uuid}] Speech START detected in Phase 3")
+
+            elif event == "transcription":
                 # Mise à jour transcription
                 text = event_data.get("text", "")
                 trans_type = event_data.get("type", "unknown")
 
                 if trans_type == "final":
-                    detection_state["transcription"] = text
+                    # Ne pas écraser une transcription existante par une vide
+                    if text or not detection_state.get("transcription"):
+                        detection_state["transcription"] = text
                     detection_state["final_received"] = True  # ← Set flag!
                     detection_state["last_update"] = time.time()
                     if text:
@@ -2044,7 +2073,9 @@ class RobotFreeSWITCH:
                     detection_state["partial_count"] += 1
 
                     # Calculer temps écoulé depuis début Phase 3
-                    elapsed_ms = (current_time - monitoring_start) * 1000
+                    elapsed_ms = 0
+                    if detection_state["monitoring_start"]:
+                        elapsed_ms = (current_time - detection_state["monitoring_start"]) * 1000
 
                     # Afficher partial avec timestamp et comptage mots
                     word_count = len(text.split()) if text else 0
@@ -2060,13 +2091,18 @@ class RobotFreeSWITCH:
                 detection_state["speech_end_timestamp"] = time.time()
 
                 # Calculer temps écoulé depuis début Phase 3
-                elapsed_ms = (detection_state["speech_end_timestamp"] - monitoring_start) * 1000
-
-                silence_duration = event_data.get("silence_duration", 0)
-                logger.info(
-                    f"🤐 [{short_uuid}] SPEECH_END at {elapsed_ms:.0f}ms "
-                    f"(silence: {silence_duration:.1f}s, {detection_state['partial_count']} partials received)"
-                )
+                if detection_state["monitoring_start"]:
+                    elapsed_ms = (detection_state["speech_end_timestamp"] - detection_state["monitoring_start"]) * 1000
+                    logger.info(
+                        f"🤐 [{short_uuid}] SPEECH_END at {elapsed_ms:.0f}ms "
+                        f"(silence: {event_data.get('silence_duration', 0):.1f}s, {detection_state['partial_count']} partials received)"
+                    )
+                else:
+                    silence_duration = event_data.get("silence_duration", 0)
+                    logger.info(
+                        f"🤐 [{short_uuid}] SPEECH_END "
+                        f"(silence: {silence_duration:.1f}s, {detection_state['partial_count']} partials received)"
+                    )
             else:
                 logger.debug(f"🔔 [{short_uuid}] CALLBACK unknown event: {event}")
 
@@ -2091,9 +2127,38 @@ class RobotFreeSWITCH:
 
             fork_latency = (time.time() - fork_start) * 1000
 
+            # === ATTENDRE INITIALISATION STREAM (évite race condition) ===
+            stream_wait_start = time.time()
+            max_stream_wait = 2.0  # Max 2s d'attente pour établissement WebSocket
+
+            while call_uuid not in self.streaming_asr.active_streams:
+                if (time.time() - stream_wait_start) > max_stream_wait:
+                    logger.error(
+                        f"❌ [{short_uuid}] WebSocket stream not initialized after {max_stream_wait}s, "
+                        f"falling back to file-based method"
+                    )
+                    try:
+                        self._execute_esl_command(f"uuid_audio_fork {call_uuid} stop")
+                    except:
+                        pass
+                    self.streaming_asr.unregister_callback(call_uuid)
+                    return self._execute_phase_waiting(call_uuid, max_duration)
+                time.sleep(0.01)  # Poll every 10ms
+
+            stream_init_latency = (time.time() - stream_wait_start) * 1000
+
+            # Définir monitoring_start APRÈS stream initialisé pour calculs précis
+            monitoring_start = time.time()
+            detection_state["monitoring_start"] = monitoring_start
+
+            # Log état initial du streaming ASR
+            logger.info(
+                f"🎤 [{short_uuid}] Phase 3 streaming started: "
+                f"fork={fork_latency:.0f}ms, stream_init={stream_init_latency:.0f}ms"
+            )
+
             # Attendre fin parole OU timeout
             timeout = max_duration
-            monitoring_start = time.time()
             last_check_log = 0  # Pour logger toutes les secondes
 
             while (time.time() - monitoring_start) < timeout:
@@ -2127,22 +2192,35 @@ class RobotFreeSWITCH:
                     )
                     break
 
-                # Log état toutes les secondes pour debug
+                # Log état toutes les secondes pour debug (VERBOSE)
                 if elapsed - last_check_log >= 1.0:
-                    logger.debug(
-                        f"[{short_uuid}] Phase 3 monitoring: elapsed={elapsed:.1f}s, "
-                        f"timeout={timeout}s, speech_ended={detection_state['speech_ended']}"
+                    # Vérifier si callback est enregistré
+                    callback_registered = call_uuid in self.streaming_asr.callbacks
+                    # Vérifier si stream actif
+                    stream_active = call_uuid in self.streaming_asr.active_streams
+
+                    logger.info(
+                        f"📊 [{short_uuid}] Phase 3 status: elapsed={elapsed:.1f}s, "
+                        f"partials={detection_state['partial_count']}, "
+                        f"speech_ended={detection_state['speech_ended']}, "
+                        f"callback={callback_registered}, stream={stream_active}"
                     )
                     last_check_log = elapsed
 
                 # === SILENCE TIMEOUT (si pas de parole détectée) ===
                 # Si le client ne parle pas après WAITING_SILENCE_TIMEOUT → retry_silence
-                # On vérifie partial_count == 0 (aucun partial reçu = silence total)
-                if detection_state["partial_count"] == 0 and not detection_state["speech_ended"]:
+                # On vérifie: pas de partial ET pas de speech_start (sinon Vosk est en train de transcrire)
+                if (detection_state["partial_count"] == 0
+                    and not detection_state["speech_ended"]
+                    and not detection_state["speech_detected"]):  # ← Ne pas timeout si speech détecté
                     if elapsed >= config.WAITING_SILENCE_TIMEOUT:
-                        logger.info(
+                        # Log détaillé avant de déclencher silence
+                        callback_registered = call_uuid in self.streaming_asr.callbacks
+                        stream_active = call_uuid in self.streaming_asr.active_streams
+                        logger.warning(
                             f"🔇 [{short_uuid}] Silence timeout in Phase 3: {elapsed:.1f}s >= "
-                            f"{config.WAITING_SILENCE_TIMEOUT}s → triggering retry_silence"
+                            f"{config.WAITING_SILENCE_TIMEOUT}s → triggering retry_silence "
+                            f"(callback={callback_registered}, stream={stream_active})"
                         )
                         # Marquer comme silence pour déclencher retry_silence
                         detection_state["silence_detected"] = True
@@ -2187,9 +2265,16 @@ class RobotFreeSWITCH:
             # Stop audio fork
             stop_cmd = f"uuid_audio_fork {call_uuid} stop"
             self._execute_esl_command(stop_cmd)
+            logger.info(f"🛑 [{short_uuid}] Audio fork stopped")
+
+            # CRITICAL: Attendre que WebSocket se ferme complètement (évite race condition)
+            # Sans ce délai, le prochain fork peut démarrer avant cleanup complet
+            time.sleep(0.1)
+            logger.info(f"⏳ [{short_uuid}] Waited 100ms for WebSocket cleanup")
 
             # Unregister callback
             self.streaming_asr.unregister_callback(call_uuid)
+            logger.info(f"🔓 [{short_uuid}] Callback unregistered")
 
             # Calculer durée
             duration = time.time() - monitoring_start
@@ -3734,7 +3819,9 @@ class RobotFreeSWITCH:
                 if event == "transcription":
                     if event_data.get("type") == "final":
                         text = event_data.get("text", "").strip()
-                        amd_state["transcription"] = text
+                        # Ne pas écraser une transcription existante par une vide
+                        if text or not amd_state.get("transcription"):
+                            amd_state["transcription"] = text
                         amd_state["final_received"] = True
                         # Afficher transcription AMD avec panel Rich visible
                         self.clog.transcription(text, uuid=short_uuid, latency_ms=0)
@@ -3773,6 +3860,27 @@ class RobotFreeSWITCH:
                 return self._execute_phase_amd_whisper(call_uuid)
 
             fork_latency = (time.time() - fork_start) * 1000
+
+            # === ATTENDRE INITIALISATION STREAM (évite race condition) ===
+            stream_wait_start = time.time()
+            max_stream_wait = 2.0  # Max 2s d'attente pour établissement WebSocket
+
+            while call_uuid not in self.streaming_asr.active_streams:
+                if (time.time() - stream_wait_start) > max_stream_wait:
+                    logger.error(
+                        f"❌ [{short_uuid}] WebSocket stream not initialized after {max_stream_wait}s, "
+                        f"falling back to Whisper"
+                    )
+                    try:
+                        self._execute_esl_command(f"uuid_audio_fork {call_uuid} stop")
+                    except:
+                        pass
+                    self.streaming_asr.unregister_callback(call_uuid)
+                    return self._execute_phase_amd_whisper(call_uuid)
+                time.sleep(0.01)  # Poll every 10ms
+
+            stream_init_latency = (time.time() - stream_wait_start) * 1000
+            logger.debug(f"✅ [{short_uuid}] AMD Stream initialized in {stream_init_latency:.0f}ms")
 
             # Wait for AMD duration (AVEC VÉRIFICATION HANGUP!)
             record_start = time.time()
@@ -3935,7 +4043,8 @@ class RobotFreeSWITCH:
         self,
         call_uuid: str,
         audio_path: str,
-        enable_barge_in: bool = True
+        enable_barge_in: bool = True,
+        is_terminal: bool = False
     ) -> Dict[str, Any]:
         """
         Phase 2: PLAYING (Robot plays audio with barge-in detection)
@@ -3951,6 +4060,7 @@ class RobotFreeSWITCH:
             call_uuid: Call UUID
             audio_path: Audio file to play
             enable_barge_in: Enable barge-in detection
+            is_terminal: True si étape terminale (bye) → pas d'early exit
 
         Returns:
             {
@@ -4157,7 +4267,8 @@ class RobotFreeSWITCH:
         self,
         call_uuid: str,
         audio_path: str,
-        enable_barge_in: bool = True
+        enable_barge_in: bool = True,
+        is_terminal: bool = False
     ) -> Dict[str, Any]:
         """
         Phase 2: PLAYING (Auto-sélection Streaming ASR vs WebRTC VAD)
@@ -4174,6 +4285,7 @@ class RobotFreeSWITCH:
             call_uuid: UUID appel
             audio_path: Fichier audio à jouer
             enable_barge_in: Activer barge-in
+            is_terminal: True si étape terminale (bye) → pas d'early exit
 
         Returns:
             Dict résultat phase 2 (voir _execute_phase_playing)
@@ -4191,7 +4303,7 @@ class RobotFreeSWITCH:
                 f"(Vosk WebSocket + audio fork)"
             )
             return self._execute_phase_playing_streaming(
-                call_uuid, audio_path, enable_barge_in
+                call_uuid, audio_path, enable_barge_in, is_terminal
             )
         else:
             logger.debug(
@@ -4199,14 +4311,15 @@ class RobotFreeSWITCH:
                 f"(fallback method)"
             )
             return self._execute_phase_playing(
-                call_uuid, audio_path, enable_barge_in
+                call_uuid, audio_path, enable_barge_in, is_terminal
             )
 
     def _execute_phase_playing_streaming(
         self,
         call_uuid: str,
         audio_path: str,
-        enable_barge_in: bool = True
+        enable_barge_in: bool = True,
+        is_terminal: bool = False
     ) -> Dict[str, Any]:
         """
         Phase 2: PLAYING avec Streaming ASR (Vosk Python + mod_audio_fork WebSocket)
@@ -4222,6 +4335,7 @@ class RobotFreeSWITCH:
             call_uuid: UUID appel
             audio_path: Chemin fichier audio à jouer
             enable_barge_in: Activer barge-in (True par défaut)
+            is_terminal: True si étape terminale (bye) → pas d'early exit
 
         Returns:
             {
@@ -4259,7 +4373,8 @@ class RobotFreeSWITCH:
             "last_partial_timestamp": None,   # Quand dernier PARTIAL reçu
             "barge_in_timestamp": None,       # Quand barge-in déclenché
             "speech_end_timestamp": None,     # Quand SPEECH_END reçu
-            "partial_count": 0                # Nombre de PARTIAL reçus
+            "partial_count": 0,               # Nombre de PARTIAL reçus
+            "monitoring_start": None          # Timestamp début monitoring (pour callback)
         }
 
         try:
@@ -4277,11 +4392,17 @@ class RobotFreeSWITCH:
                     detection_state["speech_end_timestamp"] = time.time()
 
                     # Calculer temps écoulé depuis début monitoring
-                    elapsed_ms = (detection_state["speech_end_timestamp"] - monitoring_start) * 1000
-                    logger.info(
-                        f"🤐 [{short_uuid}] SPEECH_END at {elapsed_ms:.0f}ms "
-                        f"({detection_state['partial_count']} partials received)"
-                    )
+                    if detection_state["monitoring_start"]:
+                        elapsed_ms = (detection_state["speech_end_timestamp"] - detection_state["monitoring_start"]) * 1000
+                        logger.info(
+                            f"🤐 [{short_uuid}] SPEECH_END at {elapsed_ms:.0f}ms "
+                            f"({detection_state['partial_count']} partials received)"
+                        )
+                    else:
+                        logger.info(
+                            f"🤐 [{short_uuid}] SPEECH_END "
+                            f"({detection_state['partial_count']} partials received)"
+                        )
 
                 elif event_type == "transcription":
                     text = event_data.get("text", "")
@@ -4297,7 +4418,9 @@ class RobotFreeSWITCH:
                         detection_state["partial_count"] += 1
 
                         # Calculer temps écoulé depuis début monitoring
-                        elapsed_ms = (current_time - monitoring_start) * 1000
+                        elapsed_ms = 0
+                        if detection_state["monitoring_start"]:
+                            elapsed_ms = (current_time - detection_state["monitoring_start"]) * 1000
 
                         # Compter mots pour détecter barge-in (MIN_WORDS_FOR_BARGE_IN minimum)
                         words = text.strip().split()
@@ -4321,7 +4444,9 @@ class RobotFreeSWITCH:
                     elif trans_type == "final":
                         # Afficher transcription avec panel Rich visible
                         self.clog.transcription(text, uuid=short_uuid, latency_ms=latency)
-                        detection_state["transcription"] = text
+                        # Ne pas écraser une transcription existante par une vide
+                        if text or not detection_state.get("transcription"):
+                            detection_state["transcription"] = text
                         detection_state["final_received"] = True  # Marquer final reçu
                         detection_state["last_update"] = time.time()  # Update timestamp
 
@@ -4340,8 +4465,25 @@ class RobotFreeSWITCH:
 
             fork_latency = (time.time() - fork_start) * 1000
 
-            # Petit délai pour que le stream WebSocket se connecte
-            time.sleep(0.1)
+            # === ATTENDRE INITIALISATION STREAM (évite race condition) ===
+            stream_wait_start = time.time()
+            max_stream_wait = 2.0  # Max 2s d'attente
+
+            while call_uuid not in self.streaming_asr.active_streams:
+                if (time.time() - stream_wait_start) > max_stream_wait:
+                    logger.error(
+                        f"❌ [{short_uuid}] WebSocket stream not initialized after {max_stream_wait}s"
+                    )
+                    try:
+                        self._execute_esl_command(f"uuid_audio_fork {call_uuid} stop")
+                    except:
+                        pass
+                    self.streaming_asr.unregister_callback(call_uuid)
+                    return self._execute_phase_playing(call_uuid, audio_path, enable_barge_in)
+                time.sleep(0.01)  # Poll every 10ms
+
+            stream_init_latency = (time.time() - stream_wait_start) * 1000
+            logger.debug(f"✅ [{short_uuid}] Stream initialized in {stream_init_latency:.0f}ms")
 
             # Étape 3: Démarrer playback
             playback_start = time.time()
@@ -4361,15 +4503,26 @@ class RobotFreeSWITCH:
             # Étape 4: Attendre barge-in OU fin playback
             # Calculer durée audio réelle pour timeout précis
             audio_duration = self._get_audio_duration(audio_path)
-            # Early exit: stop monitoring Xs before audio ends for faster Phase 3 start
-            timeout = audio_duration - config.PHASE2_EARLY_EXIT
-            monitoring_start = time.time()
 
-            logger.debug(
-                f"⏱️ [{short_uuid}] Monitoring for barge-in "
-                f"(audio: {audio_duration:.1f}s, early exit: {timeout:.1f}s, "
-                f"Phase 3 starts {config.PHASE2_EARLY_EXIT}s before audio ends)"
-            )
+            # Pour steps terminaux (bye), jouer audio jusqu'au bout (pas d'early exit)
+            # Pour steps normaux, early exit Xs avant la fin pour démarrer Phase 3 plus vite
+            if is_terminal:
+                timeout = audio_duration
+                logger.debug(
+                    f"⏱️ [{short_uuid}] TERMINAL step - playing full audio "
+                    f"(duration: {audio_duration:.1f}s, NO early exit)"
+                )
+            else:
+                timeout = audio_duration - config.PHASE2_EARLY_EXIT
+                logger.debug(
+                    f"⏱️ [{short_uuid}] Monitoring for barge-in "
+                    f"(audio: {audio_duration:.1f}s, early exit: {timeout:.1f}s, "
+                    f"Phase 3 starts {config.PHASE2_EARLY_EXIT}s before audio ends)"
+                )
+
+            # Définir monitoring_start APRÈS playback pour calculs précis
+            monitoring_start = time.time()
+            detection_state["monitoring_start"] = monitoring_start
 
             while (time.time() - monitoring_start) < timeout:
                 current_time = time.time()
@@ -5202,25 +5355,17 @@ class RobotFreeSWITCH:
                     logger.error(f"ESL API connection lost, attempting to send: {cmd}")
                     return None
 
-                logger.debug(f"📤 ESL API command: {cmd}")
                 result = self.esl_conn_api.api(cmd)
 
                 if not result:
                     logger.error(f"❌ ESL api() returned None object: {cmd}")
                     return None
 
-                # Debug result object
-                logger.debug(f"📦 ESL result object type: {type(result)}")
-                logger.debug(f"📦 ESL result object: {result}")
-
                 body = result.getBody()
 
                 if body is None:
                     logger.error(f"❌ ESL getBody() returned None for cmd: {cmd}")
-                    logger.error(f"   Result type: {type(result)}, Result: {result}")
                     return None
-
-                logger.debug(f"📥 ESL API response: {body}")
                 return body
 
             except Exception as e:
