@@ -118,12 +118,30 @@ class StreamingASR:
         # NoiseReduce pour suppression avancée bruits (spectral gating)
         # DÉSACTIVÉ: Cause des problèmes de latence/qualité
         self.enable_noisereduce = False  # Forcé à False (Phase 2 revert)
-        # if self.enable_noisereduce:
-        #     # Configuration: mode stationary (bruits constants: AC, ventilateur, musique)
-        #     # Plus rapide et efficace que non-stationary pour téléphonie
-        #     logger.info("✅ NoiseReduce enabled (stationary mode)")
-        # else:
-        #     logger.warning("⚠️ NoiseReduce disabled (package not available)")
+
+        # Noise Gate Dynamique (filtre le bruit sous un seuil RMS)
+        # Combiné avec high-pass filter pour réduction de bruit optimale
+        # Paramètres configurables via .env
+        self.enable_noise_gate = config.NOISE_GATE_ENABLED
+        self.noise_gate_threshold_db = config.NOISE_GATE_THRESHOLD_DB
+        self.noise_gate_attack_ms = config.NOISE_GATE_ATTACK_MS
+        self.noise_gate_release_ms = config.NOISE_GATE_RELEASE_MS
+        self.noise_gate_attenuation_db = config.NOISE_GATE_ATTENUATION_DB
+
+        # États du noise gate par appel
+        self.noise_gate_states = {}  # {call_uuid: {"gain": 1.0, "is_open": False}}
+
+        if self.enable_noise_gate:
+            # Précalculer coefficients attack/release
+            # attack_coef = exp(-1 / (sample_rate * attack_time))
+            self.noise_gate_attack_coef = np.exp(-1.0 / (self.sample_rate * self.noise_gate_attack_ms / 1000.0))
+            self.noise_gate_release_coef = np.exp(-1.0 / (self.sample_rate * self.noise_gate_release_ms / 1000.0))
+            # Convertir dB en linéaire
+            self.noise_gate_threshold_linear = 10 ** (self.noise_gate_threshold_db / 20.0) * 32768
+            self.noise_gate_attenuation_linear = 10 ** (self.noise_gate_attenuation_db / 20.0)
+            logger.info(f"✅ Noise Gate enabled (threshold: {self.noise_gate_threshold_db}dB, attenuation: {self.noise_gate_attenuation_db}dB)")
+        else:
+            logger.info("ℹ️ Noise Gate disabled")
 
         # Modèle Vosk
         self.model = None
@@ -222,6 +240,81 @@ class StreamingASR:
 
         except Exception as e:
             logger.warning(f"⚠️ High-pass filter failed for {call_uuid[:8]}: {e}, using original audio")
+            return frame_bytes
+
+    def _apply_noise_gate(self, call_uuid: str, frame_bytes: bytes) -> bytes:
+        """
+        Applique un Noise Gate Dynamique sur frame audio.
+
+        Le gate s'ouvre quand le signal dépasse le seuil (parole) et se ferme
+        quand le signal est sous le seuil (bruit de fond).
+        Utilise attack/release pour des transitions douces.
+
+        Args:
+            call_uuid: UUID de l'appel (pour gestion état)
+            frame_bytes: Audio brut (16-bit PCM mono)
+
+        Returns:
+            Audio avec gate appliqué (16-bit PCM mono)
+        """
+        if not self.enable_noise_gate:
+            return frame_bytes
+
+        # Validation input
+        if not frame_bytes or len(frame_bytes) == 0:
+            return frame_bytes
+        if len(frame_bytes) % 2 != 0:
+            return frame_bytes
+
+        try:
+            # Initialiser état pour ce call_uuid (si premier frame)
+            if call_uuid not in self.noise_gate_states:
+                self.noise_gate_states[call_uuid] = {
+                    "gain": self.noise_gate_attenuation_linear,  # Commence fermé
+                    "envelope": 0.0
+                }
+
+            state = self.noise_gate_states[call_uuid]
+
+            # Convertir bytes → numpy array int16
+            audio_int16 = np.frombuffer(frame_bytes, dtype=np.int16).astype(np.float32)
+
+            # Calculer RMS du frame pour déterminer si parole ou bruit
+            rms = np.sqrt(np.mean(audio_int16 ** 2))
+
+            # Mettre à jour l'envelope avec attack/release
+            if rms > state["envelope"]:
+                # Attack (signal monte)
+                state["envelope"] = self.noise_gate_attack_coef * state["envelope"] + \
+                                   (1 - self.noise_gate_attack_coef) * rms
+            else:
+                # Release (signal descend)
+                state["envelope"] = self.noise_gate_release_coef * state["envelope"] + \
+                                   (1 - self.noise_gate_release_coef) * rms
+
+            # Déterminer le gain cible basé sur l'envelope
+            if state["envelope"] > self.noise_gate_threshold_linear:
+                # Gate ouvert - laisser passer
+                target_gain = 1.0
+            else:
+                # Gate fermé - atténuer
+                target_gain = self.noise_gate_attenuation_linear
+
+            # Smooth transition vers le gain cible (évite les clics)
+            # Utilise une interpolation exponentielle
+            smooth_coef = 0.1  # Plus petit = plus lisse
+            state["gain"] = state["gain"] + smooth_coef * (target_gain - state["gain"])
+
+            # Appliquer le gain
+            gated_audio = audio_int16 * state["gain"]
+
+            # Reconvertir → int16 (clamp pour éviter overflow)
+            gated_int16 = np.clip(gated_audio, -32768, 32767).astype(np.int16)
+
+            return gated_int16.tobytes()
+
+        except Exception as e:
+            logger.warning(f"⚠️ Noise gate failed for {call_uuid[:8]}: {e}, using original audio")
             return frame_bytes
 
     def _apply_noise_reduction(self, frame_bytes: bytes) -> bytes:
@@ -428,11 +521,13 @@ class StreamingASR:
                         await self._notify_speech_end(call_uuid)
                         stream_info["final_transcription"] = None  # Reset pour éviter double détection
 
-            # HIGH-PASS FILTER - Appliqué UNIQUEMENT pour Vosk ASR (pas pour VAD)
-            # Réduction bruits bas (<80Hz: ventilateurs, rumble, etc.)
+            # AUDIO PREPROCESSING pour Vosk ASR (pas pour VAD qui utilise frame_bytes original)
+            # 1. High-pass filter: Réduction bruits bas (<80Hz: ventilateurs, rumble, etc.)
             filtered_frame = self._apply_highpass_filter(call_uuid, frame_bytes)
+            # 2. Noise Gate: Atténue le bruit de fond quand pas de parole
+            filtered_frame = self._apply_noise_gate(call_uuid, filtered_frame)
 
-            # ASR - Transcription streaming (sur audio filtré)
+            # ASR - Transcription streaming (sur audio filtré + gated)
             if recognizer.AcceptWaveform(filtered_frame):
                 # Transcription finale
                 result = json.loads(recognizer.Result())
@@ -623,6 +718,11 @@ class StreamingASR:
         if self.enable_highpass_filter and call_uuid in self.hp_filter_states:
             del self.hp_filter_states[call_uuid]
             logger.debug(f"🧹 [{call_uuid[:8]}] Removed high-pass filter state")
+
+        # Nettoyer état du noise gate
+        if self.enable_noise_gate and call_uuid in self.noise_gate_states:
+            del self.noise_gate_states[call_uuid]
+            logger.debug(f"🧹 [{call_uuid[:8]}] Removed noise gate state")
 
         # ❌ NE PAS supprimer le callback automatiquement !
         # Le callback est géré explicitement par register/unregister

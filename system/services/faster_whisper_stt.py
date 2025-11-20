@@ -8,8 +8,21 @@ Target latency: 50-200ms (GPU batch processing)
 
 import logging
 import time
+import tempfile
 from typing import Dict, Optional, Any
 from pathlib import Path
+
+# Noise reduction
+try:
+    import noisereduce as nr
+    import numpy as np
+    import soundfile as sf
+    NOISEREDUCE_AVAILABLE = True
+except ImportError:
+    NOISEREDUCE_AVAILABLE = False
+    nr = None
+    np = None
+    sf = None
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +41,9 @@ class FasterWhisperSTT:
         device: str = "cuda",
         compute_type: str = "float16",
         language: str = "fr",
-        beam_size: int = 1
+        beam_size: int = 1,
+        noise_reduce: bool = True,
+        noise_reduce_strength: float = 1.0
     ):
         """
         Initialize Faster-Whisper STT
@@ -39,21 +54,89 @@ class FasterWhisperSTT:
             compute_type: "float16" (GPU fast) or "int8" (CPU fast)
             language: Language code (fr/en/etc)
             beam_size: Beam search size (1=fastest, 5=balanced)
+            noise_reduce: Enable RNNoise-based noise reduction (default: True)
+            noise_reduce_strength: Noise reduction strength 0.0-2.0 (default: 1.0)
         """
         self.model_name = model_name
         self.device = device
         self.compute_type = compute_type
         self.language = language
         self.beam_size = beam_size
+        self.noise_reduce = noise_reduce and NOISEREDUCE_AVAILABLE
+        self.noise_reduce_strength = noise_reduce_strength
         self.model = None
 
         logger.info(
             f"FasterWhisperSTT init: "
-            f"model={model_name}, device={device}, compute_type={compute_type}"
+            f"model={model_name}, device={device}, compute_type={compute_type}, "
+            f"noise_reduce={self.noise_reduce}"
         )
+
+        if noise_reduce and not NOISEREDUCE_AVAILABLE:
+            logger.warning(
+                "Noise reduction requested but noisereduce not installed! "
+                "pip install noisereduce soundfile numpy"
+            )
 
         # Load model
         self._load_model()
+
+    def _apply_noise_reduction(self, audio_path: str) -> str:
+        """
+        Apply noise reduction to audio file using noisereduce library
+
+        Args:
+            audio_path: Path to input audio file
+
+        Returns:
+            Path to noise-reduced audio file (temp file)
+        """
+        if not NOISEREDUCE_AVAILABLE:
+            return audio_path
+
+        try:
+            start_time = time.time()
+
+            # Load audio
+            audio_data, sample_rate = sf.read(audio_path)
+
+            # Convert to mono if stereo
+            if len(audio_data.shape) > 1:
+                audio_data = np.mean(audio_data, axis=1)
+
+            # Apply noise reduction
+            # prop_decrease controls how much noise is reduced (0.0 to 1.0)
+            reduced_audio = nr.reduce_noise(
+                y=audio_data,
+                sr=sample_rate,
+                prop_decrease=min(1.0, self.noise_reduce_strength),
+                stationary=False,  # Non-stationary noise (better for phone calls)
+                n_fft=512,  # Smaller FFT for faster processing
+                hop_length=128
+            )
+
+            # Save to temp file
+            temp_file = tempfile.NamedTemporaryFile(
+                suffix=".wav",
+                delete=False,
+                prefix="nr_"
+            )
+            temp_path = temp_file.name
+            temp_file.close()
+
+            sf.write(temp_path, reduced_audio, sample_rate)
+
+            latency_ms = (time.time() - start_time) * 1000
+            logger.debug(
+                f"Noise reduction applied: {audio_path} -> {temp_path} "
+                f"(latency: {latency_ms:.0f}ms)"
+            )
+
+            return temp_path
+
+        except Exception as e:
+            logger.warning(f"Noise reduction failed, using original: {e}")
+            return audio_path
 
     def _load_model(self):
         """Load Faster-Whisper model"""
@@ -88,7 +171,8 @@ class FasterWhisperSTT:
         vad_filter: bool = True,
         no_speech_threshold: Optional[float] = None,
         condition_on_previous_text: bool = True,
-        beam_size: Optional[int] = None
+        beam_size: Optional[int] = None,
+        apply_noise_reduction: Optional[bool] = None
     ) -> Dict[str, Any]:
         """
         Transcribe audio file
@@ -105,13 +189,16 @@ class FasterWhisperSTT:
             beam_size: Beam size for decoding (default: None = use model config)
                       Higher = more accurate but slower (1=fast, 3=balanced, 5=accurate)
                       Recommended: 5 for AMD to reduce hallucinations
+            apply_noise_reduction: Override noise reduction setting for this call
+                                  None = use default (self.noise_reduce)
 
         Returns:
             {
                 "text": "transcription",
                 "language": "fr",
                 "duration": 1.5,
-                "latency_ms": 150.0
+                "latency_ms": 150.0,
+                "noise_reduced": True/False
             }
         """
         if not self.model:
@@ -137,6 +224,21 @@ class FasterWhisperSTT:
 
         try:
             start_time = time.time()
+            noise_reduced = False
+            processed_audio_path = str(audio_file)
+            temp_nr_file = None
+
+            # Apply noise reduction if enabled
+            use_noise_reduction = (
+                apply_noise_reduction if apply_noise_reduction is not None
+                else self.noise_reduce
+            )
+
+            if use_noise_reduction:
+                temp_nr_file = self._apply_noise_reduction(str(audio_file))
+                if temp_nr_file != str(audio_file):
+                    processed_audio_path = temp_nr_file
+                    noise_reduced = True
 
             # Build transcribe parameters
             transcribe_params = {
@@ -152,7 +254,7 @@ class FasterWhisperSTT:
 
             # Transcribe with Faster-Whisper
             segments, info = self.model.transcribe(
-                str(audio_file),
+                processed_audio_path,
                 **transcribe_params
             )
 
@@ -162,9 +264,17 @@ class FasterWhisperSTT:
 
             latency_ms = (time.time() - start_time) * 1000
 
+            # Cleanup temp noise-reduced file
+            if temp_nr_file and temp_nr_file != str(audio_file):
+                try:
+                    Path(temp_nr_file).unlink()
+                except:
+                    pass
+
             logger.info(
                 f"STT: '{text[:50]}...' "
-                f"(duration: {info.duration:.1f}s, latency: {latency_ms:.0f}ms)"
+                f"(duration: {info.duration:.1f}s, latency: {latency_ms:.0f}ms, "
+                f"noise_reduced: {noise_reduced})"
             )
 
             return {
@@ -172,7 +282,8 @@ class FasterWhisperSTT:
                 "language": info.language,
                 "duration": info.duration,
                 "latency_ms": latency_ms,
-                "language_probability": info.language_probability
+                "language_probability": info.language_probability,
+                "noise_reduced": noise_reduced
             }
 
         except Exception as e:
@@ -193,7 +304,9 @@ class FasterWhisperSTT:
             "compute_type": self.compute_type,
             "language": self.language,
             "beam_size": self.beam_size,
-            "model_loaded": self.model is not None
+            "model_loaded": self.model is not None,
+            "noise_reduce": self.noise_reduce,
+            "noise_reduce_strength": self.noise_reduce_strength
         }
 
 

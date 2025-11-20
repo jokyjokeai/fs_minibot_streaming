@@ -134,7 +134,9 @@ class RobotFreeSWITCH:
                 device=config.FASTER_WHISPER_DEVICE,
                 compute_type=config.FASTER_WHISPER_COMPUTE_TYPE,
                 language=config.FASTER_WHISPER_LANGUAGE,
-                beam_size=config.FASTER_WHISPER_BEAM_SIZE
+                beam_size=config.FASTER_WHISPER_BEAM_SIZE,
+                noise_reduce=config.NOISE_REDUCE_ENABLED,
+                noise_reduce_strength=config.NOISE_REDUCE_STRENGTH
             )
 
             load_time = (time.time() - start_time) * 1000

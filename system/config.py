@@ -242,7 +242,7 @@ WAITING_TIMEOUT = 10.0
 
 # Timeout silence client (pour retry_silence apr�s robot parle)
 # Si client ne dit rien pendant 3s � retry_silence
-WAITING_SILENCE_TIMEOUT = 3.0
+WAITING_SILENCE_TIMEOUT = 2.0
 
 # Dur�e minimale de parole pour d�tecter "start speech" (en secondes)
 WAITING_START_SPEECH_DURATION = 0.3
@@ -285,6 +285,16 @@ FASTER_WHISPER_BEAM_SIZE = 3
 # VAD filter (supprime silences avant/apr�s)
 FASTER_WHISPER_VAD_FILTER = True
 
+# Noise Reduction (noisereduce library)
+# Active la réduction de bruit avant transcription STT
+# Améliore significativement la qualité sur audio téléphonique bruité
+NOISE_REDUCE_ENABLED = os.getenv("NOISE_REDUCE_ENABLED", "true").lower() == "true"
+
+# Force de la réduction de bruit (0.0 à 2.0)
+# 0.0 = pas de réduction, 1.0 = normal, 2.0 = agressif
+# Recommandation: 0.8-1.2 pour audio téléphonique
+NOISE_REDUCE_STRENGTH = float(os.getenv("NOISE_REDUCE_STRENGTH", "1.0"))
+
 
 # PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
 # 9. VAD - WEBRTC (Voice Activity Detection)
@@ -304,6 +314,24 @@ WEBRTC_VAD_FRAME_DURATION_MS = 30
 # Sample rate pour VAD (Hz)
 # Doit �tre 8000, 16000, 32000, ou 48000
 WEBRTC_VAD_SAMPLE_RATE = 8000
+
+# Noise Gate Dynamique (réduction bruit de fond pour Vosk streaming)
+# Active/désactive le noise gate
+NOISE_GATE_ENABLED = os.getenv("NOISE_GATE_ENABLED", "true").lower() == "true"
+
+# Seuil en dB pour ouvrir le gate (plus bas = plus sensible)
+# -35dB = bon pour téléphonie, -30dB = moins sensible, -40dB = très sensible
+NOISE_GATE_THRESHOLD_DB = float(os.getenv("NOISE_GATE_THRESHOLD_DB", "-35"))
+
+# Atténuation en dB quand gate fermé (plus négatif = plus d'atténuation)
+# -40dB = quasi silence, -20dB = atténuation légère
+NOISE_GATE_ATTENUATION_DB = float(os.getenv("NOISE_GATE_ATTENUATION_DB", "-40"))
+
+# Attack en ms (temps pour ouvrir le gate - rapide pour ne pas couper début de parole)
+NOISE_GATE_ATTACK_MS = float(os.getenv("NOISE_GATE_ATTACK_MS", "5"))
+
+# Release en ms (temps pour fermer le gate - plus lent pour éviter coupures)
+NOISE_GATE_RELEASE_MS = float(os.getenv("NOISE_GATE_RELEASE_MS", "50"))
 
 
 # PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
@@ -633,11 +661,20 @@ class Config:
     FASTER_WHISPER_LANGUAGE = FASTER_WHISPER_LANGUAGE
     FASTER_WHISPER_BEAM_SIZE = FASTER_WHISPER_BEAM_SIZE
     FASTER_WHISPER_VAD_FILTER = FASTER_WHISPER_VAD_FILTER
+    NOISE_REDUCE_ENABLED = NOISE_REDUCE_ENABLED
+    NOISE_REDUCE_STRENGTH = NOISE_REDUCE_STRENGTH
 
     # VAD
     WEBRTC_VAD_AGGRESSIVENESS = WEBRTC_VAD_AGGRESSIVENESS
     WEBRTC_VAD_FRAME_DURATION_MS = WEBRTC_VAD_FRAME_DURATION_MS
     WEBRTC_VAD_SAMPLE_RATE = WEBRTC_VAD_SAMPLE_RATE
+
+    # Noise Gate
+    NOISE_GATE_ENABLED = NOISE_GATE_ENABLED
+    NOISE_GATE_THRESHOLD_DB = NOISE_GATE_THRESHOLD_DB
+    NOISE_GATE_ATTENUATION_DB = NOISE_GATE_ATTENUATION_DB
+    NOISE_GATE_ATTACK_MS = NOISE_GATE_ATTACK_MS
+    NOISE_GATE_RELEASE_MS = NOISE_GATE_RELEASE_MS
 
     # Intent Keywords
     INTENT_KEYWORDS = INTENT_KEYWORDS
