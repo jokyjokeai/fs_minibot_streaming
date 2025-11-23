@@ -1146,12 +1146,14 @@ class RobotFreeSWITCH:
                     return
 
                 # Execute conversation step (PHASE 2 + PHASE 3 + Intent)
+                # Calibrer le noise floor uniquement pour le premier step (hello)
                 step_result = self._execute_conversation_step(
                     call_uuid,
                     scenario,
                     current_step,
                     session,
-                    retry_count=0
+                    retry_count=0,
+                    calibrate_noise=(step_count == 1)  # Premier step uniquement
                 )
 
                 if not step_result.get("success"):
@@ -2052,18 +2054,26 @@ class RobotFreeSWITCH:
                 trans_type = event_data.get("type", "unknown")
 
                 if trans_type == "final":
-                    # Ne pas écraser une transcription existante par une vide
-                    if text or not detection_state.get("transcription"):
-                        detection_state["transcription"] = text
-                    detection_state["final_received"] = True  # ← Set flag!
-                    detection_state["last_update"] = time.time()
+                    # Concaténer si on a déjà du contenu (évite perte sur multiples FINAL)
                     if text:
+                        existing = detection_state.get("transcription", "")
+                        if existing and len(existing.split()) >= 1:
+                            # On a déjà au moins 1 mot → concaténer
+                            detection_state["transcription"] = f"{existing} {text}"
+                        else:
+                            # Premier FINAL ou existant vide → écraser
+                            detection_state["transcription"] = text
                         # Afficher transcription avec panel Rich visible
                         self.clog.transcription(text, uuid=short_uuid, latency_ms=0)
-                    else:
+                    elif not detection_state.get("transcription"):
+                        # FINAL vide et pas de transcription → garder vide (silence)
+                        detection_state["transcription"] = ""
                         logger.info(
                             f"📝 [{short_uuid}] FINAL transcription (empty - no text detected)"
                         )
+                    # Sinon: FINAL vide mais on a du contenu → ne pas écraser
+                    detection_state["final_received"] = True
+                    detection_state["last_update"] = time.time()
                 else:  # partial
                     # Tracker timestamps pour analyse latence
                     current_time = time.time()
@@ -2146,6 +2156,12 @@ class RobotFreeSWITCH:
                 time.sleep(0.01)  # Poll every 10ms
 
             stream_init_latency = (time.time() - stream_wait_start) * 1000
+
+            # === ENERGY GATE: Appliquer noise floor calibré (si disponible) ===
+            if call_uuid in self.call_sessions:
+                saved_noise_floor = self.call_sessions[call_uuid].get("noise_floor_rms", 0)
+                if saved_noise_floor > 0:
+                    self.streaming_asr.set_noise_floor(call_uuid, saved_noise_floor)
 
             # Définir monitoring_start APRÈS stream initialisé pour calculs précis
             monitoring_start = time.time()
@@ -2535,7 +2551,8 @@ class RobotFreeSWITCH:
         scenario: Dict,
         step_name: str,
         session: Dict,
-        retry_count: int = 0
+        retry_count: int = 0,
+        calibrate_noise: bool = False
     ) -> Dict[str, Any]:
         """
         Execute one conversation step with retry logic
@@ -2553,6 +2570,7 @@ class RobotFreeSWITCH:
             step_name: Current step name
             session: Call session data
             retry_count: Current retry attempt (0-based)
+            calibrate_noise: True pour calibrer le noise floor (premier step hello)
 
         Returns:
             {
@@ -2603,7 +2621,8 @@ class RobotFreeSWITCH:
         playing_result = self._execute_phase_2_auto(
             call_uuid,
             audio_path,
-            enable_barge_in=enable_barge_in
+            enable_barge_in=enable_barge_in,
+            calibrate_noise=calibrate_noise
         )
 
         # ===================================================================
@@ -2719,6 +2738,15 @@ class RobotFreeSWITCH:
                     f"[{short_uuid}] Silence detected → Next step: {next_step} "
                     f"(following scenario mapping)"
                 )
+
+        # --- NOT_UNDERSTOOD HANDLING ---
+        elif intent == "not_understood":
+            # Pas de match dans objections_db -> jouer step "not_understood"
+            logger.info(f"[{short_uuid}] Not understood -> Playing 'not_understood' step")
+
+            # Get fallback from intent_mapping or scenario metadata
+            default_not_understood = scenario.get("metadata", {}).get("fallbacks", {}).get("not_understood", "bye_failed")
+            next_step = intent_mapping.get("not_understood", default_not_understood)
 
         # --- AFFIRM / DENY / OTHER ---
         else:
@@ -3064,12 +3092,12 @@ class RobotFreeSWITCH:
 
         Keywords matching for fast intent detection (<10ms, no LLM needed!)
 
-        5 intents de base:
+        4 intents de base:
         - affirm: Acceptation positive
         - deny: Refus/rejet
-        - unsure: Hesitation
         - question: Demande info (détecté via objections_db si max_turn>0)
         - objection: Objection (détecté via objections_db si max_turn>0)
+        - not_understood: Pas de match trouvé (fallback)
 
         Args:
             transcription: Client transcription
@@ -3159,6 +3187,20 @@ class RobotFreeSWITCH:
                         "reason": "objections_db_match",
                         "matched_response_id": match_result["objection"],
                         "entry_type": entry_type,
+                        "latency_ms": latency_ms
+                    }
+                else:
+                    # Pas de match dans objections_db -> not_understood
+                    latency_ms = (time.time() - analyze_start) * 1000
+                    logger.info(
+                        f"Intent analysis: '{transcription[:30]}...' -> not_understood "
+                        f"(conf: 0.5, reason: no_objections_db_match, latency: {latency_ms:.1f}ms)"
+                    )
+                    return {
+                        "intent": "not_understood",
+                        "confidence": 0.5,
+                        "keywords_matched": [],
+                        "reason": "no_objections_db_match",
                         "latency_ms": latency_ms
                     }
 
@@ -4268,7 +4310,8 @@ class RobotFreeSWITCH:
         call_uuid: str,
         audio_path: str,
         enable_barge_in: bool = True,
-        is_terminal: bool = False
+        is_terminal: bool = False,
+        calibrate_noise: bool = False
     ) -> Dict[str, Any]:
         """
         Phase 2: PLAYING (Auto-sélection Streaming ASR vs WebRTC VAD)
@@ -4286,6 +4329,7 @@ class RobotFreeSWITCH:
             audio_path: Fichier audio à jouer
             enable_barge_in: Activer barge-in
             is_terminal: True si étape terminale (bye) → pas d'early exit
+            calibrate_noise: True pour calibrer le noise floor (premier step hello)
 
         Returns:
             Dict résultat phase 2 (voir _execute_phase_playing)
@@ -4303,7 +4347,7 @@ class RobotFreeSWITCH:
                 f"(Vosk WebSocket + audio fork)"
             )
             return self._execute_phase_playing_streaming(
-                call_uuid, audio_path, enable_barge_in, is_terminal
+                call_uuid, audio_path, enable_barge_in, is_terminal, calibrate_noise
             )
         else:
             logger.debug(
@@ -4319,7 +4363,8 @@ class RobotFreeSWITCH:
         call_uuid: str,
         audio_path: str,
         enable_barge_in: bool = True,
-        is_terminal: bool = False
+        is_terminal: bool = False,
+        calibrate_noise: bool = False
     ) -> Dict[str, Any]:
         """
         Phase 2: PLAYING avec Streaming ASR (Vosk Python + mod_audio_fork WebSocket)
@@ -4336,6 +4381,7 @@ class RobotFreeSWITCH:
             audio_path: Chemin fichier audio à jouer
             enable_barge_in: Activer barge-in (True par défaut)
             is_terminal: True si étape terminale (bye) → pas d'early exit
+            calibrate_noise: True pour calibrer le noise floor pendant ce playback
 
         Returns:
             {
@@ -4442,13 +4488,23 @@ class RobotFreeSWITCH:
                             )
 
                     elif trans_type == "final":
-                        # Afficher transcription avec panel Rich visible
-                        self.clog.transcription(text, uuid=short_uuid, latency_ms=latency)
-                        # Ne pas écraser une transcription existante par une vide
-                        if text or not detection_state.get("transcription"):
-                            detection_state["transcription"] = text
-                        detection_state["final_received"] = True  # Marquer final reçu
-                        detection_state["last_update"] = time.time()  # Update timestamp
+                        # Concaténer si on a déjà du contenu (évite perte sur multiples FINAL)
+                        if text:
+                            existing = detection_state.get("transcription", "")
+                            if existing and len(existing.split()) >= 1:
+                                # On a déjà au moins 1 mot → concaténer
+                                detection_state["transcription"] = f"{existing} {text}"
+                            else:
+                                # Premier FINAL ou existant vide → écraser
+                                detection_state["transcription"] = text
+                            # Afficher transcription avec panel Rich visible
+                            self.clog.transcription(text, uuid=short_uuid, latency_ms=latency)
+                        elif not detection_state.get("transcription"):
+                            # FINAL vide et pas de transcription → garder vide (silence)
+                            detection_state["transcription"] = ""
+                        # Sinon: FINAL vide mais on a du contenu → ne pas écraser
+                        detection_state["final_received"] = True
+                        detection_state["last_update"] = time.time()
 
             self.streaming_asr.register_callback(call_uuid, streaming_callback)
 
@@ -4484,6 +4540,16 @@ class RobotFreeSWITCH:
 
             stream_init_latency = (time.time() - stream_wait_start) * 1000
             logger.debug(f"✅ [{short_uuid}] Stream initialized in {stream_init_latency:.0f}ms")
+
+            # === ENERGY GATE: Appliquer noise floor calibré (si disponible) ===
+            if call_uuid in self.call_sessions:
+                saved_noise_floor = self.call_sessions[call_uuid].get("noise_floor_rms", 0)
+                if saved_noise_floor > 0:
+                    self.streaming_asr.set_noise_floor(call_uuid, saved_noise_floor)
+
+            # === ENERGY GATE: Démarrer calibration si demandé ===
+            if calibrate_noise:
+                self.streaming_asr.start_noise_calibration(call_uuid)
 
             # Étape 3: Démarrer playback
             playback_start = time.time()
@@ -4648,6 +4714,14 @@ class RobotFreeSWITCH:
 
             # Étape 5: Arrêter audio fork (but NOT uuid_break - let audio finish naturally)
             self._execute_esl_command(f"uuid_audio_fork {call_uuid} stop")
+
+            # === ENERGY GATE: Arrêter calibration et calculer noise floor ===
+            if calibrate_noise:
+                noise_floor = self.streaming_asr.stop_noise_calibration(call_uuid)
+                # Stocker dans call_sessions pour réutiliser dans les phases suivantes
+                if noise_floor > 0 and call_uuid in self.call_sessions:
+                    self.call_sessions[call_uuid]["noise_floor_rms"] = noise_floor
+                    logger.info(f"🎚️ [{short_uuid}] Noise floor saved to session: {noise_floor:.0f}")
 
             # CRITICAL: Attendre que WebSocket se ferme complètement (évite race condition)
             time.sleep(0.1)

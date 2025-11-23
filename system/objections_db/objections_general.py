@@ -113,13 +113,26 @@ OBJECTIONS_DATABASE: List[ObjectionEntry] = [
     ),
 
     # ─────────────────────────────────────────────────────────────────────
-    # RÉFLEXION
+    # HÉSITATION / INCERTITUDE
     # ─────────────────────────────────────────────────────────────────────
+    ObjectionEntry(
+        keywords=[
+            "peut-être", "peut être", "ptetre", "p't'être",
+            "je sais pas", "sais pas", "je ne sais pas",
+            "on verra", "je vais voir", "je verrai", "faut voir",
+            "mouais", "bof", "euh", "hum", "hmm"
+        ],
+        response="Je comprends votre hésitation. Si je vous donne juste une info rapide, vous pourrez décider en toute connaissance de cause. D'accord ?",
+        audio_path="general_hesitation.wav",
+        entry_type="objection"
+    ),
+
     ObjectionEntry(
         keywords=[
             "réfléchir", "besoin de temps", "hésiter", "hésitation",
             "dois réfléchir", "je vais réfléchir", "laisser réfléchir",
-            "temps de réflexion", "besoin réfléchir"
+            "temps de réflexion", "besoin réfléchir",
+            "je suis pas sûr", "pas sûr", "pas certain", "incertain"
         ],
         response="C'est normal de réfléchir. Qu'est-ce qui vous fait hésiter précisément ? Le prix ? Les modalités ? Je peux vous apporter des réponses claires.",
         audio_path="general_reflechir.wav",
@@ -153,6 +166,48 @@ OBJECTIONS_DATABASE: List[ObjectionEntry] = [
     # ─────────────────────────────────────────────────────────────────────
     # FAQ GÉNÉRALES
     # ─────────────────────────────────────────────────────────────────────
+    ObjectionEntry(
+        keywords=[
+            "c'est quoi", "c'est quoi exactement", "qu'est-ce que c'est",
+            "de quoi il s'agit", "ça concerne quoi", "c'est à quel sujet",
+            "vous voulez quoi", "vous proposez quoi"
+        ],
+        response="En fait, on propose [Service]. L'idée c'est de vous faire économiser du temps et de l'argent. Je vous explique en 30 secondes ?",
+        audio_path="general_cest_quoi.wav",
+        entry_type="faq"
+    ),
+
+    ObjectionEntry(
+        keywords=[
+            "pourquoi", "pourquoi m'appeler", "pourquoi vous m'appelez",
+            "pour quelle raison", "dans quel but"
+        ],
+        response="Je vous appelle parce que vous pourriez être éligible à [Offre]. En 2 minutes je peux vous dire si c'est intéressant pour vous. D'accord ?",
+        audio_path="general_pourquoi.wav",
+        entry_type="faq"
+    ),
+
+    ObjectionEntry(
+        keywords=[
+            "comment", "comment ça marche", "comment ça fonctionne",
+            "ça marche comment", "expliquez-moi"
+        ],
+        response="C'est très simple ! [Explication courte]. En gros, vous gagnez du temps et de l'argent. Je vous donne les détails ?",
+        audio_path="general_comment.wav",
+        entry_type="faq"
+    ),
+
+    ObjectionEntry(
+        keywords=[
+            "je comprends pas", "comprends pas", "j'ai pas compris",
+            "vous pouvez répéter", "pardon", "hein", "quoi",
+            "j'ai mal entendu", "répéter"
+        ],
+        response="Pas de souci, je reformule ! En clair : [Reformulation simple]. C'est plus clair comme ça ?",
+        audio_path="general_repeter.wav",
+        entry_type="faq"
+    ),
+
     ObjectionEntry(
         keywords=[
             "qui êtes vous", "c'est qui", "quelle société",

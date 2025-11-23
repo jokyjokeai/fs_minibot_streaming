@@ -7,8 +7,9 @@ Intents de base TOUJOURS chargés pour tous les scénarios.
 Intents:
 - affirm: Réponses affirmatives (oui, d'accord, ok, etc.)
 - deny: Réponses négatives (non, pas intéressé, ça va, etc.)
-- unsure: Hésitation (peut-être, je sais pas, hésiter, etc.)
 - silence: Pas de réponse (géré automatiquement par VAD, pas de keywords)
+
+Note: unsure/hésitations sont gérés par objections_db pour des réponses plus spécifiques
 """
 
 from typing import List
@@ -35,6 +36,7 @@ INTENTS_DATABASE: List[IntentEntry] = [
             # Affirmations directes
             "je suis intéressé", "ça m'intéresse", "pourquoi pas", "je veux bien",
             "volontiers", "je suis d'accord", "allons-y", "parfait",
+            "ça peut se passer", "ça peut se faire", "ça peut le faire",
 
             # Validation
             "c'est bon", "c'est parfait", "ça marche", "ça me va", "entendu",
@@ -69,33 +71,6 @@ INTENTS_DATABASE: List[IntentEntry] = [
             "je préfère pas", "c'est pas pour moi"
         ],
         confidence_base=0.7
-    ),
-
-    # ─────────────────────────────────────────────────────────────────────
-    # UNSURE (Hésitation / Incertitude)
-    # ─────────────────────────────────────────────────────────────────────
-    IntentEntry(
-        intent="unsure",
-        keywords=[
-            # Peut-être
-            "peut-être", "peut être", "ptetre", "p't'être", "sais pas", "je sais pas",
-
-            # Hésitation
-            "hésiter", "j'hésite", "hésitation", "je suis pas sûr", "pas certain",
-            "pas sûr", "incertain", "je me demande",
-
-            # Réflexion
-            "réfléchir", "je dois réfléchir", "laisser réfléchir", "je vais voir",
-            "on verra", "faut voir", "je verrai",
-
-            # Questions indécises
-            "pourquoi", "comment", "je comprends pas", "c'est quoi",
-            "vous pouvez répéter", "pardon", "hein",
-
-            # Doute
-            "je doute", "mouais", "bof", "euh", "hum", "hmm"
-        ],
-        confidence_base=0.6
     ),
 
     # ─────────────────────────────────────────────────────────────────────
