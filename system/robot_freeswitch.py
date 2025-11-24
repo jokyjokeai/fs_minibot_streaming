@@ -22,6 +22,7 @@ import time
 import threading
 import asyncio
 import re
+import random
 from typing import Dict, Optional, Any, List
 from pathlib import Path
 from collections import defaultdict
@@ -50,7 +51,7 @@ from system.services.streaming_asr import StreamingASR
 # Scenarios & Objections & Intents
 from system.scenarios import ScenarioManager
 from system.objection_matcher import ObjectionMatcher
-from system.intents_db import load_intents_database, match_intent
+# intents_db supprimé - tout passe par ObjectionMatcher maintenant
 
 # Colored Logger (Futuristic Design 🚀)
 from system.logger_colored import get_colored_logger
@@ -305,15 +306,8 @@ class RobotFreeSWITCH:
             logger.warning(f"ObjectionMatcher not available: {e}")
             self.objection_matcher_default = None
 
-        # 7. Intents Database (PRELOAD fuzzy matching system)
-        try:
-            theme = default_theme if default_theme else "general"
-            logger.info(f"Loading Intents Database (theme: {theme})...")
-            self.intents_db = load_intents_database(theme)
-            logger.info(f"Intents Database loaded ({len(self.intents_db)} intents total)")
-        except Exception as e:
-            logger.warning(f"Intents Database not available: {e}")
-            self.intents_db = []
+        # 7. Intents Database supprimé - tout passe par ObjectionMatcher maintenant
+        # Les intents (affirm, deny, insult) sont dans objections_general.py
 
         # ===================================================================
         # WARMUP TESTS (CRITICAL - Avoid first-call latency spikes)
@@ -2603,6 +2597,21 @@ class RobotFreeSWITCH:
             }
 
         # ===================================================================
+        # RETURN_STEP SUBSTITUTION (for retry steps)
+        # ===================================================================
+        # Si ce step a {{return_step}} dans son intent_mapping, le remplacer
+        # par la valeur sauvegardée dans la session
+        intent_mapping = step_config.get("intent_mapping", {})
+        return_step = session.get("return_step")
+
+        if return_step:
+            # Remplacer {{return_step}} dans tous les mappings
+            for intent_key, target_step in list(intent_mapping.items()):
+                if target_step == "{{return_step}}":
+                    intent_mapping[intent_key] = return_step
+                    logger.debug(f"[{short_uuid}] Replaced {{{{return_step}}}} with '{return_step}' for intent '{intent_key}'")
+
+        # ===================================================================
         # STEP 1: Play audio (PHASE 2)
         # ===================================================================
         audio_path = self._get_audio_path_for_step(scenario, step_name)
@@ -2691,7 +2700,8 @@ class RobotFreeSWITCH:
                     scenario,
                     step_name,
                     transcription,
-                    max_turns=max_turns
+                    max_turns=max_turns,
+                    initial_match=intent_result  # Passer le résultat déjà trouvé
                 )
 
                 # After objection loop, check result
@@ -2748,6 +2758,12 @@ class RobotFreeSWITCH:
             default_not_understood = scenario.get("metadata", {}).get("fallbacks", {}).get("not_understood", "bye_failed")
             next_step = intent_mapping.get("not_understood", default_not_understood)
 
+        # --- INSULT HANDLING ---
+        elif intent == "insult":
+            # Insulte ou demande de retrait -> raccrocher directement
+            logger.info(f"[{short_uuid}] Insult/Removal request detected -> Hanging up immediately")
+            next_step = "end"
+
         # --- AFFIRM / DENY / OTHER ---
         else:
 
@@ -2780,6 +2796,24 @@ class RobotFreeSWITCH:
                 f"[{short_uuid}] Qualification update: {qualification_delta:+.1f} "
                 f"(total: {session['qualification_score']:.1f})"
             )
+
+        # ===================================================================
+        # SAVE RETURN_STEP (for retry steps)
+        # ===================================================================
+        # Si on va vers un retry step, sauvegarder le next_step prévu (affirm)
+        # pour que le retry puisse y retourner après un affirm
+        if next_step and next_step.startswith("retry_"):
+            # Sauvegarder le step prévu si affirm (le "next step" normal)
+            intended_next = intent_mapping.get("affirm")
+            if intended_next:
+                session["return_step"] = intended_next
+                logger.info(
+                    f"[{short_uuid}] Saved return_step='{intended_next}' for retry"
+                )
+        else:
+            # Effacer return_step si on n'est plus dans un retry
+            if "return_step" in session:
+                del session["return_step"]
 
         # ===================================================================
         # Summary
@@ -2822,7 +2856,8 @@ class RobotFreeSWITCH:
         scenario: Dict,
         step_name: str,
         objection_text: str,
-        max_turns: int = 2
+        max_turns: int = 2,
+        initial_match: Optional[Dict] = None
     ) -> Dict[str, Any]:
         """
         Handle objection with autonomous MaxTurn loop
@@ -2836,6 +2871,7 @@ class RobotFreeSWITCH:
             step_name: Current step name
             objection_text: Initial objection transcription
             max_turns: Maximum autonomous turns
+            initial_match: Result from _analyze_intent() - réutilisé pour le premier tour
 
         Returns:
             {
@@ -2853,12 +2889,26 @@ class RobotFreeSWITCH:
             f"MaxTurn: {max_turns}"
         )
 
+        # Get session from call_sessions
+        session = self.call_sessions.get(call_uuid, {})
+        if not session:
+            logger.error(f"[{short_uuid}] Session not found for call_uuid")
+            return {
+                "resolved": False,
+                "turns_used": 0,
+                "final_intent": "error",
+                "latencies": {"total_ms": 0}
+            }
+
         # Charger thématique depuis scenario (metadata.theme_file)
         theme = self.scenario_manager.get_theme_file(scenario)
         current_objection = objection_text
         turns_used = 0
         not_understood_count = 0  # Counter for objections not found in DB
         max_not_understood = scenario.get("metadata", {}).get("max_not_understood", 2)
+
+        # Pour réutiliser le intent_result entre les tours
+        reaction_match = None  # Sera set après chaque réaction client
 
         for turn in range(max_turns):
             turns_used += 1
@@ -2869,11 +2919,44 @@ class RobotFreeSWITCH:
             )
 
             # Find objection response
-            objection_result = self._find_objection_response(
-                current_objection,
-                theme=theme,
-                min_score=config.OBJECTION_MIN_SCORE
-            )
+            # Réutiliser le résultat de _analyze_intent si disponible (tous les tours)
+            match_to_use = None
+            if turn == 0 and initial_match and initial_match.get("matched_response_id"):
+                match_to_use = initial_match
+                logger.info(f"[{short_uuid}] Using initial_match from _analyze_intent (no re-search)")
+            elif turn > 0 and reaction_match and reaction_match.get("matched_response_id"):
+                match_to_use = reaction_match
+                logger.info(f"[{short_uuid}] Using reaction_match from previous turn (no re-search)")
+
+            if match_to_use:
+                # Utiliser le match déjà trouvé par _analyze_intent
+                objection_matcher = ObjectionMatcher.load_objections_for_theme(theme)
+                matched_id = match_to_use.get("matched_response_id", "")
+
+                objection_result = {
+                    "found": True,
+                    "objection_id": matched_id,
+                    "audio_file": objection_matcher.audio_paths.get(matched_id) if objection_matcher else None,
+                    "response_text": objection_matcher.objections.get(matched_id, "") if objection_matcher else "",
+                    "match_score": match_to_use.get("confidence", 0.0),
+                    "latency_ms": 0
+                }
+
+                # Vérifier qu'on a bien un audio_file
+                if not objection_result.get("audio_file"):
+                    logger.warning(f"[{short_uuid}] match_to_use has no audio_file, falling back to search")
+                    objection_result = self._find_objection_response(
+                        current_objection,
+                        theme=theme,
+                        min_score=config.OBJECTION_MIN_SCORE
+                    )
+            else:
+                # Pas de match pré-calculé: rechercher normalement
+                objection_result = self._find_objection_response(
+                    current_objection,
+                    theme=theme,
+                    min_score=config.OBJECTION_MIN_SCORE
+                )
 
             if not objection_result.get("found"):
                 # Objection not found in database
@@ -2959,6 +3042,12 @@ class RobotFreeSWITCH:
             intent_result = self._analyze_intent(reaction, scenario, step_name)
             intent = intent_result["intent"]
 
+            # Stocker le match pour le tour suivant (si c'est une objection/question)
+            if intent in ["objection", "question"] and intent_result.get("matched_response_id"):
+                reaction_match = intent_result
+            else:
+                reaction_match = None
+
             logger.info(
                 f"[{short_uuid}] Objection turn {turn + 1} result: "
                 f"intent={intent}, reaction='{reaction[:30]}...'"
@@ -2977,6 +3066,19 @@ class RobotFreeSWITCH:
                     "latencies": {"total_ms": total_latency_ms}
                 }
 
+            elif intent == "deny" or intent == "insult":
+                # Client refuses or insults - end loop
+                logger.info(f"[{short_uuid}] {intent.upper()} detected -> End objection loop")
+
+                total_latency_ms = (time.time() - loop_start) * 1000
+
+                return {
+                    "resolved": False,
+                    "turns_used": turns_used,
+                    "final_intent": intent,
+                    "latencies": {"total_ms": total_latency_ms}
+                }
+
             elif intent == "silence" or intent == "unknown":
                 # Continue loop
                 logger.info(f"[{short_uuid}] Silence/Unknown -> Continue loop")
@@ -2984,7 +3086,7 @@ class RobotFreeSWITCH:
                 continue
 
             else:
-                # New objection or deny
+                # New objection or question - continue to next turn
                 current_objection = reaction
 
         # Loop ended without resolution
@@ -3036,44 +3138,6 @@ class RobotFreeSWITCH:
     # INTENT ANALYSIS & OBJECTION HANDLING
     # ========================================================================
 
-    def _negation_near_word(self, text: str, word: str, window: int = 4) -> bool:
-        """
-        Check if negation word is near a positive word (within ±window words)
-
-        Used to detect phrases like:
-        - "ca m'interesse pas" (interesse + pas nearby) → deny
-        - "ca marche pas" (marche + pas nearby) → deny
-
-        Args:
-            text: Lowercase text to analyze
-            word: Positive word to check
-            window: Distance window (default 4 words)
-
-        Returns:
-            True if negation found near word, False otherwise
-        """
-        words = text.split()
-
-        # Find position of positive word
-        word_pos = -1
-        for i, w in enumerate(words):
-            if word in w:
-                word_pos = i
-                break
-
-        if word_pos == -1:
-            return False
-
-        # Check negations in window [-window, +window]
-        window_start = max(0, word_pos - window)
-        window_end = min(len(words), word_pos + window + 1)
-
-        for i in range(window_start, window_end):
-            if words[i] in config.NEGATION_WORDS:
-                return True
-
-        return False
-
     def _analyze_intent(
         self,
         transcription: str,
@@ -3081,35 +3145,34 @@ class RobotFreeSWITCH:
         step_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Analyze client intent using BETON ARME keywords matching
+        Analyze client intent using UNIFIED ObjectionMatcher system
 
-        Architecture 3 niveaux (basee sur research NLP + best practices):
-        NIVEAU 0: Fuzzy matching (intents_basic)
-        NIVEAU 0.5: Objections_db fallback (SEULEMENT si max_turn > 0)
-        NIVEAU 1: Pre-traitement (negations, MWEs, interrogatifs)
-        NIVEAU 2: Keywords matching (keywords simples)
-        NIVEAU 3: Resolution prioritaire (deny > question > objection > affirm)
+        Architecture simplifiée: TOUT passe par ObjectionMatcher
+        - Intents de base (affirm, deny, insult) sont dans objections_general.py
+        - Objections et FAQ sont dans objections_*.py
+        - Le meilleur score gagne (fuzzy matching unifié)
 
-        Keywords matching for fast intent detection (<10ms, no LLM needed!)
-
-        4 intents de base:
-        - affirm: Acceptation positive
-        - deny: Refus/rejet
-        - question: Demande info (détecté via objections_db si max_turn>0)
-        - objection: Objection (détecté via objections_db si max_turn>0)
-        - not_understood: Pas de match trouvé (fallback)
+        Intents possibles:
+        - affirm: Acceptation positive (entry_type="affirm")
+        - deny: Refus/rejet (entry_type="deny")
+        - insult: Insulte/demande retrait (entry_type="insult")
+        - question: FAQ (entry_type="faq")
+        - objection: Objection (entry_type="objection")
+        - silence: Pas de transcription
+        - not_understood: Pas de match trouvé
 
         Args:
             transcription: Client transcription
-            scenario: Optional scenario context (for custom intent keywords)
-            step_name: Optional step name (pour récupérer max_turn config)
+            scenario: Optional scenario context (for theme)
+            step_name: Optional step name (unused, kept for compatibility)
 
         Returns:
             {
-                "intent": "affirm" | "deny" | "unsure" | "question" | "objection" | "silence",
+                "intent": "affirm" | "deny" | "insult" | "question" | "objection" | "silence" | "not_understood",
                 "confidence": 0.0-1.0,
                 "keywords_matched": [...],
-                "reason": "fixed_expression" | "negation_override" | "interrogative_start" | "keywords",
+                "reason": "objections_db_unified" | "empty" | "no_match",
+                "entry_type": "affirm" | "deny" | "insult" | "objection" | "faq",
                 "latency_ms": 5.0
             }
         """
@@ -3126,223 +3189,79 @@ class RobotFreeSWITCH:
 
         text_lower = transcription.lower().strip()
 
-        # Récupérer max_turns pour savoir si objections_db doit être utilisé (OPTION B)
-        max_turns = 0
-        if step_name and scenario:
-            max_turns = self.scenario_manager.get_max_autonomous_turns(scenario, step_name)
+        # Get theme from scenario (fallback to "objections_general")
+        theme = "objections_general"
+        if scenario:
+            theme = self.scenario_manager.get_theme_file(scenario)
 
-        # ===== NIVEAU 0: FUZZY MATCHING (Intents Database) =====
-        # Try fuzzy matching first (faster than keyword matching, more flexible)
-        if hasattr(self, 'intents_db') and self.intents_db:
-            fuzzy_result = match_intent(text_lower, self.intents_db, min_confidence=0.7)
-            if fuzzy_result:
-                latency_ms = (time.time() - analyze_start) * 1000
-                logger.info(
-                    f"Intent analysis: '{transcription[:30]}...' -> {fuzzy_result['intent']} "
-                    f"(conf: {fuzzy_result['confidence']:.2f}, "
-                    f"reason: fuzzy_match '{fuzzy_result['matched_keyword']}', "
-                    f"latency: {latency_ms:.1f}ms)"
-                )
-                return {
-                    "intent": fuzzy_result['intent'],
-                    "confidence": fuzzy_result['confidence'],
-                    "keywords_matched": [fuzzy_result['matched_keyword']],
-                    "reason": "fuzzy_match",
-                    "latency_ms": latency_ms
-                }
+        # ===== SYSTEME UNIFIE: ObjectionMatcher pour TOUT =====
+        # Intents (affirm, deny, insult) + Objections + FAQ tous dans objections_db
+        logger.info(f"═══ INTENT ANALYSIS ═══")
+        logger.info(f"Transcription: '{transcription}'")
+        logger.info(f"Theme: {theme}")
 
-        # ===== NIVEAU 0.5: OBJECTIONS_DB FALLBACK (OPTION B simplification) =====
-        # Si fuzzy matching intents_db rate, tester directement objections_db
-        # Élimine duplication keywords (intents_general.py supprimé)
-        # IMPORTANT: SEULEMENT si max_turns > 0 (désactive objection_matcher si max_turn=0)
-        if max_turns > 0 and hasattr(self, 'objection_matcher_default') and self.objection_matcher_default:
-            # Get theme from scenario (fallback to "general")
-            theme = self.scenario_manager.get_theme_file(scenario) if scenario else "general"
-
-            # Try to find match in objections_db
+        if hasattr(self, 'objection_matcher_default') and self.objection_matcher_default:
             objection_matcher = ObjectionMatcher.load_objections_for_theme(theme)
             if objection_matcher:
+                num_entries = len(objection_matcher.objections)
+                logger.info(f"Loaded {num_entries} entries from {theme}")
+
                 match_result = objection_matcher.find_best_match(
                     text_lower,
-                    min_score=0.5,
-                    silent=True  # Pas de logs ici (déjà géré dans _find_objection_response)
+                    min_score=0.4,  # Seuil bas car intents sont maintenant dans objections_db
+                    silent=False
                 )
 
                 if match_result:
-                    # Determine intent based on entry_type (faq vs objection)
                     entry_type = match_result.get("entry_type", "objection")
-                    intent = "question" if entry_type == "faq" else "objection"
                     confidence = match_result["score"]
 
+                    # Map entry_type to intent
+                    if entry_type in ['affirm', 'deny', 'insult', 'time', 'unsure']:
+                        intent = entry_type
+                    elif entry_type == 'faq':
+                        intent = 'question'
+                    else:
+                        intent = 'objection'
+
                     latency_ms = (time.time() - analyze_start) * 1000
+
+                    # Log des alternatives si disponibles
+                    alternatives = match_result.get("top_alternatives", [])
+                    if alternatives:
+                        alt_str = ", ".join([f"{kw}({t}):{s:.2f}" for kw, s, t in alternatives])
+                        logger.info(f"Alternatives: {alt_str}")
+
                     logger.info(
-                        f"Intent analysis: '{transcription[:30]}...' -> {intent} "
-                        f"(conf: {confidence:.2f}, reason: objections_db_match, "
-                        f"entry_type: {entry_type}, latency: {latency_ms:.1f}ms)"
+                        f"FINAL: '{transcription[:50]}' → {intent.upper()} "
+                        f"(conf: {confidence:.2f}, entry_type: {entry_type}, "
+                        f"keyword: '{match_result.get('matched_keyword', '')}', "
+                        f"latency: {latency_ms:.1f}ms)"
                     )
+                    logger.info(f"═══════════════════════")
+
                     return {
                         "intent": intent,
                         "confidence": confidence,
-                        "keywords_matched": [match_result["objection"]],
-                        "reason": "objections_db_match",
-                        "matched_response_id": match_result["objection"],
+                        "keywords_matched": [match_result.get("matched_keyword", "")],
+                        "reason": "objections_db_unified",
+                        "matched_response_id": match_result.get("objection", ""),
                         "entry_type": entry_type,
                         "latency_ms": latency_ms
                     }
-                else:
-                    # Pas de match dans objections_db -> not_understood
-                    latency_ms = (time.time() - analyze_start) * 1000
-                    logger.info(
-                        f"Intent analysis: '{transcription[:30]}...' -> not_understood "
-                        f"(conf: 0.5, reason: no_objections_db_match, latency: {latency_ms:.1f}ms)"
-                    )
-                    return {
-                        "intent": "not_understood",
-                        "confidence": 0.5,
-                        "keywords_matched": [],
-                        "reason": "no_objections_db_match",
-                        "latency_ms": latency_ms
-                    }
 
-        # ===== NIVEAU 1: PRE-TRAITEMENT =====
-        # Ordre FINAL: negations explicites > fixed expressions > interrogatifs > negation generale
-
-        # 1.A - Check negations explicites (phrases completes) - PRIORITE ABSOLUE
-        for neg_phrase in config.NEGATION_PHRASES:
-            if neg_phrase in text_lower:
-                latency_ms = (time.time() - analyze_start) * 1000
-                logger.info(
-                    f"Intent analysis: '{transcription[:30]}...' -> deny "
-                    f"(conf: 0.90, reason: negation_phrase '{neg_phrase}', latency: {latency_ms:.1f}ms)"
-                )
-                return {
-                    "intent": "deny",
-                    "confidence": 0.90,
-                    "keywords_matched": [neg_phrase],
-                    "reason": "negation_phrase",
-                    "latency_ms": latency_ms
-                }
-
-        # 1.B - Check expressions figees (MWEs) - AVANT interrogatifs et negation generale
-        # Important: traite "pourquoi pas" (affirm) AVANT de detecter "pourquoi" (question)
-        # Important: traite "pas mal" (affirm) AVANT de detecter "pas" (negation)
-        # CRITIQUE: Verifie la PLUS LONGUE expression qui matche (evite "ca m'interesse" avant "ca m'interesse pas")
-        best_match = None
-        best_intent = None
-        best_length = 0
-
-        for intent_name, expressions in config.FIXED_EXPRESSIONS.items():
-            for expr in expressions:
-                if expr in text_lower and len(expr) > best_length:
-                    best_match = expr
-                    best_intent = intent_name
-                    best_length = len(expr)
-
-        if best_match:
-            latency_ms = (time.time() - analyze_start) * 1000
-            logger.info(
-                f"Intent analysis: '{transcription[:30]}...' -> {best_intent} "
-                f"(conf: 0.95, reason: fixed_expression '{best_match}', latency: {latency_ms:.1f}ms)"
-            )
-            return {
-                "intent": best_intent,
-                "confidence": 0.95,
-                "keywords_matched": [best_match],
-                "reason": "fixed_expression",
-                "latency_ms": latency_ms
-            }
-
-        # 1.C - Check interrogatifs en debut de phrase (position 0-2)
-        words = text_lower.split()
-        for i in range(min(3, len(words))):
-            if words[i] in config.INTERROGATIVE_WORDS:
-                latency_ms = (time.time() - analyze_start) * 1000
-                logger.info(
-                    f"Intent analysis: '{transcription[:30]}...' -> question "
-                    f"(conf: 0.85, reason: interrogative_start '{words[i]}', latency: {latency_ms:.1f}ms)"
-                )
-                return {
-                    "intent": "question",
-                    "confidence": 0.85,
-                    "keywords_matched": [words[i]],
-                    "reason": "interrogative_start",
-                    "latency_ms": latency_ms
-                }
-
-        # 1.D - Check negation generale dans phrase (si pas deja traite par fixed expressions)
-        # Ex: "ca marche pas", "ca m'interesse pas" -> deny
-        has_negation = any(neg in text_lower for neg in config.NEGATION_WORDS)
-        if has_negation:
-            latency_ms = (time.time() - analyze_start) * 1000
-            logger.info(
-                f"Intent analysis: '{transcription[:30]}...' -> deny "
-                f"(conf: 0.80, reason: negation_present, latency: {latency_ms:.1f}ms)"
-            )
-            return {
-                "intent": "deny",
-                "confidence": 0.80,
-                "keywords_matched": ["negation"],
-                "reason": "negation_present",
-                "latency_ms": latency_ms
-            }
-
-        # ===== NIVEAU 2: KEYWORDS MATCHING =====
-
-        intent_matches = {}
-
-        for intent_name, keywords in config.INTENT_KEYWORDS.items():
-            # Use word boundaries to avoid substring matches (e.g., "cout" in "écoute")
-            matches = [kw for kw in keywords if re.search(r'\b' + re.escape(kw) + r'\b', text_lower)]
-            if matches:
-                intent_matches[intent_name] = matches
-
-        # ===== NIVEAU 3: RESOLUTION PRIORITAIRE =====
-        # NOUVELLE priorite (basee sur research): deny > question > objection > affirm > unsure
-
-        if "deny" in intent_matches:
-            intent = "deny"
-            keywords = intent_matches["deny"]
-            confidence = min(0.95, 0.6 + 0.15 * len(keywords))
-
-        elif "question" in intent_matches:
-            intent = "question"
-            keywords = intent_matches["question"]
-            confidence = min(0.90, 0.6 + 0.15 * len(keywords))
-
-        elif "objection" in intent_matches:
-            intent = "objection"
-            keywords = intent_matches["objection"]
-            confidence = min(0.90, 0.5 + 0.15 * len(keywords))
-
-        elif "affirm" in intent_matches:
-            intent = "affirm"
-            keywords = intent_matches["affirm"]
-            confidence = min(0.95, 0.6 + 0.15 * len(keywords))
-
-        elif "unsure" in intent_matches:
-            intent = "unsure"
-            keywords = intent_matches["unsure"]
-            confidence = min(0.80, 0.5 + 0.15 * len(keywords))
-
-        else:
-            # Aucun keyword match -> unsure par defaut
-            intent = "unsure"
-            keywords = []
-            confidence = 0.0
-
+        # No match found -> not_understood
         latency_ms = (time.time() - analyze_start) * 1000
-
         logger.info(
-            f"Intent analysis: '{transcription[:30]}...' -> {intent} "
-            f"(conf: {confidence:.2f}, keywords: {keywords[:3]}, "
-            f"latency: {latency_ms:.1f}ms)"
+            f"FINAL: '{transcription[:50]}' → NOT_UNDERSTOOD "
+            f"(conf: 0.0, reason: no_match, latency: {latency_ms:.1f}ms)"
         )
-
+        logger.info(f"═══════════════════════")
         return {
-            "intent": intent,
-            "confidence": confidence,
-            "keywords_matched": keywords,
-            "reason": "keywords",
+            "intent": "not_understood",
+            "confidence": 0.0,
+            "keywords_matched": [],
+            "reason": "no_match",
             "latency_ms": latency_ms
         }
 
@@ -3528,6 +3447,44 @@ class RobotFreeSWITCH:
         if not filename:
             logger.error(f"No audio_file for step: {step_name}")
             return None
+
+        # ===================================================================
+        # RANDOM RETRY SELECTION
+        # ===================================================================
+        # For retry steps (retry_silence, retry_global), check for variants
+        # Variants: retry_silence_1.wav, retry_silence_2.wav, etc.
+        random_enabled_retries = ["retry_silence", "retry_global"]
+
+        if step_name in random_enabled_retries:
+            # Determine base directory for audio files
+            if os.path.isabs(filename):
+                audio_dir = Path(filename).parent
+                base_name = Path(filename).stem  # e.g., "retry_silence"
+                ext = Path(filename).suffix  # e.g., ".wav"
+            else:
+                theme = scenario.get("theme", "general")
+                voice = scenario.get("voice", step_config.get("voice", "julie"))
+                audio_dir = config.BASE_DIR / "sounds" / theme / voice
+                base_name = Path(filename).stem
+                ext = Path(filename).suffix
+
+            # Look for variants: base_name_1.wav, base_name_2.wav, etc.
+            variants = []
+            for i in range(1, 10):  # Support up to 9 variants
+                variant_path = audio_dir / f"{base_name}_{i}{ext}"
+                if variant_path.exists():
+                    variants.append(variant_path)
+                else:
+                    break  # Stop at first missing number
+
+            if variants:
+                # Randomly select one variant
+                selected = random.choice(variants)
+                logger.info(f"Random retry selection: {selected.name} (from {len(variants)} variants)")
+                return str(selected)
+            else:
+                # No variants found, use base file
+                logger.debug(f"No variants found for {step_name}, using base file")
 
         # Check if filename is already an absolute path
         if os.path.isabs(filename):

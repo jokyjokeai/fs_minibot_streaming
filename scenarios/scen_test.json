@@ -1,12 +1,12 @@
 {
   "metadata": {
     "name": "scen_test",
-    "description": "Scénario de test - Démo create_scenario v3",
+    "description": "Scenario de test - Trading Robot IA - Objections Matcher avec max_turns=2",
     "version": "3.0",
     "theme_file": "objections_finance",
     "voice": "julie",
     "barge_in_default": true,
-    "objective": "Prise de rendez-vous",
+    "objective": "Prise de rendez-vous Trading IA",
     "fallbacks": {
       "silence": "retry_silence",
       "unknown": "not_understood",
@@ -15,18 +15,18 @@
   },
   "variables": {
     "first_name": "{{first_name}}",
-    "company_name": "MiniBotPanel Demo",
+    "company_name": "Trading Robot IA",
     "agent_name": "Julie"
   },
   "steps": {
     "hello": {
-      "message_text": "Bonjour, je suis Julie de MiniBotPanel Demo. Je vous appelle pour une étude rapide. Vous avez 2 minutes?",
+      "message_text": "Bonjour, je suis Julie de MiniBotPanel Demo. Je vous appelle pour une etude rapide. Vous avez 2 minutes?",
       "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/hello.wav",
       "audio_type": "audio",
       "voice": "julie",
       "barge_in": true,
       "timeout": 15,
-      "max_autonomous_turns": 0,
+      "max_autonomous_turns": 2,
       "intent_mapping": {
         "affirm": "q1",
         "deny": "retry_hello",
@@ -36,13 +36,13 @@
       }
     },
     "retry_hello": {
-      "message_text": "C'est vraiment très rapide, juste 2 minutes. Vous êtes disponible maintenant?",
+      "message_text": "C'est vraiment tres rapide, juste 2 minutes. Vous etes disponible maintenant?",
       "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/retry_hello.wav",
       "audio_type": "audio",
       "voice": "julie",
       "barge_in": true,
       "timeout": 15,
-      "max_autonomous_turns": 0,
+      "max_autonomous_turns": 2,
       "intent_mapping": {
         "affirm": "q1",
         "deny": "bye_failed",
@@ -52,45 +52,61 @@
       }
     },
     "retry_silence": {
-      "message_text": "Allô? Vous m'entendez bien? Je peux continuer?",
+      "message_text": "Allo? Vous m'entendez bien? Je peux continuer?",
       "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/retry_silence.wav",
       "audio_type": "audio",
       "voice": "julie",
       "barge_in": true,
       "timeout": 10,
-      "max_autonomous_turns": 0,
+      "max_autonomous_turns": 2,
       "intent_mapping": {
-        "affirm": "q1",
+        "affirm": "{{return_step}}",
         "deny": "bye_failed",
-        "unsure": "q1",
+        "unsure": "{{return_step}}",
         "silence": "end",
-        "*": "q1"
+        "*": "{{return_step}}"
+      }
+    },
+    "retry_global": {
+      "message_text": "Je comprends votre hesitation. Ecoutez, c'est sans engagement, juste un echange avec un expert. Qu'en dites-vous?",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/retry_global.wav",
+      "audio_type": "audio",
+      "voice": "julie",
+      "barge_in": true,
+      "timeout": 15,
+      "max_autonomous_turns": 2,
+      "intent_mapping": {
+        "affirm": "{{return_step}}",
+        "deny": "bye_failed",
+        "unsure": "{{return_step}}",
+        "silence": "bye_failed",
+        "*": "bye_failed"
       }
     },
     "q1": {
-      "message_text": "Première question : Êtes-vous propriétaire de votre logement?",
+      "message_text": "Premiere question : Etes-vous proprietaire de votre logement?",
       "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/q1.wav",
       "audio_type": "audio",
       "voice": "julie",
       "barge_in": true,
       "timeout": 15,
-      "max_autonomous_turns": 0,
+      "max_autonomous_turns": 2,
       "intent_mapping": {
         "affirm": "q2",
         "deny": "q2",
         "unsure": "q2",
         "silence": "retry_silence",
-        "*": "bye_failed"
+        "*": "q2"
       }
     },
     "q2": {
-      "message_text": "Deuxième question : Avez-vous plus de 55 ans?",
+      "message_text": "Deuxieme question : Avez-vous plus de 55 ans?",
       "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/q2.wav",
       "audio_type": "audio",
       "voice": "julie",
       "barge_in": true,
       "timeout": 15,
-      "max_autonomous_turns": 0,
+      "max_autonomous_turns": 2,
       "intent_mapping": {
         "affirm": "q3",
         "deny": "q3",
@@ -100,45 +116,45 @@
       }
     },
     "q3": {
-      "message_text": "Dernière question : Seriez-vous intéressé par des travaux de rénovation énergétique?",
+      "message_text": "Derniere question : Seriez-vous interesse par des travaux de renovation energetique?",
       "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/q3.wav",
       "audio_type": "audio",
       "voice": "julie",
       "barge_in": true,
       "timeout": 15,
-      "max_autonomous_turns": 0,
+      "max_autonomous_turns": 2,
       "intent_mapping": {
         "affirm": "is_leads",
         "deny": "is_leads",
         "unsure": "is_leads",
         "silence": "retry_silence",
-        "*": "bye_failed"
+        "*": "is_leads"
       }
     },
     "is_leads": {
-      "message_text": "Parfait! Je peux vous proposer un rendez-vous avec un conseiller cette semaine. Ça vous intéresse?",
+      "message_text": "Parfait! Je peux vous proposer un rendez-vous avec un conseiller cette semaine. Ca vous interesse?",
       "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/is_leads.wav",
       "audio_type": "audio",
       "voice": "julie",
       "barge_in": true,
       "timeout": 15,
-      "max_autonomous_turns": 0,
+      "max_autonomous_turns": 2,
       "intent_mapping": {
         "affirm": "confirm_time",
         "deny": "retry_is_leads",
-        "unsure": "retry_is_leads",
+        "unsure": "confirm_time",
         "silence": "retry_silence",
         "*": "retry_is_leads"
       }
     },
     "retry_is_leads": {
-      "message_text": "C'est gratuit et sans engagement. On vous rappelle juste pour fixer les détails. Qu'en dites-vous?",
+      "message_text": "C'est gratuit et sans engagement. On vous rappelle juste pour fixer les details. Qu'en dites-vous?",
       "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/retry_is_leads.wav",
       "audio_type": "audio",
       "voice": "julie",
       "barge_in": true,
       "timeout": 15,
-      "max_autonomous_turns": 0,
+      "max_autonomous_turns": 2,
       "intent_mapping": {
         "affirm": "confirm_time",
         "deny": "bye_failed",
@@ -148,15 +164,16 @@
       }
     },
     "confirm_time": {
-      "message_text": "Excellent! Un conseiller vous rappellera sous 48h pour planifier le rendez-vous. C'est noté!",
+      "message_text": "Excellent! Un conseiller vous rappellera sous 48h pour planifier le rendez-vous. C'est note!",
       "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/confirm_time.wav",
       "audio_type": "audio",
       "voice": "julie",
       "barge_in": true,
       "timeout": 15,
-      "max_autonomous_turns": 0,
+      "max_autonomous_turns": 2,
       "intent_mapping": {
         "affirm": "bye",
+        "time": "bye",
         "deny": "bye",
         "unsure": "bye",
         "silence": "retry_silence",
@@ -164,7 +181,7 @@
       }
     },
     "bye": {
-      "message_text": "Merci beaucoup pour votre temps! À très bientôt. Bonne journée!",
+      "message_text": "Merci beaucoup pour votre temps! A tres bientot. Bonne journee!",
       "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/bye.wav",
       "audio_type": "audio",
       "voice": "julie",
@@ -172,34 +189,12 @@
       "timeout": 5,
       "is_terminal": true,
       "result": "completed",
-      "actions": [
-        {
-          "type": "webhook",
-          "config": {
-            "url": "https://crm.example.com/api/leads/completed",
-            "method": "POST",
-            "data": {
-              "source": "cold_call",
-              "status": "qualified",
-              "scenario": "scen_test"
-            }
-          }
-        },
-        {
-          "type": "transfer",
-          "config": {
-            "destination": "+33612345678",
-            "timeout": 30,
-            "on_no_answer": "leave_voicemail"
-          }
-        }
-      ],
       "intent_mapping": {
         "*": "end"
       }
     },
     "bye_failed": {
-      "message_text": "Je comprends. Merci quand même et bonne journée!",
+      "message_text": "Je comprends. Merci quand meme et bonne journee!",
       "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/bye_failed.wav",
       "audio_type": "audio",
       "voice": "julie",
@@ -207,37 +202,26 @@
       "timeout": 5,
       "is_terminal": true,
       "result": "failed",
-      "actions": [
-        {
-          "type": "webhook",
-          "config": {
-            "url": "https://crm.example.com/api/leads/declined",
-            "method": "POST",
-            "data": {
-              "reason": "not_interested",
-              "scenario": "scen_test"
-            }
-          }
-        }
-      ],
       "intent_mapping": {
         "*": "end"
       }
     },
     "not_understood": {
-      "message_text": "Désolée, je n'ai pas bien compris. Pouvez-vous répéter s'il vous plaît?",
+      "message_text": "Desolee, je n'ai pas bien compris. Pouvez-vous repeter s'il vous plait?",
       "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/not_understood.wav",
       "audio_type": "audio",
       "voice": "julie",
       "barge_in": true,
       "timeout": 15,
+      "max_autonomous_turns": 2,
       "intent_mapping": {
         "*": "bye_failed"
       }
     },
     "end": {
-      "message_text": "",
-      "audio_type": "none",
+      "message_text": "Au revoir.",
+      "audio_file": "/usr/share/freeswitch/sounds/minibot/julie/base/end.wav",
+      "audio_type": "audio",
       "voice": "julie",
       "barge_in": false,
       "timeout": 0,
@@ -247,14 +231,18 @@
     }
   },
   "flow_summary": {
-    "description": "Structure exacte générée par create_scenario.py v3",
-    "flow": "hello → retry_hello/retry_silence → q1 → q2 → q3 → is_leads → retry_is_leads → confirm_time → bye/bye_failed → end",
+    "description": "Scenario Trading Robot IA - Test Objections Matcher avec max_turns=2",
+    "flow": "hello -> retry_hello/retry_silence -> q1 -> q2 -> q3 -> is_leads -> retry_is_leads -> confirm_time -> bye/bye_failed -> end",
     "features_v3": {
       "is_terminal": "Sur bye, bye_failed, end",
-      "actions": "Webhook sur bye et bye_failed",
-      "fallbacks": "Configurés dans metadata",
-      "max_autonomous_turns": 0,
+      "fallbacks": "Configures dans metadata",
+      "max_autonomous_turns": 2,
       "theme_file": "objections_finance"
+    },
+    "objection_matching": {
+      "theme": "objections_finance",
+      "max_turns": 2,
+      "description": "Le robot repond jusqu'a 2 fois aux objections/questions par etape avant de continuer"
     }
   }
 }

@@ -637,6 +637,7 @@ class ScenarioBuilderV3:
             ("hello", "Introduction initiale"),
             ("retry_hello", "Retry après refus initial"),
             ("retry_silence", "Retry après silence"),
+            ("retry_global", "Retry global pour abandon mid-conversation"),
         ]
 
         # Ajouter questions dynamiques
@@ -772,11 +773,31 @@ class ScenarioBuilderV3:
             "timeout": 10,
             "max_autonomous_turns": self.max_turns,
             "intent_mapping": {
-                "affirm": "q1",
+                "affirm": "{{return_step}}",  # Retour au step suivant prévu
                 "deny": "bye_failed",
-                "unsure": "q1",
+                "unsure": "{{return_step}}",
                 "silence": "end",  # 2ème silence → hangup direct
-                "*": "q1"
+                "*": "{{return_step}}"
+            }
+        }
+
+        # ─────────────────────────────────────────────────────────────────
+        # RETRY_GLOBAL (pour abandon mid-conversation sur q1/q2/q3)
+        # ─────────────────────────────────────────────────────────────────
+        steps["retry_global"] = {
+            "message_text": self.audio_files["retry_global"]["transcription"],
+            "audio_file": self.audio_files["retry_global"]["audio_path"],
+            "audio_type": "audio",
+            "voice": self.voice_name,
+            "barge_in": self.scenario["metadata"]["barge_in_default"],
+            "timeout": 15,
+            "max_autonomous_turns": self.max_turns,
+            "intent_mapping": {
+                "affirm": "{{return_step}}",  # Retour au step suivant prévu
+                "deny": "bye_failed",
+                "unsure": "{{return_step}}",
+                "silence": "bye_failed",
+                "*": "bye_failed"
             }
         }
 
@@ -799,13 +820,13 @@ class ScenarioBuilderV3:
 
             # Générer intent_mapping selon déterminante
             if is_determinant:
-                print_success("  ✅ Déterminante : Un refus → bye_failed")
+                print_success("  ✅ Déterminante : Un refus → retry_global (puis bye_failed)")
                 intent_mapping = {
                     "affirm": next_step,
-                    "deny": "bye_failed",     # Refus = éliminé
+                    "deny": "retry_global",   # Refus = retry global d'abord
                     "unsure": next_step,
                     "silence": "retry_silence",
-                    "*": "bye_failed"
+                    "*": "retry_global"
                 }
             else:
                 print_info("  ℹ️  Non-déterminante : Toute réponse acceptée")
@@ -899,6 +920,7 @@ class ScenarioBuilderV3:
             print_success("  ✅ Déterminante : Un refus → bye_failed")
             confirm_mapping = {
                 "affirm": "bye",
+                "time": "bye",  # Réponses temporelles (matin, soir, lundi...)
                 "deny": "bye_failed",
                 "unsure": "bye",
                 "silence": "retry_silence",  # Silence = problème technique, pas refus
@@ -908,6 +930,7 @@ class ScenarioBuilderV3:
             print_info("  ℹ️  Non-déterminante : Toute réponse → bye")
             confirm_mapping = {
                 "affirm": "bye",
+                "time": "bye",  # Réponses temporelles (matin, soir, lundi...)
                 "deny": "bye",
                 "unsure": "bye",
                 "silence": "retry_silence",  # Silence → retry quand même
@@ -987,11 +1010,12 @@ class ScenarioBuilderV3:
         }
 
         # ─────────────────────────────────────────────────────────────────
-        # END (terminal)
+        # END (terminal) - Dit "Au revoir" puis raccroche
         # ─────────────────────────────────────────────────────────────────
         steps["end"] = {
-            "message_text": "",
-            "audio_type": "none",
+            "message_text": self.audio_files["end"]["transcription"] if "end" in self.audio_files else "Au revoir.",
+            "audio_file": self.audio_files["end"]["audio_path"] if "end" in self.audio_files else f"/usr/share/freeswitch/sounds/minibot/{self.voice_name}/base/end.wav",
+            "audio_type": "audio",
             "voice": self.voice_name,
             "barge_in": False,
             "timeout": 0,

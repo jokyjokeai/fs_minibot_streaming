@@ -35,6 +35,13 @@ from typing import Dict, Optional, List, Tuple, Union
 from difflib import SequenceMatcher
 import logging
 
+# RapidFuzz pour matching ultra-rapide (5-10x plus rapide que difflib)
+try:
+    from rapidfuzz import fuzz
+    RAPIDFUZZ_AVAILABLE = True
+except ImportError:
+    RAPIDFUZZ_AVAILABLE = False
+
 # Import ObjectionEntry pour support Phase 6 (nouveau système modulaire)
 try:
     from system.objections_db import ObjectionEntry, load_objections, list_available_themes
@@ -102,7 +109,18 @@ class ObjectionMatcher:
         for objection in self.objection_keys:
             self.keywords_map[objection] = self._extract_keywords(objection)
 
-        logger.info(f"ObjectionMatcher ready with {len(self.objections)} objections")
+        # LOOKUP DIRECT O(1) - Hashmap keyword -> objection_key
+        # Pour matching instantané comme intents_db
+        self.keyword_lookup = {}
+        for objection_key in self.objection_keys:
+            keywords = objection_key.split(" | ")
+            for kw in keywords:
+                kw_lower = kw.lower().strip()
+                # Premier keyword gagne (priorité)
+                if kw_lower not in self.keyword_lookup:
+                    self.keyword_lookup[kw_lower] = objection_key
+
+        logger.info(f"ObjectionMatcher ready with {len(self.objections)} objections, {len(self.keyword_lookup)} keywords indexed")
 
     @staticmethod
     def load_objections_from_file(theme_file: str) -> Optional['ObjectionMatcher']:
@@ -310,6 +328,10 @@ class ObjectionMatcher:
         """
         Trouve la meilleure objection correspondant à l'input utilisateur.
 
+        ALGORITHME AMÉLIORÉ: Teste chaque keyword individuellement au lieu
+        de comparer avec la chaîne jointe. Cela permet de matcher "oui" avec
+        le keyword "oui" directement, plutôt qu'avec "oui | ouais | ok | ..."
+
         Args:
             user_input: Ce que le prospect a dit
             min_score: Score minimum pour considérer un match (0.0-1.0)
@@ -317,48 +339,120 @@ class ObjectionMatcher:
             silent: Si True, désactive les logs INFO (utile pour warmup)
 
         Returns:
-            Dict avec {objection, response, score, method} ou None si pas de match
+            Dict avec {objection, response, score, method, matched_keyword} ou None si pas de match
         """
         if not user_input or not user_input.strip():
             return None
 
-        user_input = user_input.strip()
+        user_input = user_input.strip().lower()
 
-        # Étape 1: Calcul rapide des scores pour toutes les objections
+        # ===== ÉTAPE 0: LOOKUP DIRECT O(1) - INSTANTANÉ =====
+        # Comme intents_db - match exact immédiat
+        if user_input in self.keyword_lookup:
+            objection_key = self.keyword_lookup[user_input]
+            entry_type = self.entry_types.get(objection_key, "objection")
+            if not silent:
+                logger.info(f"═══ OBJECTION MATCHER ═══")
+                logger.info(f"Input: '{user_input}' | min_score: {min_score}")
+                logger.info(f"Result: ✅ DIRECT LOOKUP [{entry_type}] '{user_input}' (score: 1.00)")
+                logger.info(f"═════════════════════════")
+            return {
+                "objection": objection_key,
+                "response": self.objections[objection_key],
+                "audio_path": self.audio_paths.get(objection_key),
+                "entry_type": entry_type,
+                "score": 1.0,
+                "method": "direct_lookup",
+                "matched_keyword": user_input,
+                "confidence": "high"
+            }
+
+        # Étape 1: Tester chaque keyword individuellement pour chaque objection (fuzzy)
         scores = []
-        for objection in self.objection_keys:
-            score = self._hybrid_score(user_input, objection)
-            scores.append((objection, score))
+        for objection_key in self.objection_keys:
+            # Séparer les keywords de cette objection
+            keywords = objection_key.split(" | ")
 
-        # Trier par score décroissant
-        scores.sort(key=lambda x: x[1], reverse=True)
+            # Trouver le meilleur score parmi tous les keywords
+            best_keyword_score = 0.0
+            best_keyword = ""
+
+            for keyword in keywords:
+                keyword_lower = keyword.lower().strip()
+
+                # Score 1: Match exact ou mot entier (word boundary)
+                # Utilise regex pour éviter les faux positifs (ex: "ui" dans "suis")
+                if keyword_lower == user_input:
+                    score = 1.0
+                else:
+                    # Check if keyword appears as a whole word in input
+                    pattern = r'\b' + re.escape(keyword_lower) + r'\b'
+                    if re.search(pattern, user_input):
+                        score = 1.0
+                    elif user_input in keyword_lower:
+                        score = len(user_input) / len(keyword_lower)
+                    else:
+                        # Score 2: Similarité textuelle (fuzzy) - RapidFuzz pour performance
+                        if RAPIDFUZZ_AVAILABLE:
+                            score = fuzz.ratio(user_input, keyword_lower) / 100.0
+                        else:
+                            score = self._calculate_similarity(user_input, keyword_lower)
+
+                if score > best_keyword_score:
+                    best_keyword_score = score
+                    best_keyword = keyword
+
+            scores.append((objection_key, best_keyword_score, best_keyword))
+
+        # Trier par: score DESC, puis longueur du keyword DESC
+        # Le match le plus spécifique (plus long) gagne quand scores égaux
+        def sort_key(x):
+            obj_key, score, kw = x
+            return (-score, -len(kw))  # Score DESC, longueur DESC
+
+        scores.sort(key=sort_key)
 
         # Prendre les top_n meilleurs
         top_matches = scores[:top_n]
 
-        # Log des top matches pour debug
-        logger.debug(f"Input: '{user_input}'")
-        for obj, score in top_matches:
-            logger.debug(f"  → '{obj}': {score:.2f}")
-
         # Vérifier si le meilleur match dépasse le seuil
-        best_objection, best_score = top_matches[0]
+        best_objection, best_score, matched_keyword = top_matches[0]
+
+        # === LOGS DÉTAILLÉS TOP 3 ===
+        if not silent:
+            logger.info(f"═══ OBJECTION MATCHER ═══")
+            logger.info(f"Input: '{user_input}' | min_score: {min_score}")
+            logger.info(f"TOP {min(3, len(top_matches))} candidates:")
+            for i, (obj, score, kw) in enumerate(top_matches[:3], 1):
+                entry_type = self.entry_types.get(obj, "objection")
+                status = "✓" if score >= min_score else "✗"
+                # Afficher seulement les 3 premiers keywords pour lisibilité
+                keywords_preview = " | ".join(obj.split(" | ")[:3])
+                if len(obj.split(" | ")) > 3:
+                    keywords_preview += " | ..."
+                logger.info(f"  {i}. [{entry_type}] '{kw}' → {score:.2f} {status}")
+                logger.debug(f"     Keywords: {keywords_preview}")
 
         if best_score >= min_score:
+            entry_type = self.entry_types.get(best_objection, "objection")
             if not silent:
-                logger.info(f"✅ Match trouvé: '{best_objection}' (score: {best_score:.2f})")
+                logger.info(f"Result: ✅ MATCH [{entry_type}] '{matched_keyword}' (score: {best_score:.2f})")
+                logger.info(f"═════════════════════════")
             return {
                 "objection": best_objection,
                 "response": self.objections[best_objection],
                 "audio_path": self.audio_paths.get(best_objection),  # Phase 6: support audio_path
-                "entry_type": self.entry_types.get(best_objection, "objection"),  # NEW: faq vs objection
+                "entry_type": entry_type,  # NEW: faq vs objection
                 "score": best_score,
-                "method": "hybrid",
-                "confidence": "high" if best_score >= 0.8 else "medium"
+                "method": "keyword_match",
+                "matched_keyword": matched_keyword,
+                "confidence": "high" if best_score >= 0.8 else "medium",
+                "top_alternatives": [(kw, score, self.entry_types.get(obj, "objection")) for obj, score, kw in top_matches[1:3]]
             }
         else:
             if not silent:
-                logger.info(f"❌ Pas de match suffisant (meilleur: {best_score:.2f} < {min_score})")
+                logger.info(f"Result: ❌ NO MATCH (best: {best_score:.2f} < {min_score})")
+                logger.info(f"═════════════════════════")
             return None
 
     def find_all_matches(
