@@ -286,67 +286,85 @@ def run_simulation(theme: str = "objections_finance", verbose: bool = False, num
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# MODE RANDOM - Génération aléatoire pure
+# MODE RANDOM - Corpus systématique par longueur
 # ═══════════════════════════════════════════════════════════════════════════
 
-# 25 mots simples français
-SIMPLE_WORDS = [
-    "oui", "non", "peut-être", "jamais", "toujours", "merci", "pardon",
-    "allo", "quoi", "comment", "pourquoi", "où", "qui", "quand", "combien",
-    "matin", "soir", "demain", "lundi", "argent", "travail", "maison",
-    "voiture", "famille", "temps"
+# 15 mots simples (1 mot)
+MOTS_SIMPLES = [
+    "oui", "non", "quoi", "comment", "pourquoi", "merci", "pardon",
+    "matin", "soir", "demain", "lundi", "jamais", "toujours", "combien", "allo"
 ]
 
-# 25 expressions françaises courantes
-FRENCH_EXPRESSIONS = [
-    "ça marche", "pas de souci", "c'est bon", "d'accord", "entendu",
-    "je comprends", "bien sûr", "absolument", "certainement", "effectivement",
-    "pas du tout", "absolument pas", "je ne pense pas", "c'est possible",
-    "on verra", "peut-être plus tard", "laissez-moi réfléchir", "je dois voir",
-    "c'est intéressant", "pourquoi pas", "je suis occupé", "pas maintenant",
-    "rappelez plus tard", "c'est trop cher", "j'ai pas le temps"
+# 15 expressions courtes (2-3 mots)
+EXPRESSIONS_COURTES = [
+    "c'est bon", "d'accord", "pas du tout", "bien sûr", "ça marche",
+    "pas maintenant", "on verra", "c'est cher", "absolument pas", "non merci",
+    "pas intéressé", "trop cher", "je comprends", "bonne journée", "à voir"
 ]
 
-# 25 phrases longues réalistes
-LONG_PHRASES = [
-    "oui ça m'intéresse beaucoup j'aimerais en savoir plus",
-    "non vraiment pas du tout ça ne m'intéresse pas merci",
-    "attendez je suis en train de conduire là je peux pas parler",
-    "écoutez je suis au travail je ne peux vraiment pas",
-    "c'est gentil mais j'ai déjà tout ce qu'il me faut",
+# 15 phrases moyennes (4-6 mots)
+PHRASES_MOYENNES = [
+    "je suis pas intéressé", "j'ai pas le temps", "c'est trop cher pour moi",
+    "rappelez-moi plus tard", "je suis occupé maintenant", "laissez-moi réfléchir",
+    "c'est quoi exactement", "vous êtes qui vous", "envoyez-moi un mail",
+    "j'ai déjà une banque", "je dois en parler", "plutôt le matin",
+    "la semaine prochaine", "c'est une arnaque", "non vraiment pas du tout"
+]
+
+# 15 phrases longues (7-10 mots)
+PHRASES_LONGUES = [
     "je préfère le matin vers dix heures si possible",
-    "rappelez-moi plutôt en fin de journée après dix-huit heures",
-    "je dois d'abord en parler avec ma femme avant de décider",
-    "vous pouvez m'envoyer ça par mail pour que je regarde",
-    "je ne suis pas sûr que ça corresponde à mes besoins",
-    "c'est quoi exactement votre offre je comprends pas bien",
-    "vous êtes qui vous appelez de quelle entreprise",
-    "arrêtez de m'appeler j'en ai marre de vos appels",
-    "retirez-moi de votre liste s'il vous plaît",
-    "je vais porter plainte si vous continuez à m'appeler",
+    "je dois d'abord en parler avec ma femme",
+    "vous pouvez m'envoyer ça par mail s'il vous plaît",
+    "je ne suis pas sûr que ça corresponde",
+    "c'est quoi exactement votre offre je comprends pas",
     "oui la semaine prochaine ça me va bien",
     "plutôt mercredi ou jeudi en fin de matinée",
-    "je ne sais pas je vais y réfléchir et je vous rappelle",
     "c'est pas le moment là je suis en réunion",
     "bon d'accord allez-y je vous écoute",
-    "non merci bonne journée au revoir",
-    "qu'est-ce que vous voulez exactement",
+    "qu'est-ce que vous voulez exactement de moi",
     "je suis déjà client chez vous depuis longtemps",
     "j'ai pas confiance dans ce genre de proposition",
-    "c'est une arnaque votre truc j'en suis sûr"
+    "arrêtez de m'appeler j'en ai marre de vous",
+    "retirez-moi de votre liste s'il vous plaît",
+    "c'est gentil mais j'ai déjà tout ce qu'il faut"
 ]
 
-# 25 inputs totalement random/hors sujet
+# 15 phrases très longues (11+ mots)
+PHRASES_TRES_LONGUES = [
+    "oui ça m'intéresse beaucoup j'aimerais en savoir plus sur votre offre",
+    "non vraiment pas du tout ça ne m'intéresse absolument pas merci quand même",
+    "attendez je suis en train de conduire là je ne peux vraiment pas parler maintenant",
+    "écoutez je suis au travail je ne peux vraiment pas vous parler là c'est pas possible",
+    "rappelez-moi plutôt en fin de journée après dix-huit heures ce serait mieux pour moi",
+    "je dois d'abord en parler avec ma femme avant de prendre une décision c'est important",
+    "je ne sais pas je vais y réfléchir et je vous rappelle quand j'aurai pris ma décision",
+    "je vais porter plainte si vous continuez à m'appeler comme ça c'est du harcèlement",
+    "vous pouvez m'envoyer toute la documentation par mail pour que je puisse regarder tranquillement",
+    "je ne suis pas sûr que ça corresponde à mes besoins actuels mais pourquoi pas en discuter",
+    "c'est une arnaque votre truc j'en suis absolument certain ne me rappelez plus jamais",
+    "oui pourquoi pas ça pourrait m'intéresser donnez-moi plus d'informations sur ce que vous proposez",
+    "non merci je ne suis vraiment pas intéressé par ce type de service bonne journée au revoir",
+    "je préfère attendre un peu avant de me décider c'est un engagement important quand même",
+    "écoutez je vais être honnête avec vous ça ne m'intéresse pas du tout mais merci d'avoir appelé"
+]
+
+# 25 inputs random/hors sujet (mix de longueurs)
 RANDOM_INPUTS = [
-    "pizza", "chat", "météo", "football", "vacances", "café",
-    "il fait beau aujourd'hui", "j'ai mangé une pomme",
-    "le train est en retard", "mon chien s'appelle rex",
-    "j'aime la musique classique", "paris est une belle ville",
-    "les enfants sont à l'école", "la voiture est au garage",
-    "j'ai mal à la tête", "le film était bien",
-    "asdfghjkl", "123456", "bla bla bla", "euh ben euh",
-    "hum hum", "attends attends", "une seconde une seconde",
-    "quoi quoi quoi", "allô allô vous m'entendez"
+    # Mots simples hors sujet
+    "pizza", "chat", "météo", "football", "vacances", "café", "musique",
+    # Expressions hors sujet
+    "il fait beau", "le train arrive", "mon chien dort",
+    # Phrases moyennes hors sujet
+    "j'ai mangé une pomme ce matin", "paris est une belle ville",
+    "les enfants sont à l'école aujourd'hui", "la voiture est au garage",
+    # Phrases longues hors sujet
+    "j'aime beaucoup la musique classique surtout le piano",
+    "le film que j'ai vu hier était vraiment très bien",
+    "mon chien s'appelle rex et il adore jouer dans le jardin",
+    # Bruit/gibberish
+    "asdfghjkl", "123456", "bla bla bla", "euh ben euh", "hum hum",
+    "attends attends", "une seconde", "quoi quoi quoi", "allô allô vous m'entendez"
 ]
 
 
@@ -369,15 +387,20 @@ def run_random_simulation(theme: str = "objections_finance", run_number: int = 1
     print(f"✅ Matcher chargé: {len(matcher.objections)} entries, {len(matcher.keyword_lookup)} keywords")
     print()
 
-    # Build test corpus: 25 de chaque catégorie = 100 total
+    # Build test corpus: 15+15+15+15+15+25 = 100 total
+    # Couverture systématique de toutes les longueurs
     test_corpus = []
 
-    for word in SIMPLE_WORDS:
-        test_corpus.append((word, "MOT_SIMPLE"))
-    for expr in FRENCH_EXPRESSIONS:
-        test_corpus.append((expr, "EXPRESSION"))
-    for phrase in LONG_PHRASES:
-        test_corpus.append((phrase, "PHRASE_LONGUE"))
+    for word in MOTS_SIMPLES:
+        test_corpus.append((word, "1_MOT"))
+    for expr in EXPRESSIONS_COURTES:
+        test_corpus.append((expr, "2-3_MOTS"))
+    for phrase in PHRASES_MOYENNES:
+        test_corpus.append((phrase, "4-6_MOTS"))
+    for phrase in PHRASES_LONGUES:
+        test_corpus.append((phrase, "7-10_MOTS"))
+    for phrase in PHRASES_TRES_LONGUES:
+        test_corpus.append((phrase, "11+_MOTS"))
     for rand in RANDOM_INPUTS:
         test_corpus.append((rand, "RANDOM"))
 
@@ -508,7 +531,7 @@ def run_random_simulation(theme: str = "objections_finance", run_number: int = 1
     print("📊 ANALYSE PAR TYPE D'INPUT")
     print("=" * 70)
 
-    for input_type in ["MOT_SIMPLE", "EXPRESSION", "PHRASE_LONGUE", "RANDOM"]:
+    for input_type in ["1_MOT", "2-3_MOTS", "4-6_MOTS", "7-10_MOTS", "11+_MOTS", "RANDOM"]:
         results = results_by_type[input_type]
         avg_score = sum(r["score"] for r in results) / len(results) if results else 0
         none_count = sum(1 for r in results if r["detected"] == "NONE")

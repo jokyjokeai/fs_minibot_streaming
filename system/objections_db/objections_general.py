@@ -414,7 +414,7 @@ OBJECTIONS_DATABASE: List[ObjectionEntry] = [
         keywords=[
             # Insultes
             "con", "connard", "merde", "putain", "enculé", "va te faire",
-            "nique", "ferme ta gueule", "casse-toi", "dégage",
+            "va niquer", "ferme ta gueule", "casse-toi", "dégage",
             "abruti", "débile", "crétin", "imbécile", "connasse",
             "salaud", "salope", "ta gueule", "fous le camp",
             "fils de pute", "nique ta mère", "ntm", "fdp", "pute",
