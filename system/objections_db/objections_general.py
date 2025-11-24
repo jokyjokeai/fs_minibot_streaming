@@ -342,7 +342,7 @@ OBJECTIONS_DATABASE: List[ObjectionEntry] = [
     ObjectionEntry(
         keywords=[
             # Oui variations (clairs et directs)
-            "oui", "oui oui", "ui", "si",
+            "oui", "oui oui", "ouais", "mouais",
             # D'accord variations
             "d'accord", "dac", "daccord", "ok", "okay", "oki",
             # Absolument / Exactement

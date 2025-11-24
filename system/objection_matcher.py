@@ -474,20 +474,24 @@ class ObjectionMatcher:
             # === FILTRE OVERLAP SÉMANTIQUE ===
             # Évite les faux positifs où le keyword n'a rien à voir avec l'input
             # Ex: "vacances" → "confiance", "allo" → "salope"
+            # MAIS ne filtre pas si le keyword est contenu dans l'input (match valide)
             if best_score < 1.0:  # Ne pas filtrer les matches exacts
-                input_chars = set(user_input.lower().replace(" ", "").replace("'", ""))
-                kw_chars = set(matched_keyword.lower().replace(" ", "").replace("'", ""))
-                if len(input_chars) > 0 and len(kw_chars) > 0:
-                    overlap = len(input_chars & kw_chars) / max(len(input_chars), len(kw_chars))
-                    if overlap < 0.25 and best_score < 0.8:
-                        if not silent:
-                            logger.info(f"{'─'*60}")
-                            logger.info(f"❌ REJETÉ: overlap sémantique trop faible")
-                            logger.info(f"   Input chars: {len(input_chars)}, Keyword chars: {len(kw_chars)}")
-                            logger.info(f"   Overlap: {overlap:.2f} < 0.25 (seuil)")
-                            logger.info(f"{'═'*60}")
-                            logger.info(f"")
-                        return None
+                kw_lower = matched_keyword.lower()
+                # Si le keyword est dans l'input, c'est un match valide
+                if kw_lower not in user_input:
+                    input_chars = set(user_input.replace(" ", "").replace("'", ""))
+                    kw_chars = set(kw_lower.replace(" ", "").replace("'", ""))
+                    if len(input_chars) > 0 and len(kw_chars) > 0:
+                        overlap = len(input_chars & kw_chars) / max(len(input_chars), len(kw_chars))
+                        if overlap < 0.25 and best_score < 0.8:
+                            if not silent:
+                                logger.info(f"{'─'*60}")
+                                logger.info(f"❌ REJETÉ: overlap sémantique trop faible")
+                                logger.info(f"   Input: '{user_input}' | Keyword: '{matched_keyword}'")
+                                logger.info(f"   Overlap: {overlap:.2f} < 0.25 (seuil)")
+                                logger.info(f"{'═'*60}")
+                                logger.info(f"")
+                            return None
 
             entry_type = self.entry_types.get(best_objection, "objection")
             if not silent:

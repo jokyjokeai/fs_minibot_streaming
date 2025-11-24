@@ -179,7 +179,7 @@ def run_simulation(theme: str = "objections_finance", verbose: bool = False, num
 
     for i, (input_text, expected_category) in enumerate(test_corpus, 1):
         # Run matching (silent mode to avoid flooding logs)
-        result = matcher.find_best_match(input_text, min_score=0.6, silent=True)
+        result = matcher.find_best_match(input_text, min_score=0.65, silent=True)
 
         if result:
             detected_intent = result.get("entry_type", "objection")
@@ -395,7 +395,7 @@ def run_random_simulation(theme: str = "objections_finance", run_number: int = 1
     print()
 
     for i, (input_text, input_type) in enumerate(test_corpus, 1):
-        result = matcher.find_best_match(input_text, min_score=0.6, silent=True)
+        result = matcher.find_best_match(input_text, min_score=0.65, silent=True)
 
         if result:
             entry_type = result.get("entry_type", "objection")
