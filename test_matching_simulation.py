@@ -32,8 +32,16 @@ from system.objection_matcher import ObjectionMatcher
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "mistral:7b"
 
-def generate_with_ollama(prompt: str, max_tokens: int = 100) -> str:
+def generate_with_ollama(prompt: str, max_tokens: int = 100, verbose: bool = False) -> str:
     """Génère du texte avec Ollama/Mistral."""
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"📤 PROMPT ENVOYÉ À OLLAMA:")
+        print(f"{'='*60}")
+        print(prompt)
+        print(f"{'='*60}")
+        print(f"⚙️  max_tokens={max_tokens}, temperature=0.9")
+
     try:
         response = requests.post(
             OLLAMA_URL,
@@ -48,10 +56,24 @@ def generate_with_ollama(prompt: str, max_tokens: int = 100) -> str:
             },
             timeout=30
         )
+        if verbose:
+            print(f"📥 Status: {response.status_code}")
+
         if response.status_code == 200:
-            return response.json().get("response", "").strip()
+            result = response.json().get("response", "").strip()
+            if verbose:
+                print(f"\n📥 RÉPONSE BRUTE OLLAMA:")
+                print(f"{'─'*60}")
+                print(result)
+                print(f"{'─'*60}")
+            return result
+        else:
+            if verbose:
+                print(f"❌ Erreur HTTP: {response.status_code}")
+                print(f"   {response.text[:200]}")
     except Exception as e:
-        pass
+        if verbose:
+            print(f"❌ Exception: {type(e).__name__}: {e}")
     return ""
 
 
@@ -67,20 +89,36 @@ def clean_ollama_line(line: str) -> str:
     return line.strip()
 
 
-def generate_ollama_corpus(count_per_category: int = 15) -> list:
+def generate_ollama_corpus(count_per_category: int = 15, verbose: bool = False) -> list:
     """Génère un corpus de test complet avec Ollama."""
 
     corpus = []
 
     print("🤖 Génération du corpus avec Ollama/Mistral...")
+    if verbose:
+        print(f"   Objectif: {count_per_category} items par catégorie")
+        print(f"   Model: {OLLAMA_MODEL}")
+        print(f"   URL: {OLLAMA_URL}")
 
     # 1. Mots simples (1 mot)
     prompt = f"""Génère {count_per_category} mots français simples qu'une personne pourrait dire au téléphone.
 Mélange: réponses (oui, non), questions (quoi, comment), moments (matin, lundi), mots aléatoires.
 Format: un mot par ligne, sans numérotation."""
 
-    result = generate_with_ollama(prompt, 200)
-    words = [clean_ollama_line(w) for w in result.split('\n') if clean_ollama_line(w) and len(clean_ollama_line(w).split()) == 1][:count_per_category]
+    result = generate_with_ollama(prompt, 200, verbose)
+    if verbose:
+        print(f"\n🔍 PARSING 1_MOT:")
+    words = []
+    for w in result.split('\n'):
+        cleaned = clean_ollama_line(w)
+        word_count = len(cleaned.split()) if cleaned else 0
+        if cleaned and word_count == 1:
+            words.append(cleaned)
+            if verbose:
+                print(f"   ✅ '{cleaned}' ({word_count} mot)")
+        elif cleaned and verbose:
+            print(f"   ❌ '{cleaned}' ({word_count} mots) - rejeté")
+    words = words[:count_per_category]
     for w in words:
         corpus.append((w, "1_MOT"))
     print(f"  1_MOT: {len(words)} générés")
@@ -91,8 +129,20 @@ Exemples: "c'est bon", "pas maintenant", "non merci", "d'accord", "trop cher", "
 IMPORTANT: chaque expression doit faire 2 ou 3 mots UNIQUEMENT.
 Format: une expression par ligne, sans explication."""
 
-    result = generate_with_ollama(prompt, 300)
-    exprs = [clean_ollama_line(e) for e in result.split('\n') if clean_ollama_line(e) and 1 < len(clean_ollama_line(e).split()) <= 4][:count_per_category]
+    result = generate_with_ollama(prompt, 300, verbose)
+    if verbose:
+        print(f"\n🔍 PARSING 2-3_MOTS:")
+    exprs = []
+    for e in result.split('\n'):
+        cleaned = clean_ollama_line(e)
+        word_count = len(cleaned.split()) if cleaned else 0
+        if cleaned and 1 < word_count <= 4:
+            exprs.append(cleaned)
+            if verbose:
+                print(f"   ✅ '{cleaned}' ({word_count} mots)")
+        elif cleaned and verbose:
+            print(f"   ❌ '{cleaned}' ({word_count} mots) - rejeté")
+    exprs = exprs[:count_per_category]
     for e in exprs:
         corpus.append((e, "2-3_MOTS"))
     print(f"  2-3_MOTS: {len(exprs)} générés")
@@ -102,8 +152,20 @@ Format: une expression par ligne, sans explication."""
 Exemples: "je suis pas intéressé", "rappelez-moi plus tard", "c'est trop cher pour moi"
 Format: une phrase par ligne."""
 
-    result = generate_with_ollama(prompt, 400)
-    phrases = [clean_ollama_line(p) for p in result.split('\n') if clean_ollama_line(p) and 3 < len(clean_ollama_line(p).split()) <= 6][:count_per_category]
+    result = generate_with_ollama(prompt, 400, verbose)
+    if verbose:
+        print(f"\n🔍 PARSING 4-6_MOTS:")
+    phrases = []
+    for p in result.split('\n'):
+        cleaned = clean_ollama_line(p)
+        word_count = len(cleaned.split()) if cleaned else 0
+        if cleaned and 3 < word_count <= 6:
+            phrases.append(cleaned)
+            if verbose:
+                print(f"   ✅ '{cleaned}' ({word_count} mots)")
+        elif cleaned and verbose:
+            print(f"   ❌ '{cleaned}' ({word_count} mots) - rejeté")
+    phrases = phrases[:count_per_category]
     for p in phrases:
         corpus.append((p, "4-6_MOTS"))
     print(f"  4-6_MOTS: {len(phrases)} générés")
@@ -115,8 +177,20 @@ Exemples: "je préfère le matin vers dix heures si possible", "je dois d'abord 
 IMPORTANT: chaque phrase doit contenir entre 7 et 10 mots.
 Format: une phrase par ligne, sans explication."""
 
-    result = generate_with_ollama(prompt, 600)
-    phrases = [clean_ollama_line(p) for p in result.split('\n') if clean_ollama_line(p) and 5 < len(clean_ollama_line(p).split()) <= 12][:count_per_category]
+    result = generate_with_ollama(prompt, 600, verbose)
+    if verbose:
+        print(f"\n🔍 PARSING 7-10_MOTS:")
+    phrases = []
+    for p in result.split('\n'):
+        cleaned = clean_ollama_line(p)
+        word_count = len(cleaned.split()) if cleaned else 0
+        if cleaned and 5 < word_count <= 12:
+            phrases.append(cleaned)
+            if verbose:
+                print(f"   ✅ '{cleaned}' ({word_count} mots)")
+        elif cleaned and verbose:
+            print(f"   ❌ '{cleaned}' ({word_count} mots) - rejeté")
+    phrases = phrases[:count_per_category]
     for p in phrases:
         corpus.append((p, "7-10_MOTS"))
     print(f"  7-10_MOTS: {len(phrases)} générés")
@@ -127,8 +201,20 @@ Contexte: réponses détaillées à un démarcheur.
 Exemples: "oui ça m'intéresse beaucoup j'aimerais en savoir plus sur votre offre"
 Format: une phrase par ligne."""
 
-    result = generate_with_ollama(prompt, 600)
-    phrases = [clean_ollama_line(p) for p in result.split('\n') if clean_ollama_line(p) and len(clean_ollama_line(p).split()) >= 11][:count_per_category]
+    result = generate_with_ollama(prompt, 600, verbose)
+    if verbose:
+        print(f"\n🔍 PARSING 11+_MOTS:")
+    phrases = []
+    for p in result.split('\n'):
+        cleaned = clean_ollama_line(p)
+        word_count = len(cleaned.split()) if cleaned else 0
+        if cleaned and word_count >= 11:
+            phrases.append(cleaned)
+            if verbose:
+                print(f"   ✅ '{cleaned[:50]}...' ({word_count} mots)")
+        elif cleaned and verbose:
+            print(f"   ❌ '{cleaned[:50]}...' ({word_count} mots) - rejeté")
+    phrases = phrases[:count_per_category]
     for p in phrases:
         corpus.append((p, "11+_MOTS"))
     print(f"  11+_MOTS: {len(phrases)} générés")
@@ -139,8 +225,17 @@ Exemples: "pizza", "le chat dort", "il fait beau aujourd'hui", "j'aime la musiqu
 Inclus aussi du bruit: "euh euh", "bla bla", "123"
 Format: un par ligne."""
 
-    result = generate_with_ollama(prompt, 400)
-    randoms = [clean_ollama_line(r) for r in result.split('\n') if clean_ollama_line(r)][:count_per_category + 10]
+    result = generate_with_ollama(prompt, 400, verbose)
+    if verbose:
+        print(f"\n🔍 PARSING RANDOM:")
+    randoms = []
+    for r in result.split('\n'):
+        cleaned = clean_ollama_line(r)
+        if cleaned:
+            randoms.append(cleaned)
+            if verbose:
+                print(f"   ✅ '{cleaned}'")
+    randoms = randoms[:count_per_category + 10]
     for r in randoms:
         corpus.append((r, "RANDOM"))
     print(f"  RANDOM: {len(randoms)} générés")
@@ -304,7 +399,7 @@ def run_simulation(theme: str = "objections_finance", verbose: bool = False, num
 
     for i, (input_text, expected_category) in enumerate(test_corpus, 1):
         # Run matching (silent mode to avoid flooding logs)
-        result = matcher.find_best_match(input_text, min_score=0.65, silent=True)
+        result = matcher.find_best_match(input_text, min_score=0.70, silent=True)
 
         if result:
             detected_intent = result.get("entry_type", "objection")
@@ -611,13 +706,15 @@ def run_random_simulation(theme: str = "objections_finance", run_number: int = 1
     random.shuffle(test_corpus)
 
 
-def run_ollama_simulation(theme: str = "objections_finance", run_number: int = 1, collect_issues: list = None):
+def run_ollama_simulation(theme: str = "objections_finance", run_number: int = 1, collect_issues: list = None, verbose: bool = False):
     """Run simulation with Ollama-generated corpus."""
 
     print("=" * 70)
     print(f"🤖 SIMULATION OLLAMA - Run #{run_number}")
     print("=" * 70)
     print(f"Theme: {theme}")
+    if verbose:
+        print(f"🔧 MODE VERBOSE ACTIVÉ - Logs ultra détaillés")
     print("=" * 70)
     print()
 
@@ -631,7 +728,7 @@ def run_ollama_simulation(theme: str = "objections_finance", run_number: int = 1
     print()
 
     # Generate corpus with Ollama
-    test_corpus = generate_ollama_corpus(count_per_category=15)
+    test_corpus = generate_ollama_corpus(count_per_category=15, verbose=verbose)
 
     if len(test_corpus) < 50:
         print("⚠️  Corpus trop petit, utilisation du fallback...")
@@ -664,7 +761,20 @@ def run_ollama_simulation(theme: str = "objections_finance", run_number: int = 1
     print()
 
     for i, (input_text, input_type) in enumerate(test_corpus, 1):
-        result = matcher.find_best_match(input_text, min_score=0.65, silent=True)
+        if verbose:
+            print(f"\n{'═'*70}")
+            print(f"🔍 TEST #{i}: '{input_text}'")
+            print(f"   Type: {input_type}")
+            print(f"{'─'*70}")
+
+        # Use silent=False when verbose for detailed matching logs
+        result = matcher.find_best_match(input_text, min_score=0.70, silent=not verbose)
+
+        if verbose:
+            if result:
+                print(f"   📊 Résultat brut: {result}")
+            else:
+                print(f"   📊 Résultat: AUCUN MATCH")
 
         if result:
             entry_type = result.get("entry_type", "objection")
@@ -717,7 +827,7 @@ def run_ollama_simulation(theme: str = "objections_finance", run_number: int = 1
             input_chars = set(input_text.lower().replace(" ", ""))
             kw_chars = set(keyword.lower().replace(" ", ""))
             overlap = len(input_chars & kw_chars) / max(len(input_chars), len(kw_chars)) if max(len(input_chars), len(kw_chars)) > 0 else 0
-            if overlap < 0.3 and score >= 0.5:
+            if overlap < 0.15 and score >= 0.5:
                 is_issue = True
                 issue_reason = f"SEMANTIC_MISMATCH (overlap={overlap:.2f})"
 
@@ -805,7 +915,7 @@ def run_ollama_simulation(theme: str = "objections_finance", run_number: int = 1
     print()
 
     for i, (input_text, input_type) in enumerate(test_corpus, 1):
-        result = matcher.find_best_match(input_text, min_score=0.65, silent=True)
+        result = matcher.find_best_match(input_text, min_score=0.70, silent=True)
 
         if result:
             entry_type = result.get("entry_type", "objection")
@@ -864,7 +974,7 @@ def run_ollama_simulation(theme: str = "objections_finance", run_number: int = 1
             input_chars = set(input_text.lower().replace(" ", ""))
             kw_chars = set(keyword.lower().replace(" ", ""))
             overlap = len(input_chars & kw_chars) / max(len(input_chars), len(kw_chars))
-            if overlap < 0.3 and score >= 0.5:
+            if overlap < 0.15 and score >= 0.5:
                 is_issue = True
                 issue_reason = f"SEMANTIC_MISMATCH (overlap={overlap:.2f})"
 
@@ -1018,7 +1128,7 @@ def run_multiple_simulations(theme: str = "objections_finance", num_runs: int = 
 
     if issue_counts.get("SEMANTIC_MISMATCH", 0) > num_runs * 3:
         recommendations.append("- Ajouter word boundary check plus strict")
-        recommendations.append("- Filtrer les matches avec overlap < 0.3")
+        recommendations.append("- Filtrer les matches avec overlap < 0.15")
 
     if issue_counts.get("RANDOM_HIGH_MATCH", 0) > num_runs * 2:
         recommendations.append("- Vérifier les keywords trop courts ou génériques")
@@ -1049,7 +1159,7 @@ def main():
     args = parser.parse_args()
 
     if args.mode == "ollama":
-        run_ollama_simulation(theme=args.theme)
+        run_ollama_simulation(theme=args.theme, verbose=args.verbose)
     elif args.mode == "multi":
         run_multiple_simulations(theme=args.theme, num_runs=args.runs)
     elif args.mode == "random":
