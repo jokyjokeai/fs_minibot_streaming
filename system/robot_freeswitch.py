@@ -3245,7 +3245,7 @@ class RobotFreeSWITCH:
 
                 match_result = objection_matcher.find_best_match(
                     text_lower,
-                    min_score=0.4,  # Seuil bas car intents sont maintenant dans objections_db
+                    min_score=0.6,  # Seuil relevé pour éviter faux positifs fuzzy
                     silent=False
                 )
 

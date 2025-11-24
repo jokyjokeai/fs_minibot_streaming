@@ -471,6 +471,24 @@ class ObjectionMatcher:
                     logger.info(f"   💡 Raison: score supérieur ({best_score:.2f} > {second_score:.2f})")
 
         if best_score >= min_score:
+            # === FILTRE OVERLAP SÉMANTIQUE ===
+            # Évite les faux positifs où le keyword n'a rien à voir avec l'input
+            # Ex: "vacances" → "confiance", "allo" → "salope"
+            if best_score < 1.0:  # Ne pas filtrer les matches exacts
+                input_chars = set(user_input.lower().replace(" ", "").replace("'", ""))
+                kw_chars = set(matched_keyword.lower().replace(" ", "").replace("'", ""))
+                if len(input_chars) > 0 and len(kw_chars) > 0:
+                    overlap = len(input_chars & kw_chars) / max(len(input_chars), len(kw_chars))
+                    if overlap < 0.25 and best_score < 0.8:
+                        if not silent:
+                            logger.info(f"{'─'*60}")
+                            logger.info(f"❌ REJETÉ: overlap sémantique trop faible")
+                            logger.info(f"   Input chars: {len(input_chars)}, Keyword chars: {len(kw_chars)}")
+                            logger.info(f"   Overlap: {overlap:.2f} < 0.25 (seuil)")
+                            logger.info(f"{'═'*60}")
+                            logger.info(f"")
+                        return None
+
             entry_type = self.entry_types.get(best_objection, "objection")
             if not silent:
                 logger.info(f"{'─'*60}")
