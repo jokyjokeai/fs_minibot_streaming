@@ -16,12 +16,137 @@ import sys
 import os
 import random
 import argparse
+import requests
+import json
 from collections import defaultdict
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from system.objection_matcher import ObjectionMatcher
+
+# ═══════════════════════════════════════════════════════════════════════════
+# OLLAMA INTEGRATION - Génération via LLM
+# ═══════════════════════════════════════════════════════════════════════════
+
+OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_MODEL = "mistral:7b"
+
+def generate_with_ollama(prompt: str, max_tokens: int = 100) -> str:
+    """Génère du texte avec Ollama/Mistral."""
+    try:
+        response = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "num_predict": max_tokens,
+                    "temperature": 0.9
+                }
+            },
+            timeout=30
+        )
+        if response.status_code == 200:
+            return response.json().get("response", "").strip()
+    except Exception as e:
+        pass
+    return ""
+
+
+def clean_ollama_line(line: str) -> str:
+    """Nettoie une ligne générée par Ollama (enlève numérotation, tirets, etc.)"""
+    import re
+    line = line.strip()
+    # Enlever numérotation: "1.", "1)", "1-", "- ", "* "
+    line = re.sub(r'^[\d]+[\.\)\-\s]+', '', line)
+    line = re.sub(r'^[\-\*]\s+', '', line)
+    # Enlever guillemets
+    line = line.strip('"\'')
+    return line.strip()
+
+
+def generate_ollama_corpus(count_per_category: int = 15) -> list:
+    """Génère un corpus de test complet avec Ollama."""
+
+    corpus = []
+
+    print("🤖 Génération du corpus avec Ollama/Mistral...")
+
+    # 1. Mots simples (1 mot)
+    prompt = f"""Génère {count_per_category} mots français simples qu'une personne pourrait dire au téléphone.
+Mélange: réponses (oui, non), questions (quoi, comment), moments (matin, lundi), mots aléatoires.
+Format: un mot par ligne, sans numérotation."""
+
+    result = generate_with_ollama(prompt, 200)
+    words = [clean_ollama_line(w) for w in result.split('\n') if clean_ollama_line(w) and len(clean_ollama_line(w).split()) == 1][:count_per_category]
+    for w in words:
+        corpus.append((w, "1_MOT"))
+    print(f"  1_MOT: {len(words)} générés")
+
+    # 2. Expressions courtes (2-3 mots)
+    prompt = f"""Génère exactement {count_per_category} expressions françaises de 2 ou 3 mots maximum.
+Exemples: "c'est bon", "pas maintenant", "non merci", "d'accord", "trop cher", "le matin", "pas confiance"
+IMPORTANT: chaque expression doit faire 2 ou 3 mots UNIQUEMENT.
+Format: une expression par ligne, sans explication."""
+
+    result = generate_with_ollama(prompt, 300)
+    exprs = [clean_ollama_line(e) for e in result.split('\n') if clean_ollama_line(e) and 1 < len(clean_ollama_line(e).split()) <= 4][:count_per_category]
+    for e in exprs:
+        corpus.append((e, "2-3_MOTS"))
+    print(f"  2-3_MOTS: {len(exprs)} générés")
+
+    # 3. Phrases moyennes (4-6 mots)
+    prompt = f"""Génère {count_per_category} phrases françaises de 4 à 6 mots qu'on dit au téléphone.
+Exemples: "je suis pas intéressé", "rappelez-moi plus tard", "c'est trop cher pour moi"
+Format: une phrase par ligne."""
+
+    result = generate_with_ollama(prompt, 400)
+    phrases = [clean_ollama_line(p) for p in result.split('\n') if clean_ollama_line(p) and 3 < len(clean_ollama_line(p).split()) <= 6][:count_per_category]
+    for p in phrases:
+        corpus.append((p, "4-6_MOTS"))
+    print(f"  4-6_MOTS: {len(phrases)} générés")
+
+    # 4. Phrases longues (7-10 mots)
+    prompt = f"""Génère exactement {count_per_category} phrases françaises de 7 à 10 mots.
+Contexte: réponses d'un client à un appel commercial.
+Exemples: "je préfère le matin vers dix heures si possible", "je dois d'abord en parler avec ma femme"
+IMPORTANT: chaque phrase doit contenir entre 7 et 10 mots.
+Format: une phrase par ligne, sans explication."""
+
+    result = generate_with_ollama(prompt, 600)
+    phrases = [clean_ollama_line(p) for p in result.split('\n') if clean_ollama_line(p) and 5 < len(clean_ollama_line(p).split()) <= 12][:count_per_category]
+    for p in phrases:
+        corpus.append((p, "7-10_MOTS"))
+    print(f"  7-10_MOTS: {len(phrases)} générés")
+
+    # 5. Phrases très longues (11+ mots)
+    prompt = f"""Génère {count_per_category} phrases françaises longues (11+ mots) qu'on dit au téléphone.
+Contexte: réponses détaillées à un démarcheur.
+Exemples: "oui ça m'intéresse beaucoup j'aimerais en savoir plus sur votre offre"
+Format: une phrase par ligne."""
+
+    result = generate_with_ollama(prompt, 600)
+    phrases = [clean_ollama_line(p) for p in result.split('\n') if clean_ollama_line(p) and len(clean_ollama_line(p).split()) >= 11][:count_per_category]
+    for p in phrases:
+        corpus.append((p, "11+_MOTS"))
+    print(f"  11+_MOTS: {len(phrases)} générés")
+
+    # 6. Random/hors sujet
+    prompt = f"""Génère {count_per_category + 10} phrases ou mots français complètement hors sujet (pas liés au téléphone).
+Exemples: "pizza", "le chat dort", "il fait beau aujourd'hui", "j'aime la musique"
+Inclus aussi du bruit: "euh euh", "bla bla", "123"
+Format: un par ligne."""
+
+    result = generate_with_ollama(prompt, 400)
+    randoms = [clean_ollama_line(r) for r in result.split('\n') if clean_ollama_line(r)][:count_per_category + 10]
+    for r in randoms:
+        corpus.append((r, "RANDOM"))
+    print(f"  RANDOM: {len(randoms)} générés")
+
+    print(f"✅ Corpus total: {len(corpus)} items")
+    return corpus
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CORPUS DE TEST - 100+ inputs variés
@@ -286,9 +411,86 @@ def run_simulation(theme: str = "objections_finance", verbose: bool = False, num
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# MODE RANDOM - Corpus systématique par longueur
+# MODE RANDOM - Génération aléatoire de phrases
 # ═══════════════════════════════════════════════════════════════════════════
 
+# Vocabulaire pour génération aléatoire
+VOCAB_SUJETS = ["je", "on", "nous", "vous", "c'est", "ça", "il", "elle", "ils"]
+VOCAB_VERBES = ["suis", "veux", "peux", "dois", "vais", "ai", "fais", "comprends", "sais", "préfère", "attends", "rappelle"]
+VOCAB_NEGATIONS = ["pas", "plus", "jamais", "vraiment pas", "absolument pas"]
+VOCAB_ADVERBES = ["maintenant", "demain", "plus tard", "bientôt", "peut-être", "plutôt", "vraiment", "absolument"]
+VOCAB_OBJETS = ["temps", "argent", "intérêt", "besoin", "envie", "confiance", "budget", "moment"]
+VOCAB_CONTEXTE = ["au travail", "en réunion", "en voiture", "occupé", "disponible", "intéressé", "pressé"]
+VOCAB_TEMPS = ["matin", "soir", "après-midi", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "semaine prochaine"]
+VOCAB_FILLER = ["euh", "ben", "hum", "alors", "donc", "bon", "bah", "enfin", "voilà"]
+VOCAB_RANDOM = ["pizza", "chat", "météo", "football", "musique", "voiture", "enfants", "travail", "vacances", "film"]
+
+def generate_random_phrase(length_category: str) -> str:
+    """Génère une phrase aléatoire selon la catégorie de longueur."""
+
+    if length_category == "1_MOT":
+        # Un seul mot aléatoire
+        choices = ["oui", "non", "quoi", "comment", "pourquoi", "merci", "pardon",
+                   "matin", "soir", "demain", "jamais", "allo", "combien", "peut-être"]
+        choices += VOCAB_RANDOM
+        return random.choice(choices)
+
+    elif length_category == "2-3_MOTS":
+        patterns = [
+            lambda: f"{random.choice(['oui', 'non'])} {random.choice(['merci', 'vraiment', 'absolument'])}",
+            lambda: f"{random.choice(VOCAB_SUJETS)} {random.choice(VOCAB_VERBES)}",
+            lambda: f"pas {random.choice(VOCAB_OBJETS)}",
+            lambda: f"c'est {random.choice(['bon', 'cher', 'possible', 'intéressant'])}",
+            lambda: f"{random.choice(VOCAB_FILLER)} {random.choice(VOCAB_FILLER)}",
+            lambda: f"le {random.choice(VOCAB_TEMPS)}",
+        ]
+        return random.choice(patterns)()
+
+    elif length_category == "4-6_MOTS":
+        patterns = [
+            lambda: f"je {random.choice(['suis', 'ne suis'])} pas {random.choice(VOCAB_CONTEXTE)}",
+            lambda: f"j'ai pas {random.choice(['le temps', 'le budget', 'confiance', 'envie'])}",
+            lambda: f"c'est {random.choice(['trop cher', 'pas le moment', 'une arnaque'])} pour moi",
+            lambda: f"rappelez-moi {random.choice(['plus tard', 'demain', 'la semaine prochaine'])}",
+            lambda: f"{random.choice(VOCAB_FILLER)} je {random.choice(VOCAB_VERBES)} {random.choice(VOCAB_NEGATIONS)}",
+            lambda: f"plutôt le {random.choice(VOCAB_TEMPS)} si possible",
+        ]
+        return random.choice(patterns)()
+
+    elif length_category == "7-10_MOTS":
+        patterns = [
+            lambda: f"je préfère le {random.choice(VOCAB_TEMPS)} vers {random.randint(8,18)} heures",
+            lambda: f"je dois d'abord en parler avec {random.choice(['ma femme', 'mon mari', 'mon banquier'])}",
+            lambda: f"vous pouvez m'envoyer ça par {random.choice(['mail', 'courrier', 'sms'])} s'il vous plaît",
+            lambda: f"c'est {random.choice(VOCAB_FILLER)} je suis {random.choice(VOCAB_CONTEXTE)} là maintenant",
+            lambda: f"non {random.choice(['merci', 'vraiment'])} {random.choice(VOCAB_FILLER)} c'est pas pour moi",
+            lambda: f"oui {random.choice(['pourquoi pas', 'ça peut', 'ça pourrait'])} m'intéresser {random.choice(['peut-être', 'éventuellement'])}",
+        ]
+        return random.choice(patterns)()
+
+    elif length_category == "11+_MOTS":
+        patterns = [
+            lambda: f"oui ça m'intéresse beaucoup j'aimerais en savoir plus sur {random.choice(['votre offre', 'ce que vous proposez', 'les détails'])}",
+            lambda: f"non vraiment pas du tout ça ne m'intéresse {random.choice(VOCAB_NEGATIONS)} merci {random.choice(['quand même', 'au revoir', 'bonne journée'])}",
+            lambda: f"écoutez je suis {random.choice(VOCAB_CONTEXTE)} là je ne peux {random.choice(VOCAB_NEGATIONS)} vous parler maintenant",
+            lambda: f"je vais {random.choice(['y réfléchir', 'en parler', 'voir ça'])} et je vous rappelle quand j'aurai pris ma décision",
+            lambda: f"rappelez-moi plutôt {random.choice(['en fin de journée', 'demain matin', 'la semaine prochaine'])} ce serait mieux pour moi",
+            lambda: f"je ne suis pas sûr que ça corresponde à mes {random.choice(['besoins', 'attentes', 'critères'])} actuels mais pourquoi pas",
+        ]
+        return random.choice(patterns)()
+
+    else:  # RANDOM - hors sujet
+        patterns = [
+            lambda: random.choice(VOCAB_RANDOM),
+            lambda: f"le {random.choice(VOCAB_RANDOM)} est {random.choice(['bien', 'là', 'parti'])}",
+            lambda: f"j'aime {random.choice(['beaucoup', 'bien'])} le {random.choice(VOCAB_RANDOM)}",
+            lambda: f"{random.choice(['asdfgh', 'qwerty', '12345', 'bla bla'])}",
+            lambda: f"{random.choice(VOCAB_FILLER)} {random.choice(VOCAB_FILLER)} {random.choice(VOCAB_FILLER)}",
+        ]
+        return random.choice(patterns)()
+
+
+# Corpus fixe pour comparaison (optionnel)
 # 15 mots simples (1 mot)
 MOTS_SIMPLES = [
     "oui", "non", "quoi", "comment", "pourquoi", "merci", "pardon",
@@ -388,24 +590,209 @@ def run_random_simulation(theme: str = "objections_finance", run_number: int = 1
     print()
 
     # Build test corpus: 15+15+15+15+15+25 = 100 total
-    # Couverture systématique de toutes les longueurs
+    # GÉNÉRATION ALÉATOIRE - nouvelles phrases à chaque run
     test_corpus = []
 
-    for word in MOTS_SIMPLES:
-        test_corpus.append((word, "1_MOT"))
-    for expr in EXPRESSIONS_COURTES:
-        test_corpus.append((expr, "2-3_MOTS"))
-    for phrase in PHRASES_MOYENNES:
-        test_corpus.append((phrase, "4-6_MOTS"))
-    for phrase in PHRASES_LONGUES:
-        test_corpus.append((phrase, "7-10_MOTS"))
-    for phrase in PHRASES_TRES_LONGUES:
-        test_corpus.append((phrase, "11+_MOTS"))
-    for rand in RANDOM_INPUTS:
-        test_corpus.append((rand, "RANDOM"))
+    # Générer des phrases aléatoires pour chaque catégorie
+    for _ in range(15):
+        test_corpus.append((generate_random_phrase("1_MOT"), "1_MOT"))
+    for _ in range(15):
+        test_corpus.append((generate_random_phrase("2-3_MOTS"), "2-3_MOTS"))
+    for _ in range(15):
+        test_corpus.append((generate_random_phrase("4-6_MOTS"), "4-6_MOTS"))
+    for _ in range(15):
+        test_corpus.append((generate_random_phrase("7-10_MOTS"), "7-10_MOTS"))
+    for _ in range(15):
+        test_corpus.append((generate_random_phrase("11+_MOTS"), "11+_MOTS"))
+    for _ in range(25):
+        test_corpus.append((generate_random_phrase("RANDOM"), "RANDOM"))
 
     # Shuffle
     random.shuffle(test_corpus)
+
+
+def run_ollama_simulation(theme: str = "objections_finance", run_number: int = 1, collect_issues: list = None):
+    """Run simulation with Ollama-generated corpus."""
+
+    print("=" * 70)
+    print(f"🤖 SIMULATION OLLAMA - Run #{run_number}")
+    print("=" * 70)
+    print(f"Theme: {theme}")
+    print("=" * 70)
+    print()
+
+    # Load matcher
+    matcher = ObjectionMatcher.load_objections_for_theme(theme)
+    if not matcher:
+        print("❌ Erreur: Impossible de charger le matcher")
+        return
+
+    print(f"✅ Matcher chargé: {len(matcher.objections)} entries, {len(matcher.keyword_lookup)} keywords")
+    print()
+
+    # Generate corpus with Ollama
+    test_corpus = generate_ollama_corpus(count_per_category=15)
+
+    if len(test_corpus) < 50:
+        print("⚠️  Corpus trop petit, utilisation du fallback...")
+        # Fallback to random generation
+        test_corpus = []
+        for _ in range(15):
+            test_corpus.append((generate_random_phrase("1_MOT"), "1_MOT"))
+        for _ in range(15):
+            test_corpus.append((generate_random_phrase("2-3_MOTS"), "2-3_MOTS"))
+        for _ in range(15):
+            test_corpus.append((generate_random_phrase("4-6_MOTS"), "4-6_MOTS"))
+        for _ in range(15):
+            test_corpus.append((generate_random_phrase("7-10_MOTS"), "7-10_MOTS"))
+        for _ in range(15):
+            test_corpus.append((generate_random_phrase("11+_MOTS"), "11+_MOTS"))
+        for _ in range(25):
+            test_corpus.append((generate_random_phrase("RANDOM"), "RANDOM"))
+
+    # Shuffle
+    random.shuffle(test_corpus)
+
+    # Statistics par catégorie détectée
+    detected_stats = defaultdict(int)
+    score_ranges = {"high": 0, "medium": 0, "low": 0, "none": 0}
+    results_by_type = defaultdict(list)
+
+    print("─" * 70)
+    print(f"RÉSULTATS ({len(test_corpus)} tests)")
+    print("─" * 70)
+    print()
+
+    for i, (input_text, input_type) in enumerate(test_corpus, 1):
+        result = matcher.find_best_match(input_text, min_score=0.65, silent=True)
+
+        if result:
+            entry_type = result.get("entry_type", "objection")
+            score = result["score"]
+            keyword = result.get("matched_keyword", "")
+
+            if entry_type in ["affirm", "deny", "insult", "time", "unsure"]:
+                detected = entry_type.upper()
+            elif entry_type == "faq":
+                detected = "FAQ"
+            else:
+                detected = "OBJECTION"
+
+            if score >= 0.9:
+                score_range = "high"
+                score_icon = "🟢"
+            elif score >= 0.7:
+                score_range = "medium"
+                score_icon = "🟡"
+            else:
+                score_range = "low"
+                score_icon = "🟠"
+        else:
+            detected = "NONE"
+            score = 0.0
+            keyword = ""
+            score_range = "none"
+            score_icon = "⚪"
+
+        detected_stats[detected] += 1
+        score_ranges[score_range] += 1
+
+        # Print result
+        print(f"{score_icon} [{i:3d}] [{input_type:12}] '{input_text[:50]}{'...' if len(input_text) > 50 else ''}'")
+        print(f"       → {detected:10} | score={score:.2f} | kw='{keyword}'")
+
+        # Log issues
+        is_issue = False
+        issue_reason = ""
+
+        if input_type in ["1_MOT", "RANDOM"] and 0.65 <= score < 0.7:
+            is_issue = True
+            issue_reason = f"FUZZY_LOW_SCORE ({score:.2f})"
+
+        if input_type == "RANDOM" and score >= 0.7:
+            is_issue = True
+            issue_reason = f"RANDOM_HIGH_MATCH ({score:.2f})"
+
+        if score >= 0.5 and len(keyword) > 0:
+            input_chars = set(input_text.lower().replace(" ", ""))
+            kw_chars = set(keyword.lower().replace(" ", ""))
+            overlap = len(input_chars & kw_chars) / max(len(input_chars), len(kw_chars)) if max(len(input_chars), len(kw_chars)) > 0 else 0
+            if overlap < 0.3 and score >= 0.5:
+                is_issue = True
+                issue_reason = f"SEMANTIC_MISMATCH (overlap={overlap:.2f})"
+
+        if is_issue:
+            print(f"       ⚠️  ISSUE: {issue_reason}")
+            if collect_issues is not None:
+                collect_issues.append({
+                    "run": run_number,
+                    "input": input_text,
+                    "input_type": input_type,
+                    "detected": detected,
+                    "score": score,
+                    "keyword": keyword,
+                    "reason": issue_reason
+                })
+
+        print()
+
+        results_by_type[input_type].append({
+            "input": input_text,
+            "detected": detected,
+            "score": score,
+            "keyword": keyword
+        })
+
+    # Summary
+    print()
+    print("=" * 70)
+    print("📊 RÉSUMÉ PAR CATÉGORIE DÉTECTÉE")
+    print("=" * 70)
+
+    print(f"\n{'Détecté':<15} {'Count':>8} {'%':>8}")
+    print("-" * 35)
+    for det in sorted(detected_stats.keys()):
+        pct = detected_stats[det] / len(test_corpus) * 100
+        print(f"{det:<15} {detected_stats[det]:>8} {pct:>7.1f}%")
+
+    print()
+    print("=" * 70)
+    print("📊 RÉSUMÉ PAR NIVEAU DE SCORE")
+    print("=" * 70)
+
+    print(f"\n🟢 High (>=0.9):   {score_ranges['high']:>3}")
+    print(f"🟡 Medium (0.7-0.9): {score_ranges['medium']:>3}")
+    print(f"🟠 Low (0.65-0.7):  {score_ranges['low']:>3}")
+    print(f"⚪ None (<0.65):    {score_ranges['none']:>3}")
+
+    print()
+    print("=" * 70)
+    print("📊 ANALYSE PAR TYPE D'INPUT")
+    print("=" * 70)
+
+    for input_type in ["1_MOT", "2-3_MOTS", "4-6_MOTS", "7-10_MOTS", "11+_MOTS", "RANDOM"]:
+        results = results_by_type.get(input_type, [])
+        if not results:
+            continue
+        avg_score = sum(r["score"] for r in results) / len(results) if results else 0
+        none_count = sum(1 for r in results if r["detected"] == "NONE")
+
+        print(f"\n{input_type}:")
+        print(f"  Score moyen: {avg_score:.2f}")
+        print(f"  Non matchés: {none_count}/{len(results)}")
+
+        det_counts = defaultdict(int)
+        for r in results:
+            det_counts[r["detected"]] += 1
+        top_det = sorted(det_counts.items(), key=lambda x: -x[1])[:3]
+        print(f"  Top détections: {', '.join([f'{d}({c})' for d, c in top_det])}")
+
+    print()
+    print("=" * 70)
+    print("✅ Simulation terminée")
+    print("=" * 70)
+
+    return detected_stats, score_ranges, results_by_type
 
     # Statistics par catégorie détectée
     detected_stats = defaultdict(int)
@@ -655,13 +1042,15 @@ def main():
     parser.add_argument("--theme", default="objections_finance", help="Theme file à charger")
     parser.add_argument("--verbose", "-v", action="store_true", help="Afficher tous les résultats")
     parser.add_argument("--num", "-n", type=int, default=100, help="Nombre de tests")
-    parser.add_argument("--mode", "-m", choices=["categorized", "random", "multi"], default="random",
-                       help="Mode: categorized, random, ou multi (10 runs)")
+    parser.add_argument("--mode", "-m", choices=["categorized", "random", "multi", "ollama"], default="random",
+                       help="Mode: categorized, random, multi, ou ollama (génération LLM)")
     parser.add_argument("--runs", "-r", type=int, default=10, help="Nombre de runs pour mode multi")
 
     args = parser.parse_args()
 
-    if args.mode == "multi":
+    if args.mode == "ollama":
+        run_ollama_simulation(theme=args.theme)
+    elif args.mode == "multi":
         run_multiple_simulations(theme=args.theme, num_runs=args.runs)
     elif args.mode == "random":
         run_random_simulation(theme=args.theme)
