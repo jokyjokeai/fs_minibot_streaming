@@ -430,13 +430,13 @@ class ObjectionMatcher:
                 keywords_preview = " | ".join(obj.split(" | ")[:3])
                 if len(obj.split(" | ")) > 3:
                     keywords_preview += " | ..."
-                logger.info(f"  {i}. [{entry_type}] '{kw}' → {score:.2f} {status}")
+                logger.info(f"  {i}. [{entry_type}] '{kw}' (len={len(kw)}) → {score:.2f} {status}")
                 logger.debug(f"     Keywords: {keywords_preview}")
 
         if best_score >= min_score:
             entry_type = self.entry_types.get(best_objection, "objection")
             if not silent:
-                logger.info(f"Result: ✅ MATCH [{entry_type}] '{matched_keyword}' (score: {best_score:.2f})")
+                logger.info(f"Result: ✅ MATCH [{entry_type}] '{matched_keyword}' (len={len(matched_keyword)}, score={best_score:.2f})")
                 logger.info(f"═════════════════════════")
             return {
                 "objection": best_objection,
