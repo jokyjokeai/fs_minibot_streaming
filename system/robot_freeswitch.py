@@ -2679,20 +2679,32 @@ class RobotFreeSWITCH:
         # ===================================================================
         intent_mapping = step_config.get("intent_mapping", {})
 
+        # === LOGS NAVIGATION DÉTAILLÉS ===
+        logger.info(f"")
+        logger.info(f"{'═'*60}")
+        logger.info(f"🧭 NAVIGATION - Step '{step_name}' → Intent '{intent}'")
+        logger.info(f"{'═'*60}")
+        logger.info(f"📋 Intent mapping disponible:")
+        for k, v in intent_mapping.items():
+            marker = "→" if k == intent else " "
+            logger.info(f"   {marker} {k}: {v}")
+        logger.info(f"{'─'*60}")
+
         # --- OBJECTION/QUESTION HANDLING with MaxTurn ---
         # OPTION B: question ET objection détectés via objections_db (intents_general.py supprimé)
         # TRAITEMENT IDENTIQUE pour les deux (MaxTurn loop)
         if intent == "objection" or intent == "question":
+            logger.info(f"🔄 Branche: OBJECTION/QUESTION (réponse audio)")
             max_turns = self.scenario_manager.get_max_autonomous_turns(
                 scenario,
                 step_name
             )
+            logger.info(f"   max_autonomous_turns: {max_turns}")
 
             if max_turns > 0:
                 # Autonomous objection handling
                 logger.info(
-                    f"[{short_uuid}] Objection detected with MaxTurn={max_turns} "
-                    f"-> Starting autonomous loop"
+                    f"   → Démarrage boucle autonome ({max_turns} tours max)"
                 )
 
                 objection_result = self._handle_objection_autonomous(
@@ -2707,25 +2719,31 @@ class RobotFreeSWITCH:
                 # After objection loop, check result
                 if objection_result.get("force_continue"):
                     # Max not_understood reached -> Force continuation
-                    logger.info(f"[{short_uuid}] NotUnderstood limit reached -> Force continue")
                     next_step = intent_mapping.get("affirm")
+                    logger.info(f"   ⚠️  Limite not_understood atteinte → Force continue")
+                    logger.info(f"   → next_step = '{next_step}' (mapping 'affirm')")
 
                 elif objection_result.get("resolved"):
                     # Objection resolved -> continue to affirm path
-                    logger.info(f"[{short_uuid}] Objection resolved -> Continue")
                     next_step = intent_mapping.get("affirm")
+                    logger.info(f"   ✅ Objection résolue → Continue")
+                    logger.info(f"   → next_step = '{next_step}' (mapping 'affirm')")
 
                 else:
                     # Objection not resolved -> deny path
-                    logger.info(f"[{short_uuid}] Objection NOT resolved -> Deny path")
                     next_step = intent_mapping.get("deny", "bye_failed")
+                    logger.info(f"   ❌ Objection NON résolue → Deny path")
+                    logger.info(f"   → next_step = '{next_step}' (mapping 'deny')")
 
             else:
                 # No MaxTurn -> direct objection mapping or deny
                 next_step = intent_mapping.get("objection", intent_mapping.get("deny"))
+                logger.info(f"   ℹ️  Pas de MaxTurn → mapping direct")
+                logger.info(f"   → next_step = '{next_step}'")
 
         # --- SILENCE HANDLING ---
         elif intent == "silence":
+            logger.info(f"🔄 Branche: SILENCE")
             # ALWAYS follow scenario JSON mapping for silence
             # The scenario defines the flow (e.g., hello → retry_silence → end)
 
@@ -2734,47 +2752,61 @@ class RobotFreeSWITCH:
                 step_config.get("is_terminal", False) or
                 step_name.lower() in ["bye", "bye_failed", "end"]
             )
+            logger.info(f"   is_terminal: {is_terminal}")
 
             if is_terminal:
                 next_step = "end"
-                logger.info(
-                    f"[{short_uuid}] Silence in terminal step '{step_name}' → Forcing end"
-                )
+                logger.info(f"   ⚠️  Step terminal → Forçage vers 'end'")
+                logger.info(f"   → next_step = 'end'")
             else:
                 # Get default fallback from scenario metadata (or hardcoded "bye_failed")
                 default_silence_fallback = scenario.get("metadata", {}).get("fallbacks", {}).get("silence", "bye_failed")
                 next_step = intent_mapping.get("silence", default_silence_fallback)
-                logger.info(
-                    f"[{short_uuid}] Silence detected → Next step: {next_step} "
-                    f"(following scenario mapping)"
-                )
+                logger.info(f"   Fallback silence: {default_silence_fallback}")
+                logger.info(f"   → next_step = '{next_step}' (mapping 'silence')")
 
         # --- NOT_UNDERSTOOD HANDLING ---
         elif intent == "not_understood":
+            logger.info(f"🔄 Branche: NOT_UNDERSTOOD")
             # Pas de match dans objections_db -> jouer step "not_understood"
-            logger.info(f"[{short_uuid}] Not understood -> Playing 'not_understood' step")
 
             # Get fallback from intent_mapping or scenario metadata
             default_not_understood = scenario.get("metadata", {}).get("fallbacks", {}).get("not_understood", "bye_failed")
             next_step = intent_mapping.get("not_understood", default_not_understood)
+            logger.info(f"   Fallback not_understood: {default_not_understood}")
+            logger.info(f"   → next_step = '{next_step}'")
 
         # --- INSULT HANDLING ---
         elif intent == "insult":
+            logger.info(f"🔄 Branche: INSULT")
             # Insulte ou demande de retrait -> raccrocher directement
-            logger.info(f"[{short_uuid}] Insult/Removal request detected -> Hanging up immediately")
             next_step = "end"
+            logger.info(f"   🚫 Insulte/Retrait détecté → Raccrochage immédiat")
+            logger.info(f"   → next_step = 'end'")
 
-        # --- AFFIRM / DENY / OTHER ---
+        # --- AFFIRM / DENY / TIME / UNSURE / OTHER ---
         else:
+            logger.info(f"🔄 Branche: {intent.upper()} (navigation standard)")
 
             # Get next step from intent_mapping
             next_step = intent_mapping.get(intent)
 
             if not next_step:
                 # No mapping -> try "unknown" fallback from metadata (or deny)
-                logger.warning(f"[{short_uuid}] No mapping for intent: {intent}")
+                logger.warning(f"   ⚠️  Pas de mapping pour '{intent}'")
                 default_unknown_fallback = scenario.get("metadata", {}).get("fallbacks", {}).get("unknown", "bye_failed")
                 next_step = intent_mapping.get("unknown", default_unknown_fallback)
+                logger.info(f"   Fallback unknown: {default_unknown_fallback}")
+                logger.info(f"   → next_step = '{next_step}'")
+            else:
+                logger.info(f"   ✅ Mapping trouvé: {intent} → {next_step}")
+                logger.info(f"   → next_step = '{next_step}'")
+
+        # === LOG RÉSUMÉ NAVIGATION ===
+        logger.info(f"{'─'*60}")
+        logger.info(f"🎯 DÉCISION FINALE: '{step_name}' → '{next_step}'")
+        logger.info(f"{'═'*60}")
+        logger.info(f"")
 
         # ===================================================================
         # STEP 5: Qualification update
@@ -3196,15 +3228,20 @@ class RobotFreeSWITCH:
 
         # ===== SYSTEME UNIFIE: ObjectionMatcher pour TOUT =====
         # Intents (affirm, deny, insult) + Objections + FAQ tous dans objections_db
-        logger.info(f"═══ INTENT ANALYSIS ═══")
-        logger.info(f"Transcription: '{transcription}'")
-        logger.info(f"Theme: {theme}")
+        logger.info(f"")
+        logger.info(f"{'═'*60}")
+        logger.info(f"🎯 INTENT ANALYSIS - _analyze_intent()")
+        logger.info(f"{'═'*60}")
+        logger.info(f"📝 Transcription: '{transcription}'")
+        logger.info(f"📚 Theme: {theme}")
+        logger.info(f"{'─'*60}")
 
         if hasattr(self, 'objection_matcher_default') and self.objection_matcher_default:
             objection_matcher = ObjectionMatcher.load_objections_for_theme(theme)
             if objection_matcher:
                 num_entries = len(objection_matcher.objections)
-                logger.info(f"Loaded {num_entries} entries from {theme}")
+                num_keywords = len(objection_matcher.keyword_lookup)
+                logger.info(f"✅ ObjectionMatcher chargé: {num_entries} entries, {num_keywords} keywords")
 
                 match_result = objection_matcher.find_best_match(
                     text_lower,
@@ -3215,30 +3252,37 @@ class RobotFreeSWITCH:
                 if match_result:
                     entry_type = match_result.get("entry_type", "objection")
                     confidence = match_result["score"]
+                    matched_keyword = match_result.get('matched_keyword', '')
 
                     # Map entry_type to intent
+                    logger.info(f"{'─'*60}")
+                    logger.info(f"🔄 MAPPING entry_type → intent:")
                     if entry_type in ['affirm', 'deny', 'insult', 'time', 'unsure']:
                         intent = entry_type
+                        logger.info(f"   entry_type='{entry_type}' → intent='{intent}' (navigation directe)")
                     elif entry_type == 'faq':
                         intent = 'question'
+                        logger.info(f"   entry_type='faq' → intent='question' (FAQ)")
                     else:
                         intent = 'objection'
+                        logger.info(f"   entry_type='{entry_type}' → intent='objection' (réponse audio)")
 
                     latency_ms = (time.time() - analyze_start) * 1000
 
                     # Log des alternatives si disponibles
                     alternatives = match_result.get("top_alternatives", [])
                     if alternatives:
-                        alt_str = ", ".join([f"{kw}({t}):{s:.2f}" for kw, s, t in alternatives])
-                        logger.info(f"Alternatives: {alt_str}")
+                        logger.info(f"   📋 Alternatives: {', '.join([f'{kw}({t}):{s:.2f}' for kw, s, t in alternatives])}")
 
-                    logger.info(
-                        f"FINAL: '{transcription[:50]}' → {intent.upper()} "
-                        f"(conf: {confidence:.2f}, entry_type: {entry_type}, "
-                        f"keyword: '{match_result.get('matched_keyword', '')}', "
-                        f"latency: {latency_ms:.1f}ms)"
-                    )
-                    logger.info(f"═══════════════════════")
+                    logger.info(f"{'─'*60}")
+                    logger.info(f"🏆 RÉSULTAT _analyze_intent:")
+                    logger.info(f"   Intent: {intent.upper()}")
+                    logger.info(f"   Confidence: {confidence:.2f}")
+                    logger.info(f"   Keyword: '{matched_keyword}' (len={len(matched_keyword)})")
+                    logger.info(f"   Entry type: {entry_type}")
+                    logger.info(f"   Latency: {latency_ms:.1f}ms")
+                    logger.info(f"{'═'*60}")
+                    logger.info(f"")
 
                     return {
                         "intent": intent,
@@ -3252,11 +3296,16 @@ class RobotFreeSWITCH:
 
         # No match found -> not_understood
         latency_ms = (time.time() - analyze_start) * 1000
-        logger.info(
-            f"FINAL: '{transcription[:50]}' → NOT_UNDERSTOOD "
-            f"(conf: 0.0, reason: no_match, latency: {latency_ms:.1f}ms)"
-        )
-        logger.info(f"═══════════════════════")
+        logger.info(f"{'─'*60}")
+        logger.info(f"❌ Aucun match trouvé dans ObjectionMatcher")
+        logger.info(f"{'─'*60}")
+        logger.info(f"🏆 RÉSULTAT _analyze_intent:")
+        logger.info(f"   Intent: NOT_UNDERSTOOD")
+        logger.info(f"   Confidence: 0.00")
+        logger.info(f"   Reason: no_match (score < min_score)")
+        logger.info(f"   Latency: {latency_ms:.1f}ms")
+        logger.info(f"{'═'*60}")
+        logger.info(f"")
         return {
             "intent": "not_understood",
             "confidence": 0.0,

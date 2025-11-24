@@ -346,16 +346,31 @@ class ObjectionMatcher:
 
         user_input = user_input.strip().lower()
 
+        if not silent:
+            logger.info(f"")
+            logger.info(f"{'═'*60}")
+            logger.info(f"🔍 OBJECTION MATCHER - ANALYSE DÉTAILLÉE")
+            logger.info(f"{'═'*60}")
+            logger.info(f"📝 Input: '{user_input}'")
+            logger.info(f"⚙️  Config: min_score={min_score}, total_entries={len(self.objection_keys)}")
+            logger.info(f"{'─'*60}")
+
         # ===== ÉTAPE 0: LOOKUP DIRECT O(1) - INSTANTANÉ =====
         # Comme intents_db - match exact immédiat
+        if not silent:
+            logger.info(f"🔎 ÉTAPE 1: Lookup direct (O(1))...")
+
         if user_input in self.keyword_lookup:
             objection_key = self.keyword_lookup[user_input]
             entry_type = self.entry_types.get(objection_key, "objection")
             if not silent:
-                logger.info(f"═══ OBJECTION MATCHER ═══")
-                logger.info(f"Input: '{user_input}' | min_score: {min_score}")
-                logger.info(f"Result: ✅ DIRECT LOOKUP [{entry_type}] '{user_input}' (score: 1.00)")
-                logger.info(f"═════════════════════════")
+                logger.info(f"   ✅ TROUVÉ! Keyword exact dans lookup table")
+                logger.info(f"   → Entry: [{entry_type}] '{user_input}'")
+                logger.info(f"{'─'*60}")
+                logger.info(f"🏆 RÉSULTAT FINAL: [{entry_type}] '{user_input}'")
+                logger.info(f"   Score: 1.00 | Méthode: direct_lookup | Len: {len(user_input)}")
+                logger.info(f"{'═'*60}")
+                logger.info(f"")
             return {
                 "objection": objection_key,
                 "response": self.objections[objection_key],
@@ -367,8 +382,15 @@ class ObjectionMatcher:
                 "confidence": "high"
             }
 
-        # Étape 1: Tester chaque keyword individuellement pour chaque objection (fuzzy)
+        # Étape 2: Fuzzy matching sur tous les keywords
+        if not silent:
+            logger.info(f"   ❌ Pas de match direct")
+            logger.info(f"{'─'*60}")
+            logger.info(f"🔎 ÉTAPE 2: Fuzzy matching (word boundary + RapidFuzz)...")
+
         scores = []
+        word_boundary_matches = []  # Pour logger les matches word boundary
+
         for objection_key in self.objection_keys:
             # Séparer les keywords de cette objection
             keywords = objection_key.split(" | ")
@@ -389,6 +411,8 @@ class ObjectionMatcher:
                     pattern = r'\b' + re.escape(keyword_lower) + r'\b'
                     if re.search(pattern, user_input):
                         score = 1.0
+                        entry_type = self.entry_types.get(objection_key, "objection")
+                        word_boundary_matches.append((keyword_lower, entry_type, len(keyword_lower)))
                     elif user_input in keyword_lower:
                         score = len(user_input) / len(keyword_lower)
                     else:
@@ -404,6 +428,16 @@ class ObjectionMatcher:
 
             scores.append((objection_key, best_keyword_score, best_keyword))
 
+        # Log word boundary matches found
+        if not silent and word_boundary_matches:
+            logger.info(f"   📍 Word boundary matches trouvés ({len(word_boundary_matches)}):")
+            for kw, et, ln in sorted(word_boundary_matches, key=lambda x: -x[2])[:5]:
+                logger.info(f"      • '{kw}' [{et}] (len={ln})")
+
+        if not silent:
+            logger.info(f"{'─'*60}")
+            logger.info(f"🔎 ÉTAPE 3: Tri par score DESC, puis longueur DESC...")
+
         # Trier par: score DESC, puis longueur du keyword DESC
         # Le match le plus spécifique (plus long) gagne quand scores égaux
         def sort_key(x):
@@ -418,26 +452,37 @@ class ObjectionMatcher:
         # Vérifier si le meilleur match dépasse le seuil
         best_objection, best_score, matched_keyword = top_matches[0]
 
-        # === LOGS DÉTAILLÉS TOP 3 ===
+        # === LOGS DÉTAILLÉS TOP 5 ===
         if not silent:
-            logger.info(f"═══ OBJECTION MATCHER ═══")
-            logger.info(f"Input: '{user_input}' | min_score: {min_score}")
-            logger.info(f"TOP {min(3, len(top_matches))} candidates:")
-            for i, (obj, score, kw) in enumerate(top_matches[:3], 1):
+            logger.info(f"   📊 TOP {min(5, len(top_matches))} après tri:")
+            for i, (obj, score, kw) in enumerate(top_matches[:5], 1):
                 entry_type = self.entry_types.get(obj, "objection")
                 status = "✓" if score >= min_score else "✗"
-                # Afficher seulement les 3 premiers keywords pour lisibilité
-                keywords_preview = " | ".join(obj.split(" | ")[:3])
-                if len(obj.split(" | ")) > 3:
-                    keywords_preview += " | ..."
-                logger.info(f"  {i}. [{entry_type}] '{kw}' (len={len(kw)}) → {score:.2f} {status}")
-                logger.debug(f"     Keywords: {keywords_preview}")
+                marker = "→" if i == 1 else " "
+                logger.info(f"   {marker} {i}. [{entry_type}] '{kw}' (len={len(kw)}) = {score:.2f} {status}")
+
+            # Expliquer pourquoi le gagnant a gagné
+            if len(top_matches) >= 2:
+                second_score = top_matches[1][1]
+                second_kw = top_matches[1][2]
+                if best_score == second_score:
+                    logger.info(f"   💡 Raison: scores égaux ({best_score:.2f}), '{matched_keyword}' (len={len(matched_keyword)}) > '{second_kw}' (len={len(second_kw)})")
+                else:
+                    logger.info(f"   💡 Raison: score supérieur ({best_score:.2f} > {second_score:.2f})")
 
         if best_score >= min_score:
             entry_type = self.entry_types.get(best_objection, "objection")
             if not silent:
-                logger.info(f"Result: ✅ MATCH [{entry_type}] '{matched_keyword}' (len={len(matched_keyword)}, score={best_score:.2f})")
-                logger.info(f"═════════════════════════")
+                logger.info(f"{'─'*60}")
+                logger.info(f"🏆 RÉSULTAT FINAL: [{entry_type}] '{matched_keyword}'")
+                logger.info(f"   Score: {best_score:.2f} | Méthode: fuzzy | Len: {len(matched_keyword)}")
+                audio = self.audio_paths.get(best_objection)
+                if audio:
+                    logger.info(f"   Audio: {audio.split('/')[-1] if '/' in str(audio) else audio}")
+                else:
+                    logger.info(f"   Audio: (aucun - intent de navigation)")
+                logger.info(f"{'═'*60}")
+                logger.info(f"")
             return {
                 "objection": best_objection,
                 "response": self.objections[best_objection],
