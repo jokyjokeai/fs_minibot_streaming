@@ -2601,7 +2601,8 @@ class RobotFreeSWITCH:
         # ===================================================================
         # Si ce step a {{return_step}} dans son intent_mapping, le remplacer
         # par la valeur sauvegardée dans la session
-        intent_mapping = step_config.get("intent_mapping", {})
+        # FIX: Use .copy() to prevent mutation of original scenario dict
+        intent_mapping = step_config.get("intent_mapping", {}).copy()
         return_step = session.get("return_step")
 
         if return_step:
@@ -2677,7 +2678,9 @@ class RobotFreeSWITCH:
         # ===================================================================
         # STEP 4: Handle based on intent
         # ===================================================================
-        intent_mapping = step_config.get("intent_mapping", {})
+        # FIX: Don't reload intent_mapping here - use the already-resolved one from line 2605
+        # (with {{return_step}} replacements applied)
+        # REMOVED: intent_mapping = step_config.get("intent_mapping", {})
 
         # === LOGS NAVIGATION DÉTAILLÉS ===
         logger.info(f"")
@@ -2730,10 +2733,26 @@ class RobotFreeSWITCH:
                     logger.info(f"   → next_step = '{next_step}' (mapping 'affirm')")
 
                 else:
-                    # Objection not resolved -> deny path
-                    next_step = intent_mapping.get("deny", "bye_failed")
-                    logger.info(f"   ❌ Objection NON résolue → Deny path")
-                    logger.info(f"   → next_step = '{next_step}' (mapping 'deny')")
+                    # Objection not resolved
+                    turns_used = objection_result.get("turns_used", 0)
+                    final_intent = objection_result.get("final_intent", "unknown")
+
+                    # Si max_turns atteint ET refus EXPLICITE (deny only) → bye_failed direct
+                    if turns_used >= max_turns and final_intent == "deny":
+                        next_step = "bye_failed"
+                        logger.info(f"   ❌ Objection NON résolue après {turns_used} tours (final={final_intent})")
+                        logger.info(f"   → next_step = 'bye_failed' (refus explicite, pas de retry)")
+                    else:
+                        # Sinon (silence/objection/autre), suivre le mapping selon final_intent
+                        if final_intent == "silence":
+                            next_step = intent_mapping.get("silence", intent_mapping.get("deny", "bye_failed"))
+                            logger.info(f"   ❌ Objection NON résolue (silence après {turns_used} tours)")
+                            logger.info(f"   → next_step = '{next_step}' (mapping 'silence' ou 'deny')")
+                        else:
+                            # objection ou autre → mapping deny
+                            next_step = intent_mapping.get("deny", "bye_failed")
+                            logger.info(f"   ❌ Objection NON résolue → Deny path")
+                            logger.info(f"   → next_step = '{next_step}' (mapping 'deny')")
 
             else:
                 # No MaxTurn -> direct objection mapping or deny
@@ -2771,9 +2790,10 @@ class RobotFreeSWITCH:
             # Pas de match dans objections_db -> jouer step "not_understood"
 
             # Get fallback from intent_mapping or scenario metadata
-            default_not_understood = scenario.get("metadata", {}).get("fallbacks", {}).get("not_understood", "bye_failed")
+            # FIX: Utiliser clé "unknown" (pas "not_understood") pour matcher avec scénario fallbacks
+            default_not_understood = scenario.get("metadata", {}).get("fallbacks", {}).get("unknown", "bye_failed")
             next_step = intent_mapping.get("not_understood", default_not_understood)
-            logger.info(f"   Fallback not_understood: {default_not_understood}")
+            logger.info(f"   Fallback unknown (not_understood): {default_not_understood}")
             logger.info(f"   → next_step = '{next_step}'")
 
         # --- INSULT HANDLING ---
@@ -2830,18 +2850,31 @@ class RobotFreeSWITCH:
             )
 
         # ===================================================================
-        # SAVE RETURN_STEP (for retry steps)
+        # SAVE RETURN_STEP (for retry steps and not_understood)
         # ===================================================================
-        # Si on va vers un retry step, sauvegarder le next_step prévu (affirm)
-        # pour que le retry puisse y retourner après un affirm
-        if next_step and next_step.startswith("retry_"):
-            # Sauvegarder le step prévu si affirm (le "next step" normal)
+        # Si on va vers un retry step ou not_understood, sauvegarder le next_step prévu (affirm)
+        # pour que le retry/not_understood puisse continuer vers la suite après résolution
+        if next_step and (next_step.startswith("retry_") or next_step == "not_understood"):
+            # Sauvegarder le mapping "affirm" (next step normal si user affirme)
+            # Cela permet de continuer le flow après retry ou incompréhension
             intended_next = intent_mapping.get("affirm")
             if intended_next:
                 session["return_step"] = intended_next
                 logger.info(
-                    f"[{short_uuid}] Saved return_step='{intended_next}' for retry"
+                    f"[{short_uuid}] Saved return_step='{intended_next}' for {next_step}"
                 )
+            else:
+                # Si pas de mapping affirm, sauvegarder le next step par défaut (wildcard)
+                default_next = intent_mapping.get("*")
+                if default_next and default_next not in ["{{return_step}}", "retry_silence", "retry_global"]:
+                    session["return_step"] = default_next
+                    logger.info(
+                        f"[{short_uuid}] Saved return_step='{default_next}' (from wildcard) for {next_step}"
+                    )
+                else:
+                    logger.warning(
+                        f"[{short_uuid}] Cannot save return_step for {next_step}: no valid affirm or wildcard mapping"
+                    )
         else:
             # Effacer return_step si on n'est plus dans un retry
             if "return_step" in session:
@@ -2938,9 +2971,10 @@ class RobotFreeSWITCH:
         turns_used = 0
         not_understood_count = 0  # Counter for objections not found in DB
         max_not_understood = scenario.get("metadata", {}).get("max_not_understood", 2)
+        last_intent = "objection"  # Track last intent for final_intent return
 
         # Pour réutiliser le intent_result entre les tours
-        reaction_match = None  # Sera set après chaque réaction client
+        reaction_match = None  # FIX: Always None to force fresh analysis (see line 3098)
 
         for turn in range(max_turns):
             turns_used += 1
@@ -2951,12 +2985,15 @@ class RobotFreeSWITCH:
             )
 
             # Find objection response
-            # Réutiliser le résultat de _analyze_intent si disponible (tous les tours)
+            # Turn 0: Reuse initial_match from _analyze_intent (optimization)
+            # Turn 1+: reaction_match is always None, so fresh search via _find_objection_response
             match_to_use = None
             if turn == 0 and initial_match and initial_match.get("matched_response_id"):
                 match_to_use = initial_match
                 logger.info(f"[{short_uuid}] Using initial_match from _analyze_intent (no re-search)")
             elif turn > 0 and reaction_match and reaction_match.get("matched_response_id"):
+                # NOTE: This branch is now DEAD CODE since reaction_match is always None (line 3098)
+                # Keeping for backwards compatibility, but won't execute
                 match_to_use = reaction_match
                 logger.info(f"[{short_uuid}] Using reaction_match from previous turn (no re-search)")
 
@@ -3073,12 +3110,12 @@ class RobotFreeSWITCH:
             # Analyze reaction intent
             intent_result = self._analyze_intent(reaction, scenario, step_name)
             intent = intent_result["intent"]
+            last_intent = intent  # Track for final_intent return
 
-            # Stocker le match pour le tour suivant (si c'est une objection/question)
-            if intent in ["objection", "question"] and intent_result.get("matched_response_id"):
-                reaction_match = intent_result
-            else:
-                reaction_match = None
+            # FIX: Always clear reaction_match to force fresh analysis each turn
+            # Previous logic reused matches across turns, causing stale intent detection
+            # Each user response in objection loop must be independently analyzed
+            reaction_match = None
 
             logger.info(
                 f"[{short_uuid}] Objection turn {turn + 1} result: "
@@ -3124,7 +3161,7 @@ class RobotFreeSWITCH:
         # Loop ended without resolution
         logger.info(
             f"[{short_uuid}] === OBJECTION LOOP END === "
-            f"NOT RESOLVED after {turns_used} turns"
+            f"NOT RESOLVED after {turns_used} turns (last_intent={last_intent})"
         )
 
         total_latency_ms = (time.time() - loop_start) * 1000
@@ -3132,7 +3169,7 @@ class RobotFreeSWITCH:
         return {
             "resolved": False,
             "turns_used": turns_used,
-            "final_intent": "objection",
+            "final_intent": last_intent,  # Use actual last intent, not hardcoded "objection"
             "latencies": {"total_ms": total_latency_ms}
         }
 
@@ -3273,6 +3310,36 @@ class RobotFreeSWITCH:
                     alternatives = match_result.get("top_alternatives", [])
                     if alternatives:
                         logger.info(f"   📋 Alternatives: {', '.join([f'{kw}({t}):{s:.2f}' for kw, s, t in alternatives])}")
+
+                        # ⚠️ DETECT AMBIGUOUS MATCHES (multiple entries with same score)
+                        ambiguous_matches = [
+                            (kw, t) for kw, s, t in alternatives
+                            if abs(s - confidence) < 0.01  # Same score (allowing float precision)
+                        ]
+
+                        if ambiguous_matches:
+                            # Check if they have different entry_types (different intents)
+                            different_intents = set()
+                            for _, alt_type in ambiguous_matches:
+                                # Map alternative entry_type to intent
+                                if alt_type in ['affirm', 'deny', 'insult', 'time', 'unsure']:
+                                    different_intents.add(alt_type)
+                                elif alt_type == 'faq':
+                                    different_intents.add('question')
+                                else:
+                                    different_intents.add('objection')
+
+                            # Add current intent to comparison
+                            different_intents.add(intent)
+
+                            if len(different_intents) > 1:
+                                logger.warning(
+                                    f"⚠️  AMBIGUOUS MATCH DETECTED! "
+                                    f"Multiple entries with score {confidence:.2f} map to different intents: "
+                                    f"{', '.join(sorted(different_intents))}. "
+                                    f"Picked: {intent} (entry_type={entry_type}). "
+                                    f"Alternatives with same score: {', '.join([f'{kw}({t})' for kw, t in ambiguous_matches])}"
+                                )
 
                     logger.info(f"{'─'*60}")
                     logger.info(f"🏆 RÉSULTAT _analyze_intent:")
@@ -4204,6 +4271,21 @@ class RobotFreeSWITCH:
 
                         time.sleep(step_duration)
 
+                    # === ENERGY GATE: Sauver calibration AVANT d'arrêter Phase 2 (barge-in) ===
+                    if calibrate_noise:
+                        logger.info(f"🎚️ [{short_uuid}] BARGE-IN detected → Saving noise calibration before stopping Phase 2...")
+                        noise_floor = self.streaming_asr.stop_noise_calibration(call_uuid)
+
+                        if noise_floor > 0:
+                            # Sauver dans session pour réutilisation
+                            if call_uuid in self.call_sessions:
+                                self.call_sessions[call_uuid]["noise_floor_rms"] = noise_floor
+                                logger.info(f"🎚️ [{short_uuid}] ✅ Noise floor saved (barge-in): {noise_floor:.0f}")
+                            else:
+                                logger.warning(f"🎚️ [{short_uuid}] ⚠️  Session not found, cannot save noise floor")
+                        else:
+                            logger.warning(f"🎚️ [{short_uuid}] ⚠️  Noise floor = 0 (not enough samples or calibration failed)")
+
                     # Stop audio playback
                     break_cmd = f"uuid_break {call_uuid}"
                     self._execute_esl_command(break_cmd)
@@ -4646,6 +4728,21 @@ class RobotFreeSWITCH:
                         self._execute_esl_command(audio_cmd)
 
                         time.sleep(step_duration)
+
+                    # === ENERGY GATE: Sauver calibration AVANT d'arrêter Phase 2 (barge-in) ===
+                    if calibrate_noise:
+                        logger.info(f"🎚️ [{short_uuid}] BARGE-IN detected → Saving noise calibration before stopping Phase 2...")
+                        noise_floor = self.streaming_asr.stop_noise_calibration(call_uuid)
+
+                        if noise_floor > 0:
+                            # Sauver dans session pour réutilisation
+                            if call_uuid in self.call_sessions:
+                                self.call_sessions[call_uuid]["noise_floor_rms"] = noise_floor
+                                logger.info(f"🎚️ [{short_uuid}] ✅ Noise floor saved (barge-in): {noise_floor:.0f}")
+                            else:
+                                logger.warning(f"🎚️ [{short_uuid}] ⚠️  Session not found, cannot save noise floor")
+                        else:
+                            logger.warning(f"🎚️ [{short_uuid}] ⚠️  Noise floor = 0 (not enough samples or calibration failed)")
 
                     # Stop audio playback
                     break_cmd = f"uuid_break {call_uuid}"

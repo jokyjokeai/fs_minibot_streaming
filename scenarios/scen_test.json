@@ -215,7 +215,11 @@
       "timeout": 15,
       "max_autonomous_turns": 2,
       "intent_mapping": {
-        "*": "bye_failed"
+        "affirm": "{{return_step}}",
+        "deny": "{{return_step}}",
+        "unsure": "{{return_step}}",
+        "silence": "retry_silence",
+        "*": "{{return_step}}"
       }
     },
     "end": {

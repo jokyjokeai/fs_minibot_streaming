@@ -253,7 +253,11 @@ class StreamingASR:
             "final_transcription": "",
             "last_speech_time": 0.0,
             "audio_warmup_done": False,  # Flag pour ignorer silence initial (RMS=0)
-            "first_audio_time": None  # Timestamp du premier audio réel reçu
+            "first_audio_time": None,  # Timestamp du premier audio réel reçu
+            # Energy gate adaptatif
+            "noise_floor_rms": None,  # Plancher de bruit calibré
+            "calibration_samples": [],  # RMS samples pendant calibration
+            "is_calibrating": False  # Mode calibration actif
         }
 
         # Vérifier état des autres structures
@@ -296,6 +300,17 @@ class StreamingASR:
             import numpy as np
             audio_samples_check = np.frombuffer(frame_bytes, dtype=np.int16)
             frame_rms = np.sqrt(np.mean(audio_samples_check.astype(np.float32) ** 2))
+
+            # === ENERGY GATE ADAPTATIF ===
+            # Pendant calibration: collecter les samples RMS
+            if stream_info["is_calibrating"]:
+                stream_info["calibration_samples"].append(frame_rms)
+
+            # Après calibration: appliquer le filtre de bruit
+            noise_floor = stream_info.get("noise_floor_rms")
+            if noise_floor and frame_rms < noise_floor:
+                # Frame sous le seuil de bruit → forcer silence
+                is_speech = False
 
             # Seuil très bas - juste pour détecter les frames totalement vides (RMS=0)
             # L'audio téléphonique peut avoir un RMS de 8-15 même en silence
@@ -479,6 +494,94 @@ class StreamingASR:
 
             except Exception as e:
                 logger.error(f"❌ Callback error (speech_end): {e}")
+
+    def start_noise_calibration(self, call_uuid: str):
+        """
+        Démarre la calibration du bruit de fond.
+        Appelé au début de Phase 2 hello pendant que le robot parle.
+        """
+        if call_uuid in self.active_streams:
+            self.active_streams[call_uuid]["is_calibrating"] = True
+            self.active_streams[call_uuid]["calibration_samples"] = []
+            logger.info(f"🎚️ [{call_uuid[:8]}] Noise calibration STARTED")
+
+    def stop_noise_calibration(self, call_uuid: str) -> float:
+        """
+        Arrête la calibration et calcule le plancher de bruit.
+        Accepte N'IMPORTE QUEL nombre de samples (même 1 sample c'est mieux que rien).
+
+        Logique intelligente:
+        - 0 samples → fallback 500 (par sécurité)
+        - 1-10 samples → moyenne des samples
+        - 10+ samples → percentile 90 (optimal)
+
+        Returns:
+            float: Le noise floor calculé (threshold), ou 0 si pas de samples
+        """
+        noise_floor_threshold = 0.0
+        MIN_NOISE_THRESHOLD = 500  # Fallback absolu si pas assez de données
+
+        if call_uuid in self.active_streams:
+            stream_info = self.active_streams[call_uuid]
+            stream_info["is_calibrating"] = False
+
+            samples = stream_info["calibration_samples"]
+            num_samples = len(samples)
+
+            logger.info(f"🎚️ [{call_uuid[:8]}] stop_noise_calibration called: {num_samples} samples collected")
+
+            if num_samples == 0:
+                # Aucun sample (barge-in instantané?) → fallback
+                noise_floor_threshold = MIN_NOISE_THRESHOLD
+                stream_info["noise_floor_rms"] = noise_floor_threshold
+                logger.warning(
+                    f"⚠️ [{call_uuid[:8]}] Noise calibration: 0 samples → "
+                    f"using FALLBACK threshold={noise_floor_threshold:.0f}"
+                )
+
+            elif num_samples < 10:
+                # Peu de samples (1-9) → utiliser moyenne simple
+                import numpy as np
+                avg_rms = np.mean(samples)
+                noise_floor_threshold = max(avg_rms * 4, MIN_NOISE_THRESHOLD)
+                stream_info["noise_floor_rms"] = noise_floor_threshold
+                logger.info(
+                    f"🎚️ [{call_uuid[:8]}] Noise calibration PARTIAL: "
+                    f"samples={num_samples} (LOW, using AVG), avg={avg_rms:.0f}, "
+                    f"threshold={noise_floor_threshold:.0f} (avg x4, min={MIN_NOISE_THRESHOLD})"
+                )
+
+            else:
+                # Suffisamment de samples (10+) → utiliser percentile 90 (optimal)
+                sorted_samples = sorted(samples)
+                percentile_90_idx = int(len(sorted_samples) * 0.9)
+                noise_floor = sorted_samples[percentile_90_idx]
+                noise_floor_threshold = max(noise_floor * 4, MIN_NOISE_THRESHOLD)
+                stream_info["noise_floor_rms"] = noise_floor_threshold
+                logger.info(
+                    f"🎚️ [{call_uuid[:8]}] Noise calibration COMPLETE: "
+                    f"samples={num_samples} (GOOD), p90={noise_floor:.0f}, "
+                    f"threshold={noise_floor_threshold:.0f} (p90 x4, min={MIN_NOISE_THRESHOLD})"
+                )
+
+        else:
+            logger.warning(f"⚠️ [{call_uuid[:8]}] stop_noise_calibration: call_uuid not in active_streams")
+
+        logger.info(f"🎚️ [{call_uuid[:8]}] stop_noise_calibration returning: {noise_floor_threshold:.0f}")
+        return noise_floor_threshold
+
+    def set_noise_floor(self, call_uuid: str, noise_floor_rms: float):
+        """
+        Applique un noise floor calibré à un stream existant.
+        Utilisé pour persister le threshold entre les phases.
+
+        Args:
+            call_uuid: UUID de l'appel
+            noise_floor_rms: Le threshold RMS à appliquer
+        """
+        if call_uuid in self.active_streams and noise_floor_rms > 0:
+            self.active_streams[call_uuid]["noise_floor_rms"] = noise_floor_rms
+            logger.info(f"🎚️ [{call_uuid[:8]}] Noise floor SET: threshold={noise_floor_rms:.0f}")
 
     async def _notify_transcription(self, call_uuid: str, text: str, transcription_type: str, latency_ms: float):
         """Notifie transcription"""

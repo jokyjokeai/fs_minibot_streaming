@@ -1004,8 +1004,15 @@ class ScenarioBuilderV3:
             "voice": self.voice_name,
             "barge_in": True,
             "timeout": 15,
+            "max_autonomous_turns": self.max_turns,
             "intent_mapping": {
-                "*": "bye_failed"
+                # Utiliser {{return_step}} pour continuer vers le next step après incompréhension
+                # Le système demande de répéter, puis continue le flow normalement
+                "affirm": "{{return_step}}",
+                "deny": "{{return_step}}",
+                "unsure": "{{return_step}}",
+                "silence": "retry_silence",
+                "*": "{{return_step}}"
             }
         }
 

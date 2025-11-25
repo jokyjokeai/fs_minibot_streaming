@@ -144,7 +144,7 @@ OBJECTIONS_DATABASE: List[ObjectionEntry] = [
         keywords=[
             "peut-être", "peut être", "ptêtre", "p't'être",
             "on verra", "je vais voir", "je verrai", "faut voir",
-            "mouais", "bof", "ouais",
+            "bof",  # REMOVED: "mouais", "ouais" (trop ambigus - gardés uniquement dans affirm)
             "pourquoi pas", "à voir", "on va voir",
             "réfléchir", "besoin de temps", "hésiter", "hésitation",
             "dois réfléchir", "je vais réfléchir", "laisser réfléchir",
